@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"D:\\\\006 Restard\\\\Rein v1\" -Recurse -Force)",
+      "Bash(Select-Object FullName, Mode, Length)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(cp \"C:\\\\Users\\\\Fikri Mustaqim\\\\.claude\\\\projects\\\\D--006-Restard-Rein-v1\\\\2970b66f-3ff3-43c2-a6c7-2e70c505b0f6\\\\tool-results\\\\webfetch-1778276023548-6bfktn.bin\" \"D:\\\\006 Restard\\\\Rein v1\\\\design_archive.tar.gz\")",
+      "Bash(tar -xzf design_archive.tar.gz)",
+      "Bash(git init *)",
+      "Bash(which bun *)",
+      "Bash(which npm *)",
+      "Bash(which node *)",
+      "Bash(bun *)",
+      "Bash(bunx shadcn@latest init -d)",
+      "Bash(bunx shadcn@latest add badge input sheet avatar dialog dropdown-menu tooltip skeleton scroll-area separator -y)",
+      "Bash(npx tsc *)",
+      "Bash(npx next *)",
+      "Bash(pip install *)",
+      "Bash(python -m alembic upgrade head)",
+      "Bash(nslookup wzkmmpglrelyiotwgozy.supabase.co)",
+      "Bash(nslookup aws-0-ap-southeast-1.pooler.supabase.com)",
+      "Bash(nslookup *)",
+      "Bash(python -m alembic revision --autogenerate -m \"create_all_tables\")",
+      "Bash(python -m alembic revision --autogenerate -m \"add_profiles_fk_to_auth_users\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, '..'\\); from db.models import Base; print\\('OK:', Base.metadata.tables.keys\\(\\)\\)\")",
+      "Bash(python -c \"from app.main import app; print\\('FastAPI app loaded OK'\\)\")",
+      "Bash(pip show *)",
+      "Bash(python *)",
+      "Bash(Select-Object FullName)",
+      "Bash(bunx tsc *)",
+      "Bash(grep -E \"\\(error|admin\\\\\\\\\\\\\\\\page|permissions-provider\\)\")",
+      "Bash(alembic current *)",
+      "Bash(set PYTHONPATH=..)",
+      "Bash(Get-ChildItem -Path \"D:\\\\006 Restard\\\\Rein v1\\\\frontend\" -Recurse -Depth 2)",
+      "PowerShell(head *)",
+      "Bash(Get-ChildItem D:\\\\006 Restard\\\\Rein v1\\\\frontend\\\\src\\\\lib\\\\api *)"
+    ]
+  }
+}

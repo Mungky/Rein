@@ -1,0 +1,301 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* ── Theme variant: data-theme="dark" for light/dark switching ── */
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+/* ══════════════════════════════════════════════════════════════════
+   REIN Design System — Odoo 17-inspired tokens
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── Light theme (default) ── */
+:root {
+  /* Primary */
+  --primary:       #714B67;
+  --primary-hover:  #5e3d56;
+  --primary-bg:     #f3eef2;
+  --primary-mid:    rgba(113,75,103,0.22);
+
+  /* Backgrounds */
+  --bg:             #ffffff;
+  --bg-sidebar:     #f4f5f7;
+  --bg-ctrl:        #f8f8f8;
+  --bg-hover:       rgba(0,0,0,0.038);
+  --bg-sel:         #f3eef2;
+  --bg-stripe:      rgba(0,0,0,0.016);
+
+  /* Text */
+  --text:           #212529;
+  --text-muted:     #6c757d;
+  --text-light:     #b0b8c4;
+  --text-inv:       #ffffff;
+
+  /* Borders */
+  --border:         #e0e2e6;
+  --border-soft:    #eff0f2;
+
+  /* Semantic colors */
+  --green:          #28a745;
+  --green-bg:       rgba(40,167,69,0.10);
+  --amber:          #e67e00;
+  --amber-bg:       rgba(230,126,0,0.10);
+  --red:            #dc3545;
+  --red-bg:         rgba(220,53,69,0.10);
+  --blue:           #0d6efd;
+  --blue-bg:        rgba(13,110,253,0.10);
+
+  /* Layout */
+  --topbar-h:      46px;
+  --ctrl-h:        46px;
+  --sidebar-w:     224px;
+
+  /* Radius */
+  --r-xs:          3px;
+  --r-sm:          4px;
+  --r:             6px;
+  --r-lg:          8px;
+  --r-xl:          12px;
+  --r-pill:        999px;
+
+  /* Shadows */
+  --shadow-xs:     0 1px 2px rgba(0,0,0,0.06);
+  --shadow-sm:     0 1px 4px rgba(0,0,0,0.08);
+  --shadow:        0 3px 10px rgba(0,0,0,0.10);
+  --shadow-lg:     0 6px 24px rgba(0,0,0,0.12);
+
+  /* Transitions */
+  --tr:             140ms ease;
+
+  /* ── Shadcn-compatible aliases ── */
+  --background:     #ffffff;
+  --foreground:     #212529;
+  --card:           #ffffff;
+  --card-foreground:#212529;
+  --popover:        #ffffff;
+  --popover-foreground:#212529;
+  --primary-foreground:#ffffff;
+  --secondary:      #f4f5f7;
+  --secondary-foreground:#212529;
+  --muted:          #f4f5f7;
+  --muted-foreground:#6c757d;
+  --accent:         #f3eef2;
+  --accent-foreground:#714B67;
+  --destructive:    #dc3545;
+  --input:          #e0e2e6;
+  --ring:           #714B67;
+  --radius:         0.375rem;
+  --sidebar:        #f4f5f7;
+  --sidebar-foreground:#212529;
+  --sidebar-primary:#714B67;
+  --sidebar-primary-foreground:#ffffff;
+  --sidebar-accent: #f3eef2;
+  --sidebar-accent-foreground:#714B67;
+  --sidebar-border:#e0e2e6;
+  --sidebar-ring:   #714B67;
+  --chart-1:        #714B67;
+  --chart-2:        #0d6efd;
+  --chart-3:        #28a745;
+  --chart-4:        #e67e00;
+  --chart-5:        #dc3545;
+}
+
+/* ── Dark theme ── */
+[data-theme="dark"] {
+  --primary:        #a678a0;
+  --primary-hover:  #c096bc;
+  --primary-bg:     rgba(166,120,160,0.13);
+  --primary-mid:    rgba(166,120,160,0.28);
+
+  --bg:             #1e1e2d;
+  --bg-sidebar:     #181826;
+  --bg-ctrl:        #1a1a28;
+  --bg-hover:       rgba(255,255,255,0.045);
+  --bg-sel:         rgba(166,120,160,0.13);
+  --bg-stripe:      rgba(255,255,255,0.018);
+
+  --text:           #e6e6f0;
+  --text-muted:     #7878a0;
+  --text-light:     #404055;
+  --text-inv:       #ffffff;
+
+  --border:         rgba(255,255,255,0.09);
+  --border-soft:    rgba(255,255,255,0.045);
+
+  --green:          #52c87a;
+  --green-bg:       rgba(82,200,122,0.12);
+  --amber:          #f0a030;
+  --amber-bg:       rgba(240,160,48,0.12);
+  --red:            #f06060;
+  --red-bg:         rgba(240,96,96,0.12);
+  --blue:           #5090f0;
+  --blue-bg:        rgba(80,144,240,0.12);
+
+  --shadow-xs:      0 1px 2px rgba(0,0,0,0.35);
+  --shadow-sm:      0 1px 4px rgba(0,0,0,0.4);
+  --shadow:         0 3px 10px rgba(0,0,0,0.5);
+  --shadow-lg:      0 6px 24px rgba(0,0,0,0.6);
+
+  /* ── Shadcn-compatible aliases (dark) ── */
+  --background:     #1e1e2d;
+  --foreground:     #e6e6f0;
+  --card:           #252538;
+  --card-foreground:#e6e6f0;
+  --popover:        #252538;
+  --popover-foreground:#e6e6f0;
+  --primary-foreground:#ffffff;
+  --secondary:      #282840;
+  --secondary-foreground:#e6e6f0;
+  --muted:          #282840;
+  --muted-foreground:#7878a0;
+  --accent:         rgba(166,120,160,0.13);
+  --accent-foreground:#a678a0;
+  --destructive:    #f06060;
+  --input:          rgba(255,255,255,0.09);
+  --ring:           #a678a0;
+  --sidebar:        #181826;
+  --sidebar-foreground:#e6e6f0;
+  --sidebar-primary:#a678a0;
+  --sidebar-primary-foreground:#ffffff;
+  --sidebar-accent: rgba(166,120,160,0.13);
+  --sidebar-accent-foreground:#a678a0;
+  --sidebar-border:rgba(255,255,255,0.09);
+  --sidebar-ring:   #a678a0;
+  --chart-1:        #a678a0;
+  --chart-2:        #5090f0;
+  --chart-3:        #52c87a;
+  --chart-4:        #f0a030;
+  --chart-5:        #f06060;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Tailwind CSS 4 @theme — design token mappings
+   ══════════════════════════════════════════════════════════════════ */
+@theme inline {
+  /* Fonts */
+  --font-sans: var(--font-dm-sans), -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "Courier New", monospace;
+
+  /* Colors — shadcn compatibility layer */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* REIN semantic colors */
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-bg: var(--primary-bg);
+  --color-primary-mid: var(--primary-mid);
+  --color-bg: var(--bg);
+  --color-bg-sidebar: var(--bg-sidebar);
+  --color-bg-ctrl: var(--bg-ctrl);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-sel: var(--bg-sel);
+  --color-bg-stripe: var(--bg-stripe);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-light: var(--text-light);
+  --color-text-inv: var(--text-inv);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-green: var(--green);
+  --color-green-bg: var(--green-bg);
+  --color-amber: var(--amber);
+  --color-amber-bg: var(--amber-bg);
+  --color-red: var(--red);
+  --color-red-bg: var(--red-bg);
+  --color-blue: var(--blue);
+  --color-blue-bg: var(--blue-bg);
+
+  /* Radius */
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* Sidebar (shadcn) */
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+
+  /* Charts (shadcn) */
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Base styles
+   ══════════════════════════════════════════════════════════════════ */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-bg text-text antialiased;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  html {
+    @apply font-sans h-full;
+  }
+
+  button,
+  input,
+  textarea {
+    font-family: inherit;
+  }
+
+  a {
+    @apply text-primary no-underline;
+  }
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-light);
+}
+
+/* ── Monospace helper ── */
+.mono {
+  font-family: var(--font-jetbrains-mono), "Courier New", monospace;
+}

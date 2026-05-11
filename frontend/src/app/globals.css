@@ -1,0 +1,341 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  /* ── REIN custom color tokens → enables bg-bg, text-text-muted, bg-bg-sidebar, etc. ── */
+  --color-bg: var(--rein-bg);
+  --color-bg-sidebar: var(--rein-bg-sidebar);
+  --color-bg-ctrl: var(--rein-bg-ctrl);
+  --color-bg-hover: var(--rein-bg-hover);
+  --color-bg-sel: var(--rein-bg-sel);
+  --color-bg-stripe: var(--rein-bg-stripe);
+  --color-text: var(--rein-text);
+  --color-text-muted: var(--rein-text-muted);
+  --color-text-light: var(--rein-text-light);
+  --color-text-inv: var(--rein-text-inv);
+  --color-border-soft: var(--rein-border-soft);
+  --color-green: var(--rein-green);
+  --color-green-bg: var(--rein-green-bg);
+  --color-amber: var(--rein-amber);
+  --color-amber-bg: var(--rein-amber-bg);
+  --color-red: var(--rein-red);
+  --color-red-bg: var(--rein-red-bg);
+  --color-blue: var(--rein-blue);
+  --color-blue-bg: var(--rein-blue-bg);
+  --color-primary-hover: var(--rein-primary-hover);
+  --color-primary-bg: var(--rein-primary-bg);
+  --color-primary-mid: var(--rein-primary-mid);
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+/* ── REIN Odoo 17 Design Tokens ── */
+:root {
+  /* Primary (plum/purple) */
+  --rein-primary: #714B67;
+  --rein-primary-hover: #5e3d56;
+  --rein-primary-bg: rgba(113,75,103,0.10);
+  --rein-primary-mid: rgba(113,75,103,0.22);
+
+  /* Surfaces */
+  --rein-bg: #ffffff;
+  --rein-bg-sidebar: #f4f5f7;
+  --rein-bg-ctrl: #f8f8f8;
+  --rein-bg-hover: rgba(0,0,0,0.038);
+  --rein-bg-sel: #f3eef2;
+  --rein-bg-stripe: rgba(0,0,0,0.016);
+
+  /* Text */
+  --rein-text: #212529;
+  --rein-text-muted: #6c757d;
+  --rein-text-light: #b0b8c4;
+  --rein-text-inv: #ffffff;
+
+  /* Borders */
+  --rein-border: #e0e2e6;
+  --rein-border-soft: #eff0f2;
+
+  /* Status */
+  --rein-green: #28a745; --rein-green-bg: rgba(40,167,69,0.10);
+  --rein-amber: #e67e00; --rein-amber-bg: rgba(230,126,0,0.10);
+  --rein-red: #dc3545; --rein-red-bg: rgba(220,53,69,0.10);
+  --rein-blue: #0d6efd; --rein-blue-bg: rgba(13,110,253,0.10);
+
+  /* Layout */
+  --topbar-h: 46px;
+  --ctrl-h: 46px;
+  --sidebar-w: 224px;
+
+  /* Radii */
+  --r-xs: 3px; --r-sm: 4px; --r: 6px; --r-lg: 8px; --r-xl: 12px; --r-pill: 999px;
+
+  /* Shadows */
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-sm: 0 1px 4px rgba(0,0,0,0.08);
+  --shadow: 0 3px 10px rgba(0,0,0,0.10);
+
+  /* Transitions */
+  --tr: 140ms ease;
+
+  /* Map to shadcn variables for compatibility */
+  --primary: #714B67;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f5f7;
+  --secondary-foreground: #212529;
+  --muted: #f8f8f8;
+  --muted-foreground: #6c757d;
+  --accent: #f3eef2;
+  --accent-foreground: #212529;
+  --destructive: #dc3545;
+  --border: #e0e2e6;
+  --input: #e0e2e6;
+  --ring: #714B67;
+  --background: #ffffff;
+  --foreground: #212529;
+  --card: #ffffff;
+  --card-foreground: #212529;
+  --popover: #ffffff;
+  --popover-foreground: #212529;
+  --radius: 0.375rem;
+  --sidebar: #f4f5f7;
+  --sidebar-foreground: #212529;
+  --sidebar-primary: #714B67;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f3eef2;
+  --sidebar-accent-foreground: #212529;
+  --sidebar-border: #e0e2e6;
+  --sidebar-ring: #714B67;
+  --chart-1: #714B67;
+  --chart-2: #28a745;
+  --chart-3: #e67e00;
+  --chart-4: #0d6efd;
+  --chart-5: #dc3545;
+}
+
+[data-theme="dark"] {
+  --rein-primary: #a678a0;
+  --rein-primary-hover: #c096bc;
+  --rein-primary-bg: rgba(166,120,160,0.13);
+  --rein-primary-mid: rgba(166,120,160,0.28);
+
+  --rein-bg: #1e1e2d;
+  --rein-bg-sidebar: #181826;
+  --rein-bg-ctrl: #1a1a28;
+  --rein-bg-hover: rgba(255,255,255,0.045);
+  --rein-bg-sel: rgba(166,120,160,0.13);
+  --rein-bg-stripe: rgba(255,255,255,0.018);
+
+  --rein-text: #e6e6f0;
+  --rein-text-muted: #7878a0;
+  --rein-text-light: #404055;
+  --rein-text-inv: #ffffff;
+
+  --rein-border: rgba(255,255,255,0.09);
+  --rein-border-soft: rgba(255,255,255,0.045);
+
+  --rein-green: #52c87a; --rein-green-bg: rgba(82,200,122,0.12);
+  --rein-amber: #f0a030; --rein-amber-bg: rgba(240,160,48,0.12);
+  --rein-red: #f06060; --rein-red-bg: rgba(240,96,96,0.12);
+  --rein-blue: #5090f0; --rein-blue-bg: rgba(80,144,240,0.12);
+
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.35);
+  --shadow-sm: 0 1px 4px rgba(0,0,0,0.4);
+  --shadow: 0 3px 10px rgba(0,0,0,0.5);
+
+  --primary: #a678a0;
+  --primary-foreground: #ffffff;
+  --secondary: #181826;
+  --secondary-foreground: #e6e6f0;
+  --muted: #1a1a28;
+  --muted-foreground: #7878a0;
+  --accent: rgba(166,120,160,0.13);
+  --accent-foreground: #e6e6f0;
+  --destructive: #f06060;
+  --border: rgba(255,255,255,0.09);
+  --input: rgba(255,255,255,0.045);
+  --ring: #a678a0;
+  --background: #1e1e2d;
+  --foreground: #e6e6f0;
+  --card: #1e1e2d;
+  --card-foreground: #e6e6f0;
+  --popover: #1e1e2d;
+  --popover-foreground: #e6e6f0;
+  --sidebar: #181826;
+  --sidebar-foreground: #e6e6f0;
+  --sidebar-primary: #a678a0;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgba(166,120,160,0.13);
+  --sidebar-accent-foreground: #e6e6f0;
+  --sidebar-border: rgba(255,255,255,0.09);
+  --sidebar-ring: #a678a0;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  html, body, #__next {
+    height: 100%;
+  }
+  body {
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--rein-bg);
+    color: var(--rein-text);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--rein-border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--rein-text-light); }
+  a { color: var(--rein-primary); text-decoration: none; }
+  button, input, textarea { font-family: inherit; }
+  .mono { font-family: 'JetBrains Mono', 'Courier New', monospace; }
+  /* REIN utility classes */
+  .btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 0 12px; height: 30px; border-radius: var(--r);
+    font-size: 13px; font-weight: 500; cursor: pointer;
+    white-space: nowrap; flex-shrink: 0; border: none;
+    font-family: inherit; transition: all var(--tr);
+  }
+  .btn-primary { background: var(--rein-primary); color: var(--rein-text-inv); }
+  .btn-primary:hover { background: var(--rein-primary-hover); }
+  .btn-default { background: none; border: 1px solid var(--rein-border); color: var(--rein-text-muted); }
+  .btn-default:hover { border-color: var(--rein-text-light); color: var(--rein-text); background: var(--rein-bg-hover); }
+  .btn-icon { padding: 0; width: 30px; justify-content: center; }
+  .btn-sm { height: 26px; padding: 0 9px; font-size: 12px; }
+  .badge {
+    display: inline-flex; align-items: center; padding: 2px 8px;
+    border-radius: var(--r-pill); font-size: 11px; font-weight: 600; white-space: nowrap;
+  }
+  .badge-green { background: var(--rein-green-bg); color: var(--rein-green); }
+  .badge-amber { background: var(--rein-amber-bg); color: var(--rein-amber); }
+  .badge-red { background: var(--rein-red-bg); color: var(--rein-red); }
+  .badge-blue { background: var(--rein-blue-bg); color: var(--rein-blue); }
+  .badge-purple { background: var(--rein-primary-bg); color: var(--rein-primary); }
+  .badge-muted { background: var(--rein-bg-hover); color: var(--rein-text-muted); }
+  .ctrl-view-btn {
+    width: 30px; height: 30px; border-radius: var(--r); border: 1px solid var(--rein-border);
+    background: none; color: var(--rein-text-muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; transition: all var(--tr);
+  }
+  .ctrl-view-btn:hover { background: var(--rein-bg-hover); color: var(--rein-text); }
+  .ctrl-view-btn.active { background: var(--rein-primary-bg); color: var(--rein-primary); border-color: var(--rein-primary-mid); }
+}

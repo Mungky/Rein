@@ -1,0 +1,19 @@
+{
+  "name": "rein-monorepo",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n frontend,backend -c blue,green \"bun run dev:frontend\" \"bun run dev:backend\"",
+    "dev:frontend": "cd frontend && bun run dev",
+    "dev:backend": "cd backend && uvicorn app.main:app --reload --port 8000",
+    "migrate": "cd db && alembic revision --autogenerate",
+    "migrate:up": "cd db && alembic upgrade head",
+    "migrate:down": "cd db && alembic downgrade -1",
+    "seed": "cd db && python seed.py",
+    "build": "cd frontend && bun run build",
+    "lint": "cd frontend && bun run lint",
+    "typecheck": "cd frontend && bun run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
