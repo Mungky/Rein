@@ -7,6 +7,7 @@ All Google API calls are synchronous — they are offloaded to a thread pool whe
 
 import asyncio
 import io
+import json
 import os
 import logging
 from typing import Optional
@@ -32,24 +33,41 @@ _sheets_service: Resource | None = None
 
 
 def _get_credentials() -> Credentials:
-    """Get OAuth 2.0 credentials, refreshing or authenticating as needed."""
+    """Get OAuth 2.0 credentials, refreshing or re-authenticating as needed.
+
+    Cloud deployment: set GOOGLE_TOKEN_JSON env var to the contents of token.json.
+    Local development: token.json file is used as before.
+    """
     creds = None
     token_path = settings.google_token_path
     creds_path = settings.google_credentials_path
 
-    if os.path.exists(token_path):
+    # Cloud: read token from env var (no filesystem dependency)
+    token_json_env = os.getenv("GOOGLE_TOKEN_JSON")
+    if token_json_env:
+        creds = Credentials.from_authorized_user_info(json.loads(token_json_env), SCOPES)
+    elif os.path.exists(token_path):
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
+            # Persist refreshed token locally (no-op in cloud — refresh_token never expires)
+            if not token_json_env:
+                os.makedirs(os.path.dirname(token_path) or ".", exist_ok=True)
+                with open(token_path, "w") as f:
+                    f.write(creds.to_json())
         else:
+            if token_json_env:
+                raise RuntimeError(
+                    "GOOGLE_TOKEN_JSON is set but credentials are invalid. "
+                    "Run the OAuth flow locally and update the env var with the new token.json content."
+                )
             flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
             creds = flow.run_local_server(port=0)
-
-        os.makedirs(os.path.dirname(token_path) or ".", exist_ok=True)
-        with open(token_path, "w") as f:
-            f.write(creds.to_json())
+            os.makedirs(os.path.dirname(token_path) or ".", exist_ok=True)
+            with open(token_path, "w") as f:
+                f.write(creds.to_json())
 
     return creds
 
