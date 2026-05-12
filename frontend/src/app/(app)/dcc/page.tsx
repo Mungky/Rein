@@ -600,7 +600,6 @@ export default function DCCPage() {
     if (!input.trim()) return;
     const q = input.trim();
     setInput("");
-    setMsgs((p) => [...p, { id: String(Date.now()), type: "user", time: now(), text: q }]);
     streamSend(q);
   }, [input, streamSend]);
 
