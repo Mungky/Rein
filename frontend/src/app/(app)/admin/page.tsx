@@ -1015,15 +1015,14 @@ function CreateUserModal({ form, setForm, onCancel, onCreate, creating }: {
         </div>
         <div className="flex gap-2 mt-5">
           <button className="btn btn-default flex-1" onClick={onCancel}>Batal</button>
-          {creating || !form.username || !form.password || !form.full_name ? (
-            <button className="btn btn-primary flex-1" disabled title={!form.full_name ? "Isi nama lengkap terlebih dahulu" : !form.username ? "Isi username terlebih dahulu" : "Isi password terlebih dahulu (min. 6 karakter)">
-              Buat Pengguna
-            </button>
-          ) : (
-            <button className="btn btn-primary flex-1" onClick={onCreate}>
-              Buat Pengguna
-            </button>
-          )}
+          <button
+            className="btn btn-primary flex-1"
+            disabled={creating || !form.username || !form.password || !form.full_name}
+            onClick={onCreate}
+            title={!form.full_name ? "Isi nama lengkap terlebih dahulu" : !form.username ? "Isi username terlebih dahulu" : !form.password ? "Isi password terlebih dahulu (min. 6 karakter)" : undefined}
+          >
+            {creating ? "Membuat…" : "Buat Pengguna"}
+          </button>
         </div>
       </div>
     </div>
