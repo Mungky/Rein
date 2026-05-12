@@ -45,29 +45,36 @@ def _get_credentials() -> Credentials:
     # Cloud: read token from env var (no filesystem dependency)
     token_json_env = os.getenv("GOOGLE_TOKEN_JSON")
     if token_json_env:
-        creds = Credentials.from_authorized_user_info(json.loads(token_json_env), SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_info(json.loads(token_json_env), SCOPES)
+        except Exception as e:
+            raise RuntimeError(
+                f"GOOGLE_TOKEN_JSON is set but could not be parsed: {e}. "
+                "Make sure it contains the full JSON content of token.json on a single line."
+            )
     elif os.path.exists(token_path):
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+    else:
+        raise RuntimeError(
+            "No Google credentials available. Either set the GOOGLE_TOKEN_JSON env var "
+            "(with the full content of token.json) for cloud deployment, or run the app "
+            "locally with credentials/token.json present."
+        )
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
             creds.refresh(Request())
             # Persist refreshed token locally (no-op in cloud — refresh_token never expires)
-            if not token_json_env:
+            if not token_json_env and os.path.exists(os.path.dirname(token_path) or "."):
                 os.makedirs(os.path.dirname(token_path) or ".", exist_ok=True)
                 with open(token_path, "w") as f:
                     f.write(creds.to_json())
         else:
-            if token_json_env:
-                raise RuntimeError(
-                    "GOOGLE_TOKEN_JSON is set but credentials are invalid. "
-                    "Run the OAuth flow locally and update the env var with the new token.json content."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
-            creds = flow.run_local_server(port=0)
-            os.makedirs(os.path.dirname(token_path) or ".", exist_ok=True)
-            with open(token_path, "w") as f:
-                f.write(creds.to_json())
+            raise RuntimeError(
+                "Google credentials are invalid and cannot be refreshed. "
+                "Run the OAuth flow locally and update GOOGLE_TOKEN_JSON env var "
+                "with the new token.json content."
+            )
 
     return creds
 
