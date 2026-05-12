@@ -236,13 +236,13 @@ async def _call_ollama(
 
             delta = choices[0].get("delta", {})
 
-            # Text content
+            # Text content — yield delta only, frontend accumulates
             content = delta.get("content", "")
             if content:
                 current_text += content
                 yield {
                     "type": "text",
-                    "data": f'data: {json.dumps({"type": "text", "content": current_text}, ensure_ascii=False)}\n\n',
+                    "data": f'data: {json.dumps({"type": "text", "content": content}, ensure_ascii=False)}\n\n',
                 }
 
             # Tool calls
