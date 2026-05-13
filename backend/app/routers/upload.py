@@ -499,4 +499,6 @@ async def list_proposals(
             detected_folder=entry.detected_folder,
             detected_folder_confidence=entry.confidence_folder or 0.0,
             gdrive_link=drive_link,
-            expires_at=entr
+            expires_at=entry.proposal_expires_at,
+        ))
+    return response

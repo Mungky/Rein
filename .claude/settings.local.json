@@ -33,7 +33,12 @@
       "Bash(set PYTHONPATH=..)",
       "Bash(Get-ChildItem -Path \"D:\\\\006 Restard\\\\Rein v1\\\\frontend\" -Recurse -Depth 2)",
       "PowerShell(head *)",
-      "Bash(Get-ChildItem D:\\\\006 Restard\\\\Rein v1\\\\frontend\\\\src\\\\lib\\\\api *)"
+      "Bash(Get-ChildItem D:\\\\006 Restard\\\\Rein v1\\\\frontend\\\\src\\\\lib\\\\api *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'fix: cloud credential error handling and disabled button UX *)",
+      "Bash(git push *)",
+      "Bash(git commit *)",
+      "WebSearch"
     ]
   }
 }

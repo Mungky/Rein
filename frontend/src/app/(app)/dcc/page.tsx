@@ -905,4 +905,6 @@ function UploadBanner({ state, onRetry, onDismiss }: { state: UploadState; onRet
     );
   }
 
-  r
+  return null;
+}
+

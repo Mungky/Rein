@@ -16,6 +16,11 @@ from .approval import Approval, ApprovalAction
 from .access_request import AccessRequest, AccessStatus
 from .chat_message import ChatMessage, ChatRole, MessageType
 from .dcc_activity_log import DccActivityLog, DccAction
+from .workspace import (
+    ProjectTemplate, PhaseTemplate, TaskTemplate,
+    WorkspaceProject, WorkspacePhase, WorkspaceTask, TaskCompletion,
+    ProjectStatus, PhaseStatus, TaskStatus,
+)
 
 __all__ = [
     "Base",
@@ -45,4 +50,14 @@ __all__ = [
     "MessageType",
     "DccActivityLog",
     "DccAction",
+    "ProjectTemplate",
+    "PhaseTemplate",
+    "TaskTemplate",
+    "WorkspaceProject",
+    "WorkspacePhase",
+    "WorkspaceTask",
+    "TaskCompletion",
+    "ProjectStatus",
+    "PhaseStatus",
+    "TaskStatus",
 ]

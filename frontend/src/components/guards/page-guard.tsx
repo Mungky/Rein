@@ -47,6 +47,9 @@ export function PageGuard({
       "dcc:manage_access": "Kelola Akses",
       "dcc:delete": "Hapus Dokumen",
       "dcc:chat": "AI Chat",
+      "workspace:view": "Workspace",
+      "workspace:manage": "Kelola Proyek",
+      "workspace:complete_task": "Submit Penyelesaian Task",
     };
     const label = permLabel[permission] || permission;
     return (

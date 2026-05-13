@@ -55,6 +55,10 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     "sidebar:finance",
     "sidebar:hr",
     "admin:manage_users",
+    # Workspace permissions
+    "workspace:view",        # see projects & tasks
+    "workspace:manage",      # create/edit projects, phases, tasks (manager+)
+    "workspace:complete_task",  # submit task completion (engineer)
 )
 
 
@@ -73,6 +77,9 @@ PERMISSION_LABELS: dict[str, str] = {
     "sidebar:finance": "Akses Modul Keuangan",
     "sidebar:hr": "Akses Modul HR",
     "admin:manage_users": "Kelola Pengguna (Admin)",
+    "workspace:view": "Lihat Workspace",
+    "workspace:manage": "Kelola Proyek & Task",
+    "workspace:complete_task": "Submit Penyelesaian Task",
 }
 
 
@@ -83,41 +90,51 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:manage_access", "dcc:manage_clients", "dcc:chat",
         "sidebar:crm", "sidebar:projects", "sidebar:finance", "sidebar:hr",
+        "workspace:view", "workspace:manage",
     ),
     AppRole.manager: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:manage_clients", "dcc:chat",
         "sidebar:crm", "sidebar:projects",
+        "workspace:view", "workspace:manage",
     ),
     AppRole.finance: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:chat",
         "sidebar:finance",
+        "workspace:view",
     ),
     AppRole.accounting: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
         "sidebar:finance",
+        "workspace:view",
     ),
     AppRole.human_resources: (
         "dashboard:view", "dcc:view", "dcc:search", "dcc:chat",
         "sidebar:hr",
+        "workspace:view",
     ),
     AppRole.engineer_mechanical: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+        "workspace:view", "workspace:complete_task",
     ),
     AppRole.engineer_process: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+        "workspace:view", "workspace:complete_task",
     ),
     AppRole.engineer_electrical: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+        "workspace:view", "workspace:complete_task",
     ),
     AppRole.purchasing: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
         "sidebar:crm",
+        "workspace:view",
     ),
     AppRole.operational_manager: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:chat",
         "sidebar:projects",
+        "workspace:view", "workspace:manage",
     ),
 }

@@ -7,6 +7,7 @@ import {
   Settings,
   Lock,
   Shield,
+  FolderKanban,
 } from "lucide-react";
 import { ROLE_LABELS } from "@/lib/utils/roles";
 import type { AppRole, Permission } from "@/lib/utils/roles";
@@ -23,6 +24,7 @@ interface NavItem {
 
 const NAV_PRIMARY: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
+  { id: "workspace", label: "Workspace", icon: FolderKanban, permission: "workspace:view" },
   { id: "dcc", label: "Document Manager", icon: FolderOpen },
 ];
 

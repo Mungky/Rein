@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Home, FolderOpen, Search, Bell, User } from "lucide-react";
+import { Home, FolderOpen, FolderKanban, Bell, User } from "lucide-react";
 
 export interface MobileNavProps {
   screen: string;
@@ -11,9 +11,9 @@ export interface MobileNavProps {
 
 const items = [
   { id: "dashboard", label: "Beranda", icon: Home },
+  { id: "workspace", label: "Proyek", icon: FolderKanban },
   { id: "dcc", label: "Dokumen", icon: FolderOpen },
-  { id: "search", label: "Cari", icon: Search },
-  { id: "notifications", label: "Notifikasi", icon: Bell },
+  { id: "notifications", label: "Notif", icon: Bell },
   { id: "profile", label: "Profil", icon: User },
 ];
 

@@ -31,6 +31,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (pathname?.startsWith("/approvals")) return "approvals";
     if (pathname?.startsWith("/dcc")) return "dcc";
     if (pathname?.startsWith("/admin")) return "admin";
+    if (pathname?.startsWith("/workspace")) return "workspace";
     return "dashboard";
   };
   const screen = getScreen();
@@ -42,6 +43,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         dcc: "/dcc",
         approvals: "/approvals",
         admin: "/admin",
+        workspace: "/workspace",
         crm: "/crm",
         projects: "/projects",
         finance: "/finance",

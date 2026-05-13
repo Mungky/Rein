@@ -27,7 +27,10 @@ export type Permission =
   | "sidebar:projects"
   | "sidebar:finance"
   | "sidebar:hr"
-  | "admin:manage_users";
+  | "admin:manage_users"
+  | "workspace:view"
+  | "workspace:manage"
+  | "workspace:complete_task";
 
 export const ALL_PERMISSIONS: Permission[] = [
   "dashboard:view",
@@ -44,6 +47,9 @@ export const ALL_PERMISSIONS: Permission[] = [
   "sidebar:finance",
   "sidebar:hr",
   "admin:manage_users",
+  "workspace:view",
+  "workspace:manage",
+  "workspace:complete_task",
 ];
 
 export const PERMISSION_LABELS: Record<Permission, string> = {
@@ -61,6 +67,9 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "sidebar:finance": "Akses Modul Keuangan",
   "sidebar:hr": "Akses Modul HR",
   "admin:manage_users": "Kelola Pengguna (Admin)",
+  "workspace:view": "Lihat Workspace",
+  "workspace:manage": "Kelola Proyek & Task",
+  "workspace:complete_task": "Submit Penyelesaian Task",
 };
 
 export const ROLE_LABELS: Record<AppRole, string> = {
@@ -84,42 +93,47 @@ export const ROLE_PERMISSIONS_FALLBACK: Record<AppRole, Permission[]> = {
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
     "dcc:approve", "dcc:manage_access", "dcc:manage_clients", "dcc:chat",
     "sidebar:crm", "sidebar:projects", "sidebar:finance", "sidebar:hr",
+    "workspace:view", "workspace:manage",
   ],
   manager: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
     "dcc:approve", "dcc:manage_clients", "dcc:chat",
     "sidebar:crm", "sidebar:projects",
+    "workspace:view", "workspace:manage",
   ],
   finance: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
     "dcc:approve", "dcc:chat",
-    "sidebar:finance",
+    "sidebar:finance", "workspace:view",
   ],
   accounting: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-    "sidebar:finance",
+    "sidebar:finance", "workspace:view",
   ],
   human_resources: [
     "dashboard:view", "dcc:view", "dcc:search", "dcc:chat",
-    "sidebar:hr",
+    "sidebar:hr", "workspace:view",
   ],
   engineer_mechanical: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+    "workspace:view", "workspace:complete_task",
   ],
   engineer_process: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+    "workspace:view", "workspace:complete_task",
   ],
   engineer_electrical: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+    "workspace:view", "workspace:complete_task",
   ],
   purchasing: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-    "sidebar:crm",
+    "sidebar:crm", "workspace:view",
   ],
   operational_manager: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
     "dcc:approve", "dcc:chat",
-    "sidebar:projects",
+    "sidebar:projects", "workspace:view", "workspace:manage",
   ],
 };
 

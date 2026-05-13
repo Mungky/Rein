@@ -30,6 +30,7 @@ from app.routers import (
     clients,
     projects,
     dcc_activity,
+    workspace,
 )
 from app.services.task_queue import task_queue, TaskType
 
@@ -96,3 +97,4 @@ app.include_router(permissions.router, prefix="/api/permissions", tags=["permiss
 app.include_router(clients.router, prefix="/api/clients", tags=["clients"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(dcc_activity.router, prefix="/api/dcc/activity", tags=["dcc"])
+app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
