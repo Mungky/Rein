@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PageGuard } from "@/components/guards/page-guard";
-import { useAuthDisplay } from "@/hooks/use-auth";
+import { useAuth, useAuthDisplay } from "@/hooks/use-auth";
 import { useCan } from "@/components/providers/permissions-provider";
 import { workspaceApi, type WorkspaceSummary } from "@/lib/api/workspace";
 import type { AppRole } from "@/lib/utils/roles";
@@ -186,7 +186,8 @@ function GenericDashboard() {
 }
 
 export default function DashboardPage() {
-  const { profile, role } = useAuthDisplay();
+  const { profile, role } = useAuth();
+  const { userName } = useAuthDisplay();
   const canManage = useCan(role as AppRole, "workspace:manage");
   const canComplete = useCan(role as AppRole, "workspace:complete_task");
   const [summary, setSummary] = useState<WorkspaceSummary | null>(null);
@@ -218,7 +219,7 @@ export default function DashboardPage() {
             {profile && (
               <div className="mb-5">
                 <div className="text-[18px] font-extrabold text-text">
-                  Selamat datang, {(profile as any).full_name?.split(" ")[0]} 👋
+                  Selamat datang, {userName.split(" ")[0]} 👋
                 </div>
                 <div className="text-[12.5px] text-text-muted mt-0.5">{today}</div>
               </div>
