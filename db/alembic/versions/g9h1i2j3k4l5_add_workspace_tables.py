@@ -1,7 +1,7 @@
 """add workspace tables
 
 Revision ID: g9h1i2j3k4l5
-Revises: 178dedd5c04f
+Revises: a1b2c3d4e5f6
 Create Date: 2026-05-13 16:00:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = 'g9h1i2j3k4l5'
-down_revision = '178dedd5c04f'
+down_revision = 'a1b2c3d4e5f6'
 branch_labels = None
 depends_on = None
 
@@ -32,9 +32,6 @@ def upgrade() -> None:
         'todo', 'in_progress', 'done', 'overdue',
         name='task_status',
     )
-    project_status.create(op.get_bind(), checkfirst=True)
-    phase_status.create(op.get_bind(), checkfirst=True)
-    task_status.create(op.get_bind(), checkfirst=True)
 
     # -- project_templates --
     op.create_table(
