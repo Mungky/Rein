@@ -39,7 +39,7 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 PROPOSAL_TTL = timedelta(minutes=30)
 
 ALLOWED_EXTENSIONS = {
-    ".docx", ".xlsx", ".pptx", ".pdf", ".zip", ".dwg", ".step", ".stp",
+    ".docx", ".xlsx", ".pptx", ".pdf", ".zip", ".rar", ".dwg", ".step", ".stp",
 }
 
 MIME_MAP = {
@@ -48,6 +48,7 @@ MIME_MAP = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".pdf": "application/pdf",
     ".zip": "application/zip",
+    ".rar": "application/vnd.rar",
     ".dwg": "image/vnd.dwg",
     ".step": "application/step",
     ".stp": "application/step",
@@ -98,13 +99,13 @@ def _validate_extension(filename: str) -> str:
     if dot == -1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File \"{filename}\" tidak memiliki ekstensi. Format yang diterima: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ZIP, DWG, STEP.",
+            detail=f"File \"{filename}\" tidak memiliki ekstensi. Format yang diterima: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ZIP, RAR, DWG, STEP.",
         )
     ext = filename[dot:].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File {ext} tidak didukung. Format yang diterima: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ZIP, DWG, STEP (.step/.stp).",
+            detail=f"File {ext} tidak didukung. Format yang diterima: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ZIP, RAR, DWG, STEP (.step/.stp).",
         )
     return ext
 
@@ -498,6 +499,4 @@ async def list_proposals(
             detected_folder=entry.detected_folder,
             detected_folder_confidence=entry.confidence_folder or 0.0,
             gdrive_link=drive_link,
-            expires_at=entry.proposal_expires_at,
-        ))
-    return response
+            expires_at=entr

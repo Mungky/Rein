@@ -11,8 +11,8 @@ import { clientsApi, projectsApi } from "@/lib/api/clients";
 import { accessApi } from "@/lib/api/access";
 
 // ── Allowed file types ──
-const ALLOWED_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf", ".zip", ".dwg", ".step", ".stp"]);
-const EXT_LABEL = "PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ZIP, DWG, STEP (.step/.stp)";
+const ALLOWED_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf", ".zip", ".rar", ".dwg", ".step", ".stp"]);
+const EXT_LABEL = "PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ZIP, RAR, DWG, STEP (.step/.stp)";
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 function validateFile(file: File): string | null {
@@ -744,7 +744,7 @@ export default function DCCPage() {
             Index Publik
           </a>
         )}
-        <input type="file" ref={fileRef} className="hidden" accept=".docx,.xlsx,.pptx,.pdf,.zip,.dwg,.step,.stp" onChange={handleFileInput} />
+        <input type="file" ref={fileRef} className="hidden" accept=".docx,.xlsx,.pptx,.pdf,.zip,.rar,.dwg,.step,.stp" onChange={handleFileInput} />
       </div>
 
       {/* Layout: chat + queue */}
@@ -905,6 +905,4 @@ function UploadBanner({ state, onRetry, onDismiss }: { state: UploadState; onRet
     );
   }
 
-  return null;
-}
-
+  r
