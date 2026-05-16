@@ -41,7 +41,7 @@ REIN adalah sistem ERP internal untuk perusahaan engineering Indonesia. Mengelol
 | Modul | Deskripsi |
 |-------|-----------|
 | **Dashboard** | KPI cards, aktivitas terbaru, ringkasan proyek & tugas per role |
-| **DCC (Document Control)** | Upload dokumen ke Google Drive, deteksi metadata otomatis (regex + LLM), indexing ke Google Sheets, approval workflow |
+| **DCC — Perpustakaan Digital** | File explorer berbasis departemen: rak dokumen per dept, etalase metadata publik, upload Propose→Confirm→Upload→Forget, audit 4-layer background, akses via request approval Pustakawan (email one-click) |
 | **Workspace** | Manajemen proyek dengan 3 view: **Daftar**, **Gantt** (timeline read-only), **Kanban** (drag-and-drop board) |
 | **Approvals** | Approval/reject dokumen dengan komentar |
 | **Access Control** | Request akses dokumen, approval dengan token sementara (15 menit), notifikasi email |
@@ -61,17 +61,24 @@ src/
 │   ├── (app)/
 │   │   ├── layout.tsx                 # Topbar + Sidebar + MobileNav
 │   │   ├── dashboard/page.tsx         # KPI + manager/engineer views
-│   │   ├── dcc/page.tsx               # NimBus AI chat + upload flow
+│   │   ├── dcc/page.tsx               # Digital Library file explorer
 │   │   ├── workspace/page.tsx         # List / Gantt / Kanban
 │   │   ├── approvals/page.tsx         # Approval workflow
 │   │   └── admin/page.tsx             # User management + permissions
 │   └── middleware.ts                   # Auth guard (Supabase session)
-├── features/workspace/
-│   ├── store.ts                       # Zustand state
-│   ├── gantt/                         # Timeline view + drill-down
-│   ├── kanban/                        # Drag-and-drop board
-│   └── shared/                        # Modals, badges, progress bars
-├── hooks/                             # useAuth, useChatStream, useSidebar, useIsMobile
+├── features/
+│   ├── workspace/
+│   │   ├── store.ts                   # Zustand state
+│   │   ├── gantt/                     # Timeline view + drill-down
+│   │   ├── kanban/                    # Drag-and-drop board
+│   │   └── shared/                    # Modals, badges, progress bars
+│   └── library/
+│       ├── folder-tree.tsx            # Sidebar rak departemen
+│       ├── file-list.tsx              # Etalase metadata + aksi
+│       ├── propose-modal.tsx          # Propose→Confirm→Upload flow
+│       ├── upload-zone.tsx            # Drag-and-drop zone
+│       └── types.ts                   # TypeScript interfaces
+├── hooks/                             # useAuth, useSidebar, useIsMobile
 ├── lib/api/                            # ApiClient + typed endpoints
 ├── components/                         # UI primitives, guards, providers
 └── styles/globals.css                 # Design token system (Odoo-inspired)
@@ -98,13 +105,15 @@ app/
 │   ├── clients.py           # /api/clients
 │   ├── projects.py          # /api/projects
 │   ├── dcc_activity.py      # /api/dcc/activity
-│   └── workspace.py         # /api/workspace
+│   ├── workspace.py         # /api/workspace
+│   └── library.py           # /api/library (Digital Library)
 ├── services/
 │   ├── nimbus.py            # AI chat (Ollama, tool calls, SSE)
 │   ├── gdrive.py            # Google Drive upload/organize
 │   ├── gsheets.py           # Google Sheets indexing
 │   ├── metadata.py          # Hybrid metadata detection (regex + DB + LLM)
 │   ├── email.py             # SMTP email (Gmail)
+│   ├── audit_pipeline.py    # 4-layer audit: format, path, duplicate, AI
 │   └── task_queue.py        # Background task processor
 └── schemas/                 # Pydantic request/response models
 ```
@@ -126,8 +135,14 @@ db/
 │   ├── client.py            # clients + clients_projects
 │   ├── role_permission.py   # role_permissions (17 permissions × 10 roles)
 │   ├── dcc_activity_log.py  # dcc_activity_log
-│   └── workspace.py         # 7 workspace tables + 3 enum types
-├── alembic/versions/        # 9 migration files
+│   ├── workspace.py         # 7 workspace tables + 3 enum types
+│   ├── library_folder.py    # library_folders (dept hierarchy)
+│   ├── library_file.py      # library_files (lifecycle + audit status)
+│   ├── audit_job.py         # audit_jobs (4 rows per file)
+│   ├── view_request.py      # view_requests (5-min TTL + approve_token)
+│   └── library_audit_log.py # library_audit_log (admin trail)
+├── alembic/versions/        # 10 migration files
+└── scripts/seed_library_folders.py  # Seed Drive folder IDs
 └── seed.py                 # Seed script (admin, roles, sample data)
 ```
 
@@ -141,19 +156,27 @@ db/
 | GET | `/api/auth/me` | Profil user saat ini |
 | POST | `/api/auth/session` | Verifikasi session |
 
-### DCC — Documents & Upload
+### Digital Library (`/api/library/`)
+| Method | Path | Permission | Deskripsi |
+|--------|------|------------|-----------|
+| GET | `/api/library/tree` | dcc:view | Folder tree per departemen + file count |
+| GET | `/api/library/folders/{id}/files` | dcc:view | Etalase metadata file (semua role) |
+| POST | `/api/library/propose` | dcc:upload | Deteksi metadata dari nama file (no upload) |
+| POST | `/api/library/upload` | dcc:upload | Upload multipart → 202, audit berjalan di background |
+| GET | `/api/library/files/{id}/status` | dcc:upload | Poll status audit (4 layer) |
+| POST | `/api/library/files/{id}/view-request` | dcc:view | Minta akses lihat isi file |
+| GET | `/api/library/view-requests/{token}/approve` | — | One-click approval via email link |
+| GET | `/api/library/view-requests/{token}/deny` | — | One-click deny via email link |
+| GET | `/api/library/files/{id}/link` | dcc:view | Poll temp link setelah diapprove |
+| DELETE | `/api/library/files/{id}` | admin | Soft delete file |
+| GET | `/api/library/log` | admin | Audit trail lengkap |
+| POST | `/api/library/folders` | admin | Buat subfolder |
+
+### DCC — Approvals & Access (Legacy)
 | Method | Path | Permission | Deskripsi |
 |--------|------|------------|-----------|
 | GET | `/api/documents/stats` | dcc:view | Statistik dokumen |
 | GET | `/api/documents/` | dcc:view | List dokumen (filter, paginate) |
-| GET | `/api/documents/search` | dcc:view + dcc:search | Cari dokumen |
-| POST | `/api/upload/` | dcc:upload | **Propose** upload (Drive + metadata detection) |
-| POST | `/api/upload/{id}/confirm` | dcc:upload | **Confirm** (move file, create record, index) |
-| DELETE | `/api/upload/{id}` | dcc:upload | **Cancel** (delete Drive file) |
-
-### DCC — Approvals & Access
-| Method | Path | Permission | Deskripsi |
-|--------|------|------------|-----------|
 | GET | `/api/approvals/pending` | dcc:approve | List pending approvals |
 | POST | `/api/approvals/{id}/approve` | dcc:approve | Approve dokumen |
 | POST | `/api/approvals/{id}/reject` | dcc:approve | Reject dokumen |
@@ -196,20 +219,22 @@ db/
 ```
 auth.users (Supabase) ──1:1── profiles
                               │
-       ┌──────────────────────┼────────────────────────┐
-       │                      │                        │
-  documents              upload_queue              workspace_projects
-  (uploaded_by)         (user_id)                 (manager_id)
-       │                      │                        │
-  approvals              chat_messages         workspace_phases
-  access_requests         dcc_activity_log           │
-                                                 workspace_tasks
+       ┌──────────────────────┼────────────────────────┬──────────────────┐
+       │                      │                        │                  │
+  documents              upload_queue              workspace_projects  library_files
+  (uploaded_by)         (user_id)                 (manager_id)       (uploader_id)
+       │                      │                        │                  │
+  approvals              chat_messages         workspace_phases     audit_jobs (4/file)
+  access_requests         dcc_activity_log           │              view_requests
+                                                 workspace_tasks    library_audit_log
                                                       │
                                                 task_completions
 
 clients ──1:N── clients_projects (Project)
 role_permissions ── (role, permission) unique
 project_templates ──1:N── phase_templates ──1:N── task_templates
+library_folders ──1:N── library_folders (self-ref, subfolder)
+library_folders ──1:N── library_files
 ```
 
 ### Permission Matrix
@@ -293,6 +318,9 @@ GOOGLE_CLIENT_ID=xxx
 GOOGLE_CLIENT_SECRET=xxx
 GOOGLE_DRIVE_ROOT_FOLDER_ID=xxx
 GOOGLE_SHEETS_SPREADSHEET_ID=xxx
+
+# Digital Library
+LIBRARIAN_EMAILS=email1@domain.com,email2@domain.com  # Pustakawan approval notifications
 ```
 
 ### 3. Database Migration
@@ -305,6 +333,9 @@ cd db && alembic upgrade head && cd ..
 
 ```bash
 cd db && python seed.py && cd ..
+
+# Seed Drive folder IDs untuk Digital Library (setelah isi GOOGLE_DRIVE_*):
+python db/scripts/seed_library_folders.py
 ```
 
 ### 5. Run
@@ -322,12 +353,25 @@ cd backend && uvicorn app.main:app --reload --port 8000  # http://localhost:8000
 
 ## Key Workflows
 
-### Upload Dokumen (DCC)
+### Upload Dokumen — Digital Library
 
 ```
-Pilih File → PROPOSE (upload ke Drive + deteksi metadata)
-  → User review/edit metadata → CONFIRM (move file, create Document, index to Sheets)
-  → atau CANCEL (hapus file dari Drive)
+Pilih File → PROPOSE (deteksi metadata dari nama file, no upload)
+  → User review/edit metadata → CONFIRM → UPLOAD ke Drive TEMP (202 langsung)
+  → Background: Layer 1 format nama → Layer 2 path → Layer 3 duplicate SHA-256
+               → Layer 4 AI content (Ollama, non-blocking)
+  → Audit PASS → pindah ke folder final Drive
+  → Audit FAIL → status failed, file tetap di TEMP
+```
+
+### Request Akses File
+
+```
+User klik "Lihat" → POST /view-request
+  → Director / Admin → langsung dapat link sementara (30 menit)
+  → Role lain → email dikirim ke Pustakawan (Director + Manager)
+               → 1 Pustakawan klik Approve → link 30 menit digenerate
+               → TTL 5 menit jika tidak ada yang approve → expired
 ```
 
 ### Approval
