@@ -77,6 +77,14 @@ def _can_upload_to(profile: Profile, folder: LibraryFolder) -> bool:
     return profile.role.value in allowed_roles
 
 
+def _can_view_dept(profile: Profile, folder: LibraryFolder) -> bool:
+    """Admin/director can browse any dept's file list. Others only their own dept."""
+    if profile.role in (AppRole.admin, AppRole.director):
+        return True
+    allowed_roles = DEPT_ROLE_MAP.get(folder.department, set())
+    return profile.role.value in allowed_roles
+
+
 def _is_librarian(profile: Profile) -> bool:
     return profile.role.value in LIBRARIAN_ROLES or profile.role == AppRole.admin
 
@@ -130,16 +138,24 @@ async def get_folder_tree(
     )
     all_folders = result.scalars().all()
 
-    # File counts per folder
-    counts_result = await db.execute(
-        select(LibraryFile.folder_id, func.count(LibraryFile.id))
+    # File counts + last updated per folder (only passed, non-deleted files)
+    stats_result = await db.execute(
+        select(
+            LibraryFile.folder_id,
+            func.count(LibraryFile.id),
+            func.max(LibraryFile.created_at),
+        )
         .where(
             LibraryFile.upload_status == LibraryFileStatus.passed,
             LibraryFile.is_deleted.is_(False),
         )
         .group_by(LibraryFile.folder_id)
     )
-    counts: dict[uuid.UUID, int] = {row[0]: row[1] for row in counts_result.all()}
+    counts: dict[uuid.UUID, int] = {}
+    last_upd: dict[uuid.UUID, str | None] = {}
+    for folder_id_val, count, max_dt in stats_result.all():
+        counts[folder_id_val] = count
+        last_upd[folder_id_val] = max_dt.isoformat() if max_dt else None
 
     # Build tree
     folder_map: dict[uuid.UUID, dict] = {}
@@ -153,6 +169,7 @@ async def get_folder_tree(
             "path": f.path,
             "gdrive_folder_id": f.gdrive_folder_id,
             "file_count": counts.get(f.id, 0),
+            "last_updated": last_upd.get(f.id),
             "parent_id": str(f.parent_id) if f.parent_id else None,
             "children": [],
         }
@@ -192,6 +209,29 @@ async def list_folder_files(
     folder = folder_result.scalar_one_or_none()
     if not folder:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
+
+    # Cross-dept: return summary only (no file listing)
+    if not _can_view_dept(profile, folder):
+        row = (
+            await db.execute(
+                select(func.count(LibraryFile.id), func.max(LibraryFile.created_at)).where(
+                    LibraryFile.folder_id == folder_id,
+                    LibraryFile.upload_status == LibraryFileStatus.passed,
+                    LibraryFile.is_deleted.is_(False),
+                )
+            )
+        ).one()
+        return {
+            "restricted": True,
+            "folder": {
+                "id": str(folder.id),
+                "name": folder.name,
+                "department": folder.department,
+                "dept_label": DEPT_LABELS.get(folder.department, folder.department),
+            },
+            "file_count": row[0] or 0,
+            "last_updated": row[1].isoformat() if row[1] else None,
+        }
 
     offset = (page - 1) * page_size
     files_result = await db.execute(
@@ -909,6 +949,80 @@ async def create_folder(
     await db.commit()
 
     return {"id": str(folder.id), "path": folder.path}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/library/admin/temp   (admin only)
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/temp", dependencies=[Depends(require_role(AppRole.admin))])
+async def get_admin_temp(
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Admin panel: in-progress / stuck files + recent activity log."""
+    # Files not yet resolved: uploading, in_audit, or failed (not deleted)
+    temp_result = await db.execute(
+        select(LibraryFile)
+        .where(
+            LibraryFile.upload_status.in_([
+                LibraryFileStatus.uploading,
+                LibraryFileStatus.in_audit,
+                LibraryFileStatus.failed,
+            ]),
+            LibraryFile.is_deleted.is_(False),
+        )
+        .order_by(LibraryFile.created_at.desc())
+        .limit(100)
+    )
+    temp_files = temp_result.scalars().all()
+
+    # Audit jobs for those files
+    file_ids = [f.id for f in temp_files]
+    jobs_by_file: dict[uuid.UUID, list] = {}
+    if file_ids:
+        jobs_result = await db.execute(
+            select(AuditJob)
+            .where(AuditJob.file_id.in_(file_ids))
+            .order_by(AuditJob.layer)
+        )
+        for j in jobs_result.scalars().all():
+            jobs_by_file.setdefault(j.file_id, []).append({
+                "layer": j.layer,
+                "layer_name": j.layer_name,
+                "status": j.status,
+                "result": j.result,
+            })
+
+    # Recent activity log (100 most recent entries)
+    log_result = await db.execute(
+        select(LibraryAuditLog)
+        .order_by(LibraryAuditLog.created_at.desc())
+        .limit(100)
+    )
+    log_entries = log_result.scalars().all()
+
+    return {
+        "temp_files": [
+            {
+                **_file_meta(f),
+                "upload_status": f.upload_status.value,
+                "audit_layers": jobs_by_file.get(f.id, []),
+            }
+            for f in temp_files
+        ],
+        "activity_log": [
+            {
+                "id": str(e.id),
+                "action": e.action,
+                "actor_id": str(e.actor_id) if e.actor_id else None,
+                "target_type": e.target_type,
+                "target_id": str(e.target_id) if e.target_id else None,
+                "meta": e.log_metadata,
+                "created_at": e.created_at.isoformat(),
+            }
+            for e in log_entries
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------

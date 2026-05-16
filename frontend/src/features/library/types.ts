@@ -18,7 +18,30 @@ export interface FolderNode {
   path: string;
   gdrive_folder_id: string | null;
   file_count: number;
+  last_updated: string | null;
   children: FolderNode[];
+}
+
+export interface AuditLayer {
+  layer: number;
+  layer_name: string;
+  status: string;
+  result: Record<string, unknown> | null;
+}
+
+export interface TempFile extends LibraryFileMeta {
+  upload_status: LibraryFileStatus;
+  audit_layers: AuditLayer[];
+}
+
+export interface ActivityLogEntry {
+  id: string;
+  action: string;
+  actor_id: string | null;
+  target_type: string | null;
+  target_id: string | null;
+  meta: Record<string, unknown> | null;
+  created_at: string;
 }
 
 export interface LibraryFileMeta {

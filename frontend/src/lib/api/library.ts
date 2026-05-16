@@ -1,8 +1,10 @@
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type {
+  ActivityLogEntry,
   FolderNode,
   LibraryFileMeta,
   ProposeResult,
+  TempFile,
   UploadFormValues,
   ViewRequestResponse,
 } from "@/features/library/types";
@@ -28,17 +30,32 @@ export async function getFolderTree(): Promise<{ tree: FolderNode[] }> {
 
 // ── File listing ─────────────────────────────────────────────────────────────
 
+export type FolderFilesResult =
+  | { restricted: false; files: LibraryFileMeta[]; total: number; folder: { name: string; path: string; department: string } }
+  | { restricted: true; folder: { id: string; name: string; department: string; dept_label: string }; file_count: number; last_updated: string | null };
+
 export async function getFolderFiles(
   folderId: string,
   page = 1,
   pageSize = 50,
-): Promise<{ files: LibraryFileMeta[]; total: number; folder: { name: string; path: string } }> {
+): Promise<FolderFilesResult> {
   const headers = await authHeaders();
   const res = await fetch(
     `${API}/api/library/folders/${folderId}/files?page=${page}&page_size=${pageSize}`,
     { headers },
   );
   if (!res.ok) throw new Error("Gagal memuat daftar file");
+  const data = await res.json();
+  return data.restricted ? { restricted: true, ...data } : { restricted: false, ...data };
+}
+
+export async function getAdminTemp(): Promise<{
+  temp_files: TempFile[];
+  activity_log: ActivityLogEntry[];
+}> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/admin/temp`, { headers });
+  if (!res.ok) throw new Error("Gagal memuat panel sementara");
   return res.json();
 }
 
