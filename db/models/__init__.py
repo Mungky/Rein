@@ -21,6 +21,11 @@ from .workspace import (
     WorkspaceProject, WorkspacePhase, WorkspaceTask, TaskCompletion,
     ProjectStatus, PhaseStatus, TaskStatus,
 )
+from .library_folder import LibraryFolder, FolderType, DEPT_ROLE_MAP, DEPT_LABELS, LIBRARIAN_ROLES
+from .library_file import LibraryFile, LibraryFileStatus
+from .audit_job import AuditJob, AuditJobStatus, LAYER_NAMES, LAYER_LABELS
+from .view_request import ViewRequest, ViewRequestStatus, VIEW_REQUEST_TTL_SECONDS
+from .library_audit_log import LibraryAuditLog
 
 __all__ = [
     "Base",
@@ -60,4 +65,19 @@ __all__ = [
     "ProjectStatus",
     "PhaseStatus",
     "TaskStatus",
+    "LibraryFolder",
+    "FolderType",
+    "DEPT_ROLE_MAP",
+    "DEPT_LABELS",
+    "LIBRARIAN_ROLES",
+    "LibraryFile",
+    "LibraryFileStatus",
+    "AuditJob",
+    "AuditJobStatus",
+    "LAYER_NAMES",
+    "LAYER_LABELS",
+    "ViewRequest",
+    "ViewRequestStatus",
+    "VIEW_REQUEST_TTL_SECONDS",
+    "LibraryAuditLog",
 ]

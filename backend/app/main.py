@@ -31,6 +31,7 @@ from app.routers import (
     projects,
     dcc_activity,
     workspace,
+    library,
 )
 from app.services.task_queue import task_queue, TaskType
 
@@ -47,6 +48,7 @@ async def _periodic_cleanup() -> None:
         try:
             task_queue.enqueue(TaskType.CLEANUP_EXPIRED_PROPOSALS)
             task_queue.enqueue(TaskType.REVOKE_EXPIRED_ACCESS)
+            task_queue.enqueue(TaskType.CLEANUP_EXPIRED_VIEW_REQUESTS)
         except Exception as e:
             logger.error("Cleanup task enqueue failed: %s", e)
 
@@ -98,3 +100,4 @@ app.include_router(clients.router, prefix="/api/clients", tags=["clients"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(dcc_activity.router, prefix="/api/dcc/activity", tags=["dcc"])
 app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
+app.include_router(library.router, prefix="/api/library", tags=["library"])

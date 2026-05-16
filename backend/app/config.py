@@ -72,5 +72,9 @@ class Settings:
     # Frontend
     frontend_url: str = os.getenv("NEXT_PUBLIC_API_URL", "http://localhost:3000")
 
+    # Library — real email addresses for Pustakawan approval notifications
+    # Comma-separated. Falls back to smtp_from if empty.
+    librarian_emails: str = os.getenv("LIBRARIAN_EMAILS", "")
+
 
 settings = Settings()

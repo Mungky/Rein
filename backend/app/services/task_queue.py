@@ -17,6 +17,8 @@ class TaskType(str, Enum):
     SEND_EMAIL = "send_email"
     CLEANUP_EXPIRED_PROPOSALS = "cleanup_expired_proposals"
     REVOKE_EXPIRED_ACCESS = "revoke_expired_access"
+    AUDIT_FILE = "audit_file"
+    CLEANUP_EXPIRED_VIEW_REQUESTS = "cleanup_expired_view_requests"
 
 
 @dataclass
@@ -85,6 +87,10 @@ class TaskQueue:
             await self._cleanup_expired_proposals()
         elif task.task_type == TaskType.REVOKE_EXPIRED_ACCESS:
             await self._revoke_expired_access()
+        elif task.task_type == TaskType.AUDIT_FILE:
+            await self._audit_file(task.payload)
+        elif task.task_type == TaskType.CLEANUP_EXPIRED_VIEW_REQUESTS:
+            await self._cleanup_expired_view_requests()
         else:
             logger.warning("Unknown task type: %s", task.task_type)
 
@@ -153,6 +159,39 @@ class TaskQueue:
             for req in expired:
                 req.status = AccessStatus.expired
                 logger.info("Access request %s expired", req.id)
+            await db.commit()
+
+
+    async def _audit_file(self, payload: dict[str, Any]) -> None:
+        """Run 4-layer audit pipeline for a library file."""
+        from app.services.audit_pipeline import run_audit
+
+        file_id = payload.get("file_id")
+        if not file_id:
+            logger.error("AUDIT_FILE task missing file_id")
+            return
+        try:
+            await run_audit(file_id)
+        except Exception as e:
+            logger.error("Audit pipeline failed for file %s: %s", file_id, e, exc_info=True)
+
+    async def _cleanup_expired_view_requests(self) -> None:
+        """Mark pending view requests as expired after 5-minute window."""
+        from db.session import async_session_factory
+        from db.models.view_request import ViewRequest
+
+        now = datetime.now(timezone.utc)
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(ViewRequest).where(
+                    ViewRequest.status == "pending",
+                    ViewRequest.expires_at < now,
+                )
+            )
+            expired = result.scalars().all()
+            for req in expired:
+                req.status = "expired"
+                logger.info("View request %s expired", req.id)
             await db.commit()
 
 
