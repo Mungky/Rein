@@ -44,6 +44,20 @@ export interface ActivityLogEntry {
   created_at: string;
 }
 
+export interface PublicIndexFile {
+  name: string;
+  doc_type: string | null;
+}
+
+export interface PublicIndexDept {
+  id: string;
+  name: string;
+  department: string;
+  dept_label: string;
+  file_count: number;
+  files: PublicIndexFile[];
+}
+
 export interface LibraryFileMeta {
   id: string;
   file_name: string;

@@ -4,6 +4,7 @@ import type {
   FolderNode,
   LibraryFileMeta,
   ProposeResult,
+  PublicIndexDept,
   TempFile,
   UploadFormValues,
   ViewRequestResponse,
@@ -47,6 +48,13 @@ export async function getFolderFiles(
   if (!res.ok) throw new Error("Gagal memuat daftar file");
   const data = await res.json();
   return data.restricted ? { restricted: true, ...data } : { restricted: false, ...data };
+}
+
+export async function getPublicIndex(): Promise<{ departments: PublicIndexDept[] }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/public-index`, { headers });
+  if (!res.ok) throw new Error("Gagal memuat index publik");
+  return res.json();
 }
 
 export async function getAdminTemp(): Promise<{

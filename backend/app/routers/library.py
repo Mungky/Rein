@@ -37,6 +37,7 @@ from db.models.library_folder import (
     DEPT_LABELS,
     DEPT_ROLE_MAP,
     LIBRARIAN_ROLES,
+    FolderType,
     LibraryFolder,
 )
 from db.models.profile import AppRole, Profile
@@ -130,10 +131,21 @@ async def get_folder_tree(
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Return the full folder hierarchy with file counts (metadata reader — all roles)."""
+    """Return folder tree filtered to the user's own dept (admin/director get all)."""
+    base_where = [LibraryFolder.is_active.is_(True)]
+
+    if profile.role not in (AppRole.admin, AppRole.director):
+        user_depts = [
+            dept for dept, roles in DEPT_ROLE_MAP.items()
+            if profile.role.value in roles
+        ]
+        if not user_depts:
+            return {"tree": []}
+        base_where.append(LibraryFolder.department.in_(user_depts))
+
     result = await db.execute(
         select(LibraryFolder)
-        .where(LibraryFolder.is_active.is_(True))
+        .where(*base_where)
         .order_by(LibraryFolder.department, LibraryFolder.name)
     )
     all_folders = result.scalars().all()
@@ -185,6 +197,58 @@ async def get_folder_tree(
     # Sort: departments first, then alphabetical
     roots.sort(key=lambda n: (n["folder_type"] != "department", n["name"]))
     return {"tree": roots}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/library/public-index
+# ---------------------------------------------------------------------------
+
+@router.get("/public-index")
+async def get_public_index(
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Brochure: all departments with file titles only — no content, no metadata."""
+    # Root dept folders only
+    folders_result = await db.execute(
+        select(LibraryFolder)
+        .where(
+            LibraryFolder.is_active.is_(True),
+            LibraryFolder.folder_type == FolderType.department,
+            LibraryFolder.parent_id.is_(None),
+        )
+        .order_by(LibraryFolder.department, LibraryFolder.name)
+    )
+    folders = folders_result.scalars().all()
+
+    departments = []
+    for folder in folders:
+        # Collect file titles for this dept (all subfolders included via department match)
+        files_result = await db.execute(
+            select(LibraryFile.file_name, LibraryFile.doc_type)
+            .join(LibraryFolder, LibraryFile.folder_id == LibraryFolder.id)
+            .where(
+                LibraryFolder.department == folder.department,
+                LibraryFile.upload_status == LibraryFileStatus.passed,
+                LibraryFile.is_deleted.is_(False),
+            )
+            .order_by(LibraryFile.created_at.desc())
+            .limit(100)
+        )
+        file_rows = files_result.all()
+        departments.append({
+            "id": str(folder.id),
+            "name": folder.name,
+            "department": folder.department,
+            "dept_label": DEPT_LABELS.get(folder.department, folder.department),
+            "file_count": len(file_rows),
+            "files": [
+                {"name": row.file_name, "doc_type": row.doc_type}
+                for row in file_rows
+            ],
+        })
+
+    return {"departments": departments}
 
 
 # ---------------------------------------------------------------------------

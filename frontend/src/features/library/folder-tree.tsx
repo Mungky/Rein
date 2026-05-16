@@ -1,10 +1,11 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Clock, Folder, FolderOpen } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, Clock, Folder, FolderOpen } from "lucide-react";
 import { useState } from "react";
 import type { FolderNode } from "./types";
 
 export const TEMP_FOLDER_ID = "__temp__";
+export const INDEX_FOLDER_ID = "__index__";
 
 export const TEMP_FOLDER_NODE: FolderNode = {
   id: TEMP_FOLDER_ID,
@@ -13,6 +14,19 @@ export const TEMP_FOLDER_NODE: FolderNode = {
   dept_label: "Temporary",
   folder_type: "department",
   path: "Riwayat & Sementara",
+  gdrive_folder_id: null,
+  file_count: 0,
+  last_updated: null,
+  children: [],
+};
+
+export const INDEX_FOLDER_NODE: FolderNode = {
+  id: INDEX_FOLDER_ID,
+  name: "Index Publik",
+  department: INDEX_FOLDER_ID,
+  dept_label: "Index Publik",
+  folder_type: "department",
+  path: "Index Publik",
   gdrive_folder_id: null,
   file_count: 0,
   last_updated: null,
@@ -36,6 +50,7 @@ const DEPT_COLORS: Record<string, string> = {
 
 export function FolderTree({ tree, selectedId, onSelect, isAdmin }: FolderTreeProps) {
   const isTemp = selectedId === TEMP_FOLDER_ID;
+  const isIndex = selectedId === INDEX_FOLDER_ID;
 
   return (
     <nav className="flex flex-col gap-0.5 py-1">
@@ -49,19 +64,29 @@ export function FolderTree({ tree, selectedId, onSelect, isAdmin }: FolderTreePr
         />
       ))}
 
+      {/* Index Publik — visible to all roles */}
+      <div className="mx-3 my-1 border-t border-border-soft" />
+      <button
+        onClick={() => onSelect(INDEX_FOLDER_NODE)}
+        className={`w-full flex items-center gap-1.5 px-2 py-[5px] rounded text-left transition-colors duration-100 font-semibold
+          ${isIndex ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text-muted"}`}
+      >
+        <span className="w-3 shrink-0" />
+        <BookOpen className={`w-3.5 h-3.5 shrink-0 ${isIndex ? "text-primary" : "text-text-light"}`} />
+        <span className="flex-1 text-[12.5px] truncate">Index Publik</span>
+      </button>
+
+      {/* Riwayat & Sementara — admin only */}
       {isAdmin && (
-        <>
-          <div className="mx-3 my-1 border-t border-border-soft" />
-          <button
-            onClick={() => onSelect(TEMP_FOLDER_NODE)}
-            className={`w-full flex items-center gap-1.5 px-2 py-[5px] rounded text-left transition-colors duration-100 font-semibold
-              ${isTemp ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text-muted"}`}
-          >
-            <span className="w-3 shrink-0" />
-            <Clock className={`w-3.5 h-3.5 shrink-0 ${isTemp ? "text-primary" : "text-text-light"}`} />
-            <span className="flex-1 text-[12.5px] truncate">Riwayat &amp; Sementara</span>
-          </button>
-        </>
+        <button
+          onClick={() => onSelect(TEMP_FOLDER_NODE)}
+          className={`w-full flex items-center gap-1.5 px-2 py-[5px] rounded text-left transition-colors duration-100 font-semibold
+            ${isTemp ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text-muted"}`}
+        >
+          <span className="w-3 shrink-0" />
+          <Clock className={`w-3.5 h-3.5 shrink-0 ${isTemp ? "text-primary" : "text-text-light"}`} />
+          <span className="flex-1 text-[12.5px] truncate">Riwayat &amp; Sementara</span>
+        </button>
       )}
     </nav>
   );

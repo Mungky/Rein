@@ -37,7 +37,7 @@ export function DeptSummaryCard({ folder }: DeptSummaryProps) {
       </div>
 
       <p className="text-[11px] text-text-light mt-2 max-w-[280px]">
-        Untuk mengakses dokumen, hubungi anggota departemen {folder.dept_label || folder.name} atau Administrator.
+        Untuk mengakses dokumen, hubungi Manajemen atau Administrator.
       </p>
     </div>
   );

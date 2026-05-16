@@ -14,31 +14,13 @@ import { useCallback, useEffect, useState } from "react";
 import { PageGuard } from "@/components/guards/page-guard";
 import { useAuth } from "@/hooks/use-auth";
 import { getFolderFiles, getFolderTree } from "@/lib/api/library";
-import { DeptSummaryCard } from "@/features/library/dept-summary";
 import { FileList } from "@/features/library/file-list";
-import { FolderTree, TEMP_FOLDER_ID } from "@/features/library/folder-tree";
+import { FolderTree, INDEX_FOLDER_ID, TEMP_FOLDER_ID } from "@/features/library/folder-tree";
 import { ProposeModal } from "@/features/library/propose-modal";
+import { PublicIndex } from "@/features/library/public-index";
 import { TempPanel } from "@/features/library/temp-panel";
 import { UploadZone } from "@/features/library/upload-zone";
 import type { FolderNode, LibraryFileMeta } from "@/features/library/types";
-
-// Map role → department slug (matches backend DEPT_ROLE_MAP)
-const ROLE_DEPT_MAP: Record<string, string | null> = {
-  engineer_mechanical: "engineering",
-  engineer_process: "engineering",
-  engineer_electrical: "engineering",
-  purchasing: "purchasing",
-  manager: "management",
-  operational_manager: "management",
-  hr: "hr",
-  finance: "finance",
-  accounting: "accounting",
-};
-
-function canViewDept(role: string, deptSlug: string): boolean {
-  if (role === "admin" || role === "director") return true;
-  return ROLE_DEPT_MAP[role] === deptSlug;
-}
 
 interface UploadToast {
   id: string;
@@ -50,7 +32,6 @@ interface UploadToast {
 export default function LibraryPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
-  const userRole = profile?.role ?? "";
 
   const [tree, setTree] = useState<FolderNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(true);
@@ -60,13 +41,11 @@ export default function LibraryPage() {
   const [files, setFiles] = useState<LibraryFileMeta[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesTotal, setFilesTotal] = useState(0);
-  // undefined = not yet loaded; null = not restricted; FolderNode = cross-dept
-  const [restrictedFolder, setRestrictedFolder] = useState<FolderNode | null | undefined>(undefined);
 
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [toasts, setToasts] = useState<UploadToast[]>([]);
 
-  const isTempSelected = selectedFolder?.id === TEMP_FOLDER_ID;
+  const isSpecialFolder = selectedFolder?.id === TEMP_FOLDER_ID || selectedFolder?.id === INDEX_FOLDER_ID;
 
   // Load folder tree on mount
   useEffect(() => {
@@ -83,38 +62,24 @@ export default function LibraryPage() {
     })();
   }, []);
 
-  // Load files when folder changes
+  // Load files when a real folder is selected
   useEffect(() => {
-    if (!selectedFolder || isTempSelected) return;
-
-    // Frontend-side dept check — skip API call for cross-dept
-    if (!canViewDept(userRole, selectedFolder.department)) {
-      setRestrictedFolder(selectedFolder);
-      setFiles([]);
-      setFilesTotal(0);
-      return;
-    }
-
-    setRestrictedFolder(null);
+    if (!selectedFolder || isSpecialFolder) return;
     setFilesLoading(true);
     setFiles([]);
     getFolderFiles(selectedFolder.id)
       .then((result) => {
-        if (result.restricted) {
-          // Backend confirmed restricted (extra safety net)
-          setRestrictedFolder(selectedFolder);
-        } else {
+        if (!result.restricted) {
           setFiles(result.files);
           setFilesTotal(result.total);
         }
       })
       .catch(() => {})
       .finally(() => setFilesLoading(false));
-  }, [selectedFolder, userRole, isTempSelected]);
+  }, [selectedFolder, isSpecialFolder]);
 
   const refreshFiles = useCallback(() => {
-    if (!selectedFolder || isTempSelected) return;
-    if (!canViewDept(userRole, selectedFolder.department)) return;
+    if (!selectedFolder || isSpecialFolder) return;
     setFilesLoading(true);
     getFolderFiles(selectedFolder.id)
       .then((result) => {
@@ -125,7 +90,7 @@ export default function LibraryPage() {
       })
       .catch(() => {})
       .finally(() => setFilesLoading(false));
-  }, [selectedFolder, userRole, isTempSelected]);
+  }, [selectedFolder, isSpecialFolder]);
 
   const handleUploadSuccess = useCallback((fileId: string, fileName: string) => {
     setPendingFile(null);
@@ -157,17 +122,15 @@ export default function LibraryPage() {
               </button>
             </div>
 
-            {/* Upload zone — compact button (hidden for temp panel / cross-dept) */}
+            {/* Upload zone — hidden for special panels */}
             <div className="px-3 py-2.5 border-b border-border shrink-0">
-              {selectedFolder && !isTempSelected && !restrictedFolder ? (
-                <UploadZone
-                  compact
-                  disabled={!selectedFolder}
-                  onFile={(f) => setPendingFile(f)}
-                />
+              {selectedFolder && !isSpecialFolder ? (
+                <UploadZone compact onFile={(f) => setPendingFile(f)} />
               ) : (
                 <div className="text-[11px] text-text-muted text-center py-1">
-                  {isTempSelected ? "Panel admin" : restrictedFolder ? "Akses terbatas" : "Pilih folder untuk upload"}
+                  {selectedFolder?.id === TEMP_FOLDER_ID ? "Panel admin" :
+                   selectedFolder?.id === INDEX_FOLDER_ID ? "Index Publik" :
+                   "Pilih folder untuk upload"}
                 </div>
               )}
             </div>
@@ -246,10 +209,10 @@ export default function LibraryPage() {
           <div className="flex-1 overflow-y-auto">
             {!selectedFolder ? (
               <EmptyState />
-            ) : isTempSelected ? (
+            ) : selectedFolder.id === TEMP_FOLDER_ID ? (
               <TempPanel />
-            ) : restrictedFolder ? (
-              <DeptSummaryCard folder={restrictedFolder} />
+            ) : selectedFolder.id === INDEX_FOLDER_ID ? (
+              <PublicIndex />
             ) : filesLoading ? (
               <div className="flex justify-center items-center h-40">
                 <Loader2 className="w-5 h-5 animate-spin text-text-light" />
@@ -263,16 +226,16 @@ export default function LibraryPage() {
             )}
           </div>
 
-          {/* Drop zone at bottom only for own-dept empty folders */}
-          {selectedFolder && !isTempSelected && !restrictedFolder && !filesLoading && files.length === 0 && (
+          {/* Drop zone at bottom for empty real folders */}
+          {selectedFolder && !isSpecialFolder && !filesLoading && files.length === 0 && (
             <div className="px-6 pb-6">
               <UploadZone onFile={setPendingFile} />
             </div>
           )}
         </div>
 
-        {/* ── Propose modal — only for own dept folders ── */}
-        {pendingFile && selectedFolder && !isTempSelected && !restrictedFolder && (
+        {/* ── Propose modal — only for real folders ── */}
+        {pendingFile && selectedFolder && !isSpecialFolder && (
           <ProposeModal
             file={pendingFile}
             folder={selectedFolder}

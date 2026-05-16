@@ -18,7 +18,8 @@ class FolderType(str, enum.Enum):
 
 # Maps department slug → which roles own that shelf (can upload)
 DEPT_ROLE_MAP: dict[str, set[str]] = {
-    "finance": {"finance", "accounting"},
+    "finance": {"finance"},
+    "accounting": {"accounting"},
     "engineering": {"engineer_mechanical", "engineer_process", "engineer_electrical"},
     "hr": {"human_resources"},
     "purchasing": {"purchasing"},
@@ -27,6 +28,7 @@ DEPT_ROLE_MAP: dict[str, set[str]] = {
 
 DEPT_LABELS: dict[str, str] = {
     "finance": "Keuangan",
+    "accounting": "Akuntansi",
     "engineering": "Teknik",
     "hr": "SDM",
     "purchasing": "Pengadaan",
