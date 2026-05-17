@@ -10,8 +10,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getAdminTemp, getSequences, setSequence } from "@/lib/api/library";
-import type { ActivityLogEntry, DocumentSequence, TempFile } from "./types";
+import { getAdminTemp } from "@/lib/api/library";
+import type { ActivityLogEntry, TempFile } from "./types";
 
 const STATUS_LABELS: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   uploading: { label: "Mengunggah", color: "text-amber", icon: <Loader2 className="w-3 h-3 animate-spin" /> },
@@ -53,7 +53,7 @@ function relTime(iso: string): string {
 export function TempPanel() {
   const [data, setData] = useState<{ temp_files: TempFile[]; activity_log: ActivityLogEntry[] } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"temp" | "log" | "seq">("temp");
+  const [tab, setTab] = useState<"temp" | "log">("temp");
 
   const load = () => {
     setLoading(true);
@@ -71,8 +71,7 @@ export function TempPanel() {
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border shrink-0">
         <span className="text-[12.5px] font-semibold text-text">Riwayat &amp; Sementara</span>
         <div className="flex-1" />
-        {tab !== "seq" && (
-          <button
+        <button
             onClick={load}
             disabled={loading}
             className="btn btn-ghost btn-icon btn-sm text-text-muted"
@@ -80,12 +79,11 @@ export function TempPanel() {
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
-        )}
       </div>
 
       {/* Tabs */}
       <div className="flex gap-0 border-b border-border px-4 shrink-0">
-        {(["temp", "log", "seq"] as const).map((t) => (
+        {(["temp", "log"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -97,18 +95,14 @@ export function TempPanel() {
           >
             {t === "temp"
               ? `File Sementara${data ? ` (${data.temp_files.length})` : ""}`
-              : t === "log"
-              ? `Log Aktivitas${data ? ` (${data.activity_log.length})` : ""}`
-              : "Nomor Urutan"}
+              : `Log Aktivitas${data ? ` (${data.activity_log.length})` : ""}`}
           </button>
         ))}
       </div>
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
-        {tab === "seq" ? (
-          <SequenceManager />
-        ) : loading ? (
+        {loading ? (
           <div className="flex justify-center items-center h-40">
             <Loader2 className="w-5 h-5 animate-spin text-text-light" />
           </div>
@@ -122,104 +116,6 @@ export function TempPanel() {
         ) : (
           <ActivityLog entries={data.activity_log} />
         )}
-      </div>
-    </div>
-  );
-}
-
-function SequenceManager() {
-  const [sequences, setSequences] = useState<DocumentSequence[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState<string | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
-
-  useEffect(() => {
-    getSequences()
-      .then(({ sequences }) => setSequences(sequences))
-      .catch(() => setSequences([]))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const handleSave = async (docType: string) => {
-    const val = parseInt(editing[docType] ?? "", 10);
-    if (isNaN(val) || val < 0) return;
-    setSaving(docType);
-    try {
-      await setSequence(docType, val);
-      setSequences((prev) => prev.map((s) => s.doc_type === docType ? { ...s, current_number: val } : s));
-      setEditing((prev) => { const next = { ...prev }; delete next[docType]; return next; });
-      setSaved(docType);
-      setTimeout(() => setSaved(null), 2000);
-    } catch {
-      // keep input
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex justify-center items-center h-40">
-        <Loader2 className="w-5 h-5 animate-spin text-text-light" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="px-4 py-3">
-      <p className="text-[11.5px] text-text-muted mb-3">
-        Nomor yang tersimpan adalah nomor <span className="font-semibold">terakhir digunakan</span>. Upload berikutnya akan mendapat nomor +1.
-      </p>
-      <div className="flex flex-col divide-y divide-border-soft">
-        {sequences.map((seq) => {
-          const isEditing = editing[seq.doc_type] !== undefined;
-          const isSaving = saving === seq.doc_type;
-          const isSaved = saved === seq.doc_type;
-          return (
-            <div key={seq.doc_type} className="flex items-center gap-3 py-2.5">
-              <div className="w-12 text-[12px] font-bold font-mono text-primary shrink-0">
-                {seq.doc_type}
-              </div>
-              <div className="flex-1 text-[11px] text-text-muted truncate">{seq.label.split(" — ")[1]}</div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {isEditing ? (
-                  <>
-                    <input
-                      type="number"
-                      min={0}
-                      value={editing[seq.doc_type]}
-                      onChange={(e) => setEditing((prev) => ({ ...prev, [seq.doc_type]: e.target.value }))}
-                      onKeyDown={(e) => { if (e.key === "Enter") handleSave(seq.doc_type); if (e.key === "Escape") setEditing((prev) => { const next = { ...prev }; delete next[seq.doc_type]; return next; }); }}
-                      className="w-20 text-[12px] text-right field-input py-0.5 px-1.5"
-                      disabled={isSaving}
-                      autoFocus
-                    />
-                    <button
-                      onClick={() => handleSave(seq.doc_type)}
-                      disabled={isSaving}
-                      className="btn btn-primary btn-sm text-[11px] px-2 py-0.5"
-                    >
-                      {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Simpan"}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span className={`text-[13px] font-bold tabular-nums font-mono ${isSaved ? "text-green" : "text-text"}`}>
-                      {seq.current_number.toLocaleString("id")}
-                    </span>
-                    <button
-                      onClick={() => setEditing((prev) => ({ ...prev, [seq.doc_type]: String(seq.current_number) }))}
-                      className="btn btn-ghost btn-sm text-[11px] px-2 text-text-muted hover:text-text"
-                    >
-                      Ubah
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
       </div>
     </div>
   );

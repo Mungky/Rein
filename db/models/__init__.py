@@ -27,6 +27,7 @@ from .audit_job import AuditJob, AuditJobStatus, LAYER_NAMES, LAYER_LABELS
 from .view_request import ViewRequest, ViewRequestStatus, VIEW_REQUEST_TTL_SECONDS
 from .library_audit_log import LibraryAuditLog
 from .document_sequence import DocumentSequence, KNOWN_DOC_TYPES, DOC_TYPE_LABELS
+from .folder_permission import FolderPermission
 
 __all__ = [
     "Base",
@@ -84,4 +85,5 @@ __all__ = [
     "DocumentSequence",
     "KNOWN_DOC_TYPES",
     "DOC_TYPE_LABELS",
+    "FolderPermission",
 ]

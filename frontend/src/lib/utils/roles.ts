@@ -10,7 +10,11 @@ export type AppRole =
   | "engineer_mechanical"
   | "engineer_process"
   | "engineer_electrical"
+  | "engineer_civil"
   | "purchasing"
+  | "procurement"
+  | "safety_man"
+  | "warehouse_manager"
   | "operational_manager";
 
 export type Permission =
@@ -75,15 +79,19 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
 export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "Administrator",
   director: "Direktur",
-  manager: "Manajer",
-  finance: "Keuangan",
-  accounting: "Akuntansi",
-  human_resources: "SDM",
-  engineer_mechanical: "Insinyur Mekanikal",
-  engineer_process: "Insinyur Proses",
-  engineer_electrical: "Insinyur Elektrikal",
-  purchasing: "Pengadaan",
-  operational_manager: "Manajer Operasional",
+  manager: "General Manager",
+  finance: "Finance",
+  accounting: "Accounting",
+  human_resources: "Human Resources",
+  engineer_mechanical: "Mechanical Engineer",
+  engineer_process: "Process Engineer",
+  engineer_electrical: "Electrical Engineer",
+  engineer_civil: "Civil Engineer",
+  purchasing: "Purchasing",
+  procurement: "Procurement",
+  safety_man: "Safety Man",
+  warehouse_manager: "Warehouse Manager",
+  operational_manager: "Operational Manager",
 };
 
 /** Static fallback used while the API matrix is loading or unreachable. */
@@ -126,9 +134,25 @@ export const ROLE_PERMISSIONS_FALLBACK: Record<AppRole, Permission[]> = {
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
     "workspace:view", "workspace:complete_task",
   ],
+  engineer_civil: [
+    "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+    "workspace:view", "workspace:complete_task",
+  ],
   purchasing: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
     "sidebar:crm", "workspace:view",
+  ],
+  procurement: [
+    "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+    "sidebar:crm", "workspace:view",
+  ],
+  safety_man: [
+    "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+    "workspace:view",
+  ],
+  warehouse_manager: [
+    "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
+    "workspace:view",
   ],
   operational_manager: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",

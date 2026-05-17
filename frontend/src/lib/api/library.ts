@@ -206,6 +206,41 @@ export async function getSequences(): Promise<{ sequences: DocumentSequence[] }>
   return res.json();
 }
 
+export interface FolderInfo {
+  id: string;
+  name: string;
+  dept: string;
+  dept_label: string;
+}
+
+export interface FolderPermEntry {
+  folder_id: string;
+  role: string;
+  can_view: boolean;
+  can_upload: boolean;
+  can_download: boolean;
+}
+
+export async function getFolderPermissions(): Promise<{ folders: FolderInfo[]; permissions: FolderPermEntry[] }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/admin/folder-permissions`, { headers });
+  if (!res.ok) throw new Error("Gagal memuat izin folder");
+  return res.json();
+}
+
+export async function setFolderPermissions(permissions: FolderPermEntry[]): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/admin/folder-permissions`, {
+    method: "PUT",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ permissions }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "Gagal menyimpan izin folder");
+  }
+}
+
 export async function setSequence(docType: string, currentNumber: number): Promise<void> {
   const headers = await authHeaders();
   const res = await fetch(`${API}/api/library/sequences/${docType}`, {

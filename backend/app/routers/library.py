@@ -34,6 +34,7 @@ from db.models.library_audit_log import (
 )
 from db.models.library_file import LibraryFile, LibraryFileStatus
 from db.models.document_sequence import DocumentSequence, KNOWN_DOC_TYPES, DOC_TYPE_LABELS
+from db.models.folder_permission import FolderPermission
 from db.models.library_folder import (
     DEPT_LABELS,
     DEPT_ROLE_MAP,
@@ -71,20 +72,43 @@ async def _get_temp_folder_id() -> str:
     )
 
 
-def _can_upload_to(profile: Profile, folder: LibraryFolder) -> bool:
-    """Admin/director can upload anywhere. Others only to their dept shelf."""
+async def _can_upload_to(db: AsyncSession, profile: Profile, folder: LibraryFolder) -> bool:
+    """Admin/director can upload anywhere. Others: check folder_permissions table."""
     if profile.role in (AppRole.admin, AppRole.director):
         return True
-    allowed_roles = DEPT_ROLE_MAP.get(folder.department, set())
-    return profile.role.value in allowed_roles
+    result = await db.execute(
+        select(FolderPermission)
+        .join(LibraryFolder, FolderPermission.folder_id == LibraryFolder.id)
+        .where(
+            LibraryFolder.department == folder.department,
+            LibraryFolder.parent_id.is_(None),
+            FolderPermission.role == profile.role,
+            FolderPermission.can_upload.is_(True),
+        )
+    )
+    if result.scalar_one_or_none() is not None:
+        return True
+    # Fallback to DEPT_ROLE_MAP if no permissions seeded yet
+    return profile.role.value in DEPT_ROLE_MAP.get(folder.department, set())
 
 
-def _can_view_dept(profile: Profile, folder: LibraryFolder) -> bool:
-    """Admin/director can browse any dept's file list. Others only their own dept."""
+async def _can_view_dept(db: AsyncSession, profile: Profile, folder: LibraryFolder) -> bool:
+    """Admin/director can browse any dept. Others: check folder_permissions table."""
     if profile.role in (AppRole.admin, AppRole.director):
         return True
-    allowed_roles = DEPT_ROLE_MAP.get(folder.department, set())
-    return profile.role.value in allowed_roles
+    result = await db.execute(
+        select(FolderPermission)
+        .join(LibraryFolder, FolderPermission.folder_id == LibraryFolder.id)
+        .where(
+            LibraryFolder.department == folder.department,
+            LibraryFolder.parent_id.is_(None),
+            FolderPermission.role == profile.role,
+            FolderPermission.can_view.is_(True),
+        )
+    )
+    if result.scalar_one_or_none() is not None:
+        return True
+    return profile.role.value in DEPT_ROLE_MAP.get(folder.department, set())
 
 
 def _is_librarian(profile: Profile) -> bool:
@@ -136,10 +160,22 @@ async def get_folder_tree(
     base_where = [LibraryFolder.is_active.is_(True)]
 
     if profile.role not in (AppRole.admin, AppRole.director):
-        user_depts = [
-            dept for dept, roles in DEPT_ROLE_MAP.items()
-            if profile.role.value in roles
-        ]
+        fp_result = await db.execute(
+            select(LibraryFolder.department)
+            .join(FolderPermission, FolderPermission.folder_id == LibraryFolder.id)
+            .where(
+                LibraryFolder.parent_id.is_(None),
+                FolderPermission.role == profile.role,
+                FolderPermission.can_view.is_(True),
+            )
+        )
+        user_depts = [row[0] for row in fp_result.all()]
+        if not user_depts:
+            # Fallback if folder_permissions not yet seeded
+            user_depts = [
+                dept for dept, roles in DEPT_ROLE_MAP.items()
+                if profile.role.value in roles
+            ]
         if not user_depts:
             return {"tree": []}
         base_where.append(LibraryFolder.department.in_(user_depts))
@@ -276,7 +312,7 @@ async def list_folder_files(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
 
     # Cross-dept: return summary only (no file listing)
-    if not _can_view_dept(profile, folder):
+    if not await _can_view_dept(db, profile, folder):
         row = (
             await db.execute(
                 select(func.count(LibraryFile.id), func.max(LibraryFile.created_at)).where(
@@ -433,7 +469,7 @@ async def upload_file(
     if not folder:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tujuan tidak ditemukan")
 
-    if not _can_upload_to(profile, folder):
+    if not await _can_upload_to(db, profile, folder):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             detail=f"Anda tidak memiliki izin upload ke folder departemen '{folder.department}'",
@@ -1158,6 +1194,105 @@ async def set_sequence(
     )
     await db.commit()
     return {"doc_type": doc_type, "current_number": body.current_number}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/library/admin/folder-permissions   (admin only)
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/folder-permissions", dependencies=[Depends(require_role(AppRole.admin))])
+async def get_folder_permissions(
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Return all root dept folders and the full role permission matrix."""
+    # Root dept folders only
+    folders_result = await db.execute(
+        select(LibraryFolder)
+        .where(
+            LibraryFolder.is_active.is_(True),
+            LibraryFolder.parent_id.is_(None),
+        )
+        .order_by(LibraryFolder.department)
+    )
+    folders = folders_result.scalars().all()
+
+    # All permission rows
+    perms_result = await db.execute(select(FolderPermission))
+    perms = perms_result.scalars().all()
+
+    return {
+        "folders": [
+            {
+                "id": str(f.id),
+                "name": f.name,
+                "dept": f.department,
+                "dept_label": DEPT_LABELS.get(f.department, f.department),
+            }
+            for f in folders
+        ],
+        "permissions": [
+            {
+                "folder_id": str(p.folder_id),
+                "role": p.role.value,
+                "can_view": p.can_view,
+                "can_upload": p.can_upload,
+                "can_download": p.can_download,
+            }
+            for p in perms
+        ],
+    }
+
+
+class FolderPermissionEntry(BaseModel):
+    folder_id: str
+    role: str
+    can_view: bool
+    can_upload: bool
+    can_download: bool
+
+
+class SetFolderPermissionsRequest(BaseModel):
+    permissions: list[FolderPermissionEntry]
+
+
+@router.put("/admin/folder-permissions", dependencies=[Depends(require_role(AppRole.admin))])
+async def set_folder_permissions(
+    body: SetFolderPermissionsRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Upsert folder permission rows (one per folder_id + role combination)."""
+    for entry in body.permissions:
+        folder_uuid = uuid.UUID(entry.folder_id)
+        try:
+            role_enum = AppRole(entry.role)
+        except ValueError:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Role tidak dikenal: {entry.role}",
+            )
+
+        result = await db.execute(
+            select(FolderPermission).where(
+                FolderPermission.folder_id == folder_uuid,
+                FolderPermission.role == role_enum,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.can_view = entry.can_view
+            existing.can_upload = entry.can_upload
+            existing.can_download = entry.can_download
+        else:
+            db.add(FolderPermission(
+                folder_id=folder_uuid,
+                role=role_enum,
+                can_view=entry.can_view,
+                can_upload=entry.can_upload,
+                can_download=entry.can_download,
+            ))
+
+    await db.commit()
+    return {"updated": len(body.permissions)}
 
 
 # ---------------------------------------------------------------------------

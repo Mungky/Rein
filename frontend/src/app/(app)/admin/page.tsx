@@ -16,11 +16,10 @@ import {
   ShieldCheck,
   Eye,
   EyeOff,
-  Building2,
-  Briefcase,
-  Plus,
-  Trash2,
+  FileText,
+  Hash,
   CheckCircle,
+  Loader2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -34,7 +33,15 @@ import { usePermissions } from "@/components/providers/permissions-provider";
 import { PageGuard } from "@/components/guards/page-guard";
 import { cn } from "@/lib/utils";
 import { isValidUsername } from "@/lib/auth/username";
-import { clientsApi, projectsApi, type Client, type Project } from "@/lib/api/clients";
+import {
+  getSequences,
+  setSequence,
+  getFolderPermissions,
+  setFolderPermissions,
+  type FolderInfo,
+  type FolderPermEntry,
+} from "@/lib/api/library";
+import type { DocumentSequence } from "@/features/library/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const ALL_ROLES = Object.entries(ROLE_LABELS) as [AppRole, string][];
@@ -80,15 +87,18 @@ const PERM_GROUPS: { label: string; perms: Permission[] }[] = [
     label: "Sidebar & Modul",
     perms: ["sidebar:crm", "sidebar:projects", "sidebar:finance", "sidebar:hr"],
   },
+  { label: "Workspace", perms: ["workspace:view", "workspace:manage", "workspace:complete_task"] },
   { label: "Administrasi", perms: ["admin:manage_users"] },
 ];
 
 /* ═══════════════════════════════════════════════════════════════
    Root page
    ═══════════════════════════════════════════════════════════════ */
+type AdminTab = "users" | "sequences" | "doctypes" | "permissions";
+
 export default function AdminPage() {
   const { profile } = useAuth();
-  const [tab, setTab] = useState<"users" | "klien" | "proyek" | "permissions">("users");
+  const [tab, setTab] = useState<AdminTab>("users");
 
   return (
     <PageGuard permission="admin:manage_users">
@@ -104,11 +114,11 @@ export default function AdminPage() {
           <TabButton active={tab === "users"} onClick={() => setTab("users")} icon={<Users className="w-3.5 h-3.5" />}>
             Pengguna
           </TabButton>
-          <TabButton active={tab === "klien"} onClick={() => setTab("klien")} icon={<Building2 className="w-3.5 h-3.5" />}>
-            Klien
+          <TabButton active={tab === "sequences"} onClick={() => setTab("sequences")} icon={<Hash className="w-3.5 h-3.5" />}>
+            Nomor Urutan
           </TabButton>
-          <TabButton active={tab === "proyek"} onClick={() => setTab("proyek")} icon={<Briefcase className="w-3.5 h-3.5" />}>
-            Proyek
+          <TabButton active={tab === "doctypes"} onClick={() => setTab("doctypes")} icon={<FileText className="w-3.5 h-3.5" />}>
+            Jenis File
           </TabButton>
           <TabButton active={tab === "permissions"} onClick={() => setTab("permissions")} icon={<ShieldCheck className="w-3.5 h-3.5" />}>
             Permission Role
@@ -117,8 +127,8 @@ export default function AdminPage() {
 
         <div className="flex-1 overflow-y-auto">
           {tab === "users" && <UsersTab currentUserId={profile?.id} />}
-          {tab === "klien" && <KlienTab />}
-          {tab === "proyek" && <ProyekTab />}
+          {tab === "sequences" && <SequencesTab />}
+          {tab === "doctypes" && <DocTypesTab />}
           {tab === "permissions" && <PermissionsTab />}
         </div>
       </div>
@@ -194,7 +204,7 @@ function UsersTab({ currentUserId }: { currentUserId?: string }) {
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify(newUser),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Gagal membuat pengguna"); }
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal membuat pengguna"); }
       setShowCreate(false);
       setNewUser({ username: "", password: "", full_name: "", role: "engineer_mechanical" });
       fetchUsers();
@@ -210,7 +220,7 @@ function UsersTab({ currentUserId }: { currentUserId?: string }) {
       const res = await fetch(`${API_URL}/api/admin/users/${userId}/role`, {
         method: "PATCH", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ role }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Gagal mengubah role"); }
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal mengubah role"); }
       fetchUsers();
     } catch (err) { setError(err instanceof Error ? err.message : "Terjadi kesalahan"); }
     finally { setUpdatingId(null); }
@@ -223,7 +233,7 @@ function UsersTab({ currentUserId }: { currentUserId?: string }) {
       const res = await fetch(`${API_URL}/api/admin/users/${userId}/status`, {
         method: "PATCH", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ is_active }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Gagal mengubah status"); }
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal mengubah status"); }
       fetchUsers();
     } catch (err) { setError(err instanceof Error ? err.message : "Terjadi kesalahan"); }
     finally { setUpdatingId(null); }
@@ -238,7 +248,7 @@ function UsersTab({ currentUserId }: { currentUserId?: string }) {
       const res = await fetch(`${API_URL}/api/admin/users/${userId}/name`, {
         method: "PATCH", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ full_name: trimmed }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Gagal menyimpan nama"); }
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal menyimpan nama"); }
       setEditingNameFor(null);
       fetchUsers();
     } catch (err) { setError(err instanceof Error ? err.message : "Terjadi kesalahan"); }
@@ -429,172 +439,116 @@ function UsersTab({ currentUserId }: { currentUserId?: string }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Klien tab
+   Sequences tab (moved from TempPanel)
    ═══════════════════════════════════════════════════════════════ */
-function KlienTab() {
-  const [clients, setClients] = useState<Client[]>([]);
+function SequencesTab() {
+  const [sequences, setSequences] = useState<DocumentSequence[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ code: "", name: "" });
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ code: "", name: "" });
-  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
 
-  const fetchClients = useCallback(async () => {
-    try {
-      const data = await clientsApi.list(false);
-      setClients(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Gagal memuat klien");
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    getSequences()
+      .then(({ sequences }) => setSequences(sequences))
+      .catch((e) => setError(e instanceof Error ? e.message : "Gagal memuat"))
+      .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { fetchClients(); }, [fetchClients]);
-
-  const handleCreate = async () => {
-    const code = form.code.trim().toUpperCase();
-    const name = form.name.trim();
-    if (!code || !name) return;
-    setCreating(true); setError(null);
+  const handleSave = async (docType: string) => {
+    const val = parseInt(editing[docType] ?? "", 10);
+    if (isNaN(val) || val < 0) return;
+    setSaving(docType);
     try {
-      await clientsApi.create({ code, name });
-      setShowCreate(false); setForm({ code: "", name: "" });
-      fetchClients();
-    } catch (e) { setError(e instanceof Error ? e.message : "Gagal membuat klien"); }
-    finally { setCreating(false); }
+      await setSequence(docType, val);
+      setSequences((prev) => prev.map((s) => s.doc_type === docType ? { ...s, current_number: val } : s));
+      setEditing((prev) => { const next = { ...prev }; delete next[docType]; return next; });
+      setSaved(docType);
+      setTimeout(() => setSaved(null), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal menyimpan");
+    } finally {
+      setSaving(null);
+    }
   };
 
-  const handleUpdate = async (id: string) => {
-    const code = editDraft.code.trim().toUpperCase();
-    const name = editDraft.name.trim();
-    if (!code || !name) return;
-    setUpdatingId(id); setError(null);
-    try {
-      await clientsApi.update(id, { code, name });
-      setEditingId(null);
-      fetchClients();
-    } catch (e) { setError(e instanceof Error ? e.message : "Gagal mengubah klien"); }
-    finally { setUpdatingId(null); }
-  };
-
-  const handleDeactivate = async (id: string) => {
-    setUpdatingId(id); setError(null);
-    try {
-      await clientsApi.deactivate(id);
-      fetchClients();
-    } catch (e) { setError(e instanceof Error ? e.message : "Gagal menonaktifkan klien"); }
-    finally { setUpdatingId(null); }
-  };
-
-  if (loading) return <LoadingState label="Memuat data klien…" />;
-
-  const active = clients.filter((c) => c.is_active);
-  const inactive = clients.filter((c) => !c.is_active);
+  if (loading) return <LoadingState label="Memuat nomor urutan…" />;
 
   return (
-    <div className="px-4 md:px-6 py-4">
-      <div className="flex items-center gap-3 mb-4">
-        <span className="badge badge-blue">{active.length} klien aktif</span>
-        <div className="flex-1" />
-        <button className="btn btn-primary btn-sm gap-1.5" onClick={() => setShowCreate(true)}>
-          <Plus className="w-3.5 h-3.5" /> Tambah Klien
-        </button>
-      </div>
+    <div className="px-4 md:px-6 py-4 max-w-xl">
+      <p className="text-[12.5px] text-text-muted mb-4">
+        Nomor yang tersimpan adalah nomor <span className="font-semibold">terakhir digunakan</span>.
+        Upload berikutnya akan mendapat nomor +1. Setel ke nomor terakhir arsip fisik agar penomoran berlanjut.
+      </p>
 
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
-
-      {/* Create form */}
-      {showCreate && (
-        <div className="mb-4 p-4 bg-bg border border-border rounded-lg">
-          <div className="text-[13px] font-semibold text-text mb-3">Klien Baru</div>
-          <div className="flex gap-2 flex-wrap">
-            <input
-              placeholder="Kode (cth: PLB)" value={form.code}
-              onChange={(e) => setForm((p) => ({ ...p, code: e.target.value.toUpperCase() }))}
-              className="h-8 px-2.5 rounded border border-border bg-bg-ctrl text-[13px] outline-none focus:border-primary w-[100px] font-mono uppercase"
-            />
-            <input
-              placeholder="Nama klien" value={form.name}
-              onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-              className="h-8 px-2.5 rounded border border-border bg-bg-ctrl text-[13px] outline-none focus:border-primary flex-1 min-w-[160px]"
-            />
-            <button className="btn btn-primary btn-sm gap-1" disabled={creating || !form.code || !form.name} onClick={handleCreate}>
-              <CheckCircle className="w-3.5 h-3.5" /> {creating ? "Menyimpan…" : "Simpan"}
-            </button>
-            <button className="btn btn-default btn-sm" onClick={() => { setShowCreate(false); setForm({ code: "", name: "" }); }}>
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
 
       <div className="rounded-lg border border-border overflow-hidden">
         <table className="w-full">
           <thead>
             <tr className="bg-bg-ctrl border-b border-border">
-              <th className="px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-text-muted w-[100px]">Kode</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-text-muted">Nama</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-text-muted w-[80px]">Status</th>
-              <th className="px-4 py-2.5 text-right text-[11px] font-bold uppercase tracking-wider text-text-muted w-[130px]">Aksi</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-text-muted w-[80px]">Tipe</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-text-muted">Keterangan</th>
+              <th className="px-4 py-2.5 text-right text-[11px] font-bold uppercase tracking-wider text-text-muted w-[180px]">Nomor Terakhir</th>
             </tr>
           </thead>
           <tbody>
-            {clients.map((c) => {
-              const isEditing = editingId === c.id;
+            {sequences.map((seq) => {
+              const isEditing = editing[seq.doc_type] !== undefined;
+              const isSaving = saving === seq.doc_type;
+              const isSaved = saved === seq.doc_type;
               return (
-                <tr key={c.id} className={cn("border-b border-border-soft hover:bg-bg-hover transition-colors", !c.is_active && "opacity-50")}>
-                  <td className="px-4 py-2.5">
+                <tr key={seq.doc_type} className="border-b border-border-soft hover:bg-bg-hover transition-colors">
+                  <td className="px-4 py-3 text-[13px] font-bold font-mono text-primary">{seq.doc_type}</td>
+                  <td className="px-4 py-3 text-[12.5px] text-text-muted">{seq.label.split(" — ")[1] ?? seq.label}</td>
+                  <td className="px-4 py-3 text-right">
                     {isEditing ? (
-                      <input value={editDraft.code} onChange={(e) => setEditDraft((p) => ({ ...p, code: e.target.value.toUpperCase() }))}
-                        className="h-7 px-2 w-[80px] rounded border border-border bg-bg text-[12px] font-mono outline-none focus:border-primary" />
-                    ) : (
-                      <span className="text-[12.5px] font-mono font-semibold text-text">{c.code}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    {isEditing ? (
-                      <input value={editDraft.name} onChange={(e) => setEditDraft((p) => ({ ...p, name: e.target.value }))}
-                        className="h-7 px-2 w-full rounded border border-border bg-bg text-[12.5px] outline-none focus:border-primary" />
-                    ) : (
-                      <span className="text-[13px] text-text">{c.name}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span className={cn("badge", c.is_active ? "badge-green" : "badge-muted")}>
-                      {c.is_active ? "Aktif" : "Nonaktif"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    {updatingId === c.id ? (
-                      <span className="text-[11px] text-text-muted animate-pulse">Menyimpan…</span>
-                    ) : isEditing ? (
-                      <div className="flex justify-end gap-1.5">
-                        <button className="btn btn-primary btn-sm btn-icon" onClick={() => handleUpdate(c.id)}><Save className="w-3.5 h-3.5" /></button>
-                        <button className="btn btn-default btn-sm btn-icon" onClick={() => setEditingId(null)}><X className="w-3.5 h-3.5" /></button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <input
+                          type="number"
+                          min={0}
+                          value={editing[seq.doc_type]}
+                          onChange={(e) => setEditing((prev) => ({ ...prev, [seq.doc_type]: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleSave(seq.doc_type);
+                            if (e.key === "Escape") setEditing((prev) => { const next = { ...prev }; delete next[seq.doc_type]; return next; });
+                          }}
+                          className="w-24 text-[12px] text-right px-2 py-1 rounded border border-border bg-bg-ctrl outline-none focus:border-primary"
+                          disabled={isSaving}
+                          autoFocus
+                        />
+                        <button
+                          onClick={() => handleSave(seq.doc_type)}
+                          disabled={isSaving}
+                          className="btn btn-primary btn-sm btn-icon"
+                        >
+                          {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+                        </button>
+                        <button
+                          onClick={() => setEditing((prev) => { const next = { ...prev }; delete next[seq.doc_type]; return next; })}
+                          className="btn btn-default btn-sm btn-icon"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
                       </div>
                     ) : (
-                      <div className="flex justify-end gap-1.5">
-                        <button className="btn btn-default btn-sm btn-icon" title="Edit" onClick={() => { setEditingId(c.id); setEditDraft({ code: c.code, name: c.name }); }}>
-                          <Pencil className="w-3.5 h-3.5" />
+                      <div className="flex items-center justify-end gap-2">
+                        <span className={cn("text-[14px] font-bold tabular-nums font-mono", isSaved ? "text-green" : "text-text")}>
+                          {seq.current_number.toLocaleString("id")}
+                        </span>
+                        <button
+                          onClick={() => setEditing((prev) => ({ ...prev, [seq.doc_type]: String(seq.current_number) }))}
+                          className="btn btn-default btn-sm text-[11px] px-2"
+                        >
+                          Ubah
                         </button>
-                        {c.is_active && (
-                          <button className="btn btn-default btn-sm btn-icon text-red hover:text-red" title="Nonaktifkan" onClick={() => handleDeactivate(c.id)}>
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
                       </div>
                     )}
                   </td>
                 </tr>
               );
             })}
-            {clients.length === 0 && (
-              <tr><td colSpan={4} className="px-4 py-8 text-center text-[13px] text-text-muted">Belum ada klien</td></tr>
-            )}
           </tbody>
         </table>
       </div>
@@ -603,195 +557,43 @@ function KlienTab() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Proyek tab
+   Doc types tab
    ═══════════════════════════════════════════════════════════════ */
-function ProyekTab() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ code: "", name: "", client_id: "" });
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ code: "", name: "", client_id: "" });
-  const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [filterClient, setFilterClient] = useState("");
+const KNOWN_DOC_TYPES = [
+  { value: "Q", label: "Quotation", desc: "Surat penawaran harga" },
+  { value: "DRW", label: "Gambar Teknik", desc: "Drawing, blueprint, CAD" },
+  { value: "INV", label: "Invoice", desc: "Tagihan / faktur" },
+  { value: "PO", label: "Purchase Order", desc: "Surat pesanan pembelian" },
+  { value: "SPK", label: "Surat Perintah Kerja", desc: "Work order" },
+  { value: "RFP", label: "Request for Proposal", desc: "Permintaan proposal" },
+  { value: "RPT", label: "Report", desc: "Laporan kegiatan / proyek" },
+  { value: "SPEC", label: "Spesifikasi", desc: "Technical specification" },
+  { value: "OTHER", label: "Lainnya", desc: "Dokumen umum / tidak terklasifikasi" },
+];
 
-  const fetchAll = useCallback(async () => {
-    try {
-      const [p, c] = await Promise.all([projectsApi.list(undefined, false), clientsApi.list(false)]);
-      setProjects(p); setClients(c);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Gagal memuat data");
-    } finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchAll(); }, [fetchAll]);
-
-  const handleCreate = async () => {
-    const code = form.code.trim().toUpperCase();
-    const name = form.name.trim();
-    if (!code || !name || !form.client_id) return;
-    setCreating(true); setError(null);
-    try {
-      await projectsApi.create({ code, name, client_id: form.client_id });
-      setShowCreate(false); setForm({ code: "", name: "", client_id: "" });
-      fetchAll();
-    } catch (e) { setError(e instanceof Error ? e.message : "Gagal membuat proyek"); }
-    finally { setCreating(false); }
-  };
-
-  const handleUpdate = async (id: string) => {
-    const code = editDraft.code.trim().toUpperCase();
-    const name = editDraft.name.trim();
-    if (!code || !name || !editDraft.client_id) return;
-    setUpdatingId(id); setError(null);
-    try {
-      await projectsApi.update(id, { code, name, client_id: editDraft.client_id });
-      setEditingId(null); fetchAll();
-    } catch (e) { setError(e instanceof Error ? e.message : "Gagal mengubah proyek"); }
-    finally { setUpdatingId(null); }
-  };
-
-  const handleDeactivate = async (id: string) => {
-    setUpdatingId(id); setError(null);
-    try { await projectsApi.deactivate(id); fetchAll(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Gagal menonaktifkan proyek"); }
-    finally { setUpdatingId(null); }
-  };
-
-  const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? "—";
-
-  const filtered = filterClient ? projects.filter((p) => p.client_id === filterClient) : projects;
-
-  if (loading) return <LoadingState label="Memuat data proyek…" />;
-
+function DocTypesTab() {
   return (
-    <div className="px-4 md:px-6 py-4">
-      <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <span className="badge badge-green">{projects.filter((p) => p.is_active).length} proyek aktif</span>
-        <div className="flex-1" />
-        {/* Filter by client */}
-        <div className="relative">
-          <select value={filterClient} onChange={(e) => setFilterClient(e.target.value)}
-            className="h-[28px] pl-2.5 pr-7 rounded border border-border bg-bg text-[12px] outline-none appearance-none text-text-muted">
-            <option value="">Semua Klien</option>
-            {clients.filter((c) => c.is_active).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
-        </div>
-        <button className="btn btn-primary btn-sm gap-1.5" onClick={() => setShowCreate(true)}>
-          <Plus className="w-3.5 h-3.5" /> Tambah Proyek
-        </button>
-      </div>
-
-      {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
-
-      {showCreate && (
-        <div className="mb-4 p-4 bg-bg border border-border rounded-lg">
-          <div className="text-[13px] font-semibold text-text mb-3">Proyek Baru</div>
-          <div className="flex gap-2 flex-wrap items-center">
-            <input placeholder="Kode" value={form.code} onChange={(e) => setForm((p) => ({ ...p, code: e.target.value.toUpperCase() }))}
-              className="h-8 px-2.5 rounded border border-border bg-bg-ctrl text-[13px] outline-none focus:border-primary w-[100px] font-mono uppercase" />
-            <input placeholder="Nama proyek" value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-              className="h-8 px-2.5 rounded border border-border bg-bg-ctrl text-[13px] outline-none focus:border-primary flex-1 min-w-[160px]" />
-            <div className="relative">
-              <select value={form.client_id} onChange={(e) => setForm((p) => ({ ...p, client_id: e.target.value }))}
-                className="h-8 pl-2.5 pr-7 rounded border border-border bg-bg-ctrl text-[13px] outline-none appearance-none">
-                <option value="">— Pilih Klien —</option>
-                {clients.filter((c) => c.is_active).map((c) => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
-              </select>
-              <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
-            </div>
-            <button className="btn btn-primary btn-sm gap-1" disabled={creating || !form.code || !form.name || !form.client_id} onClick={handleCreate}>
-              <CheckCircle className="w-3.5 h-3.5" /> {creating ? "Menyimpan…" : "Simpan"}
-            </button>
-            <button className="btn btn-default btn-sm" onClick={() => { setShowCreate(false); setForm({ code: "", name: "", client_id: "" }); }}>
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="rounded-lg border border-border overflow-hidden overflow-x-auto">
+    <div className="px-4 md:px-6 py-4 max-w-2xl">
+      <p className="text-[12.5px] text-text-muted mb-4">
+        Daftar jenis file yang dikenali sistem. Kode ini digunakan dalam penomoran otomatis dokumen (contoh: <span className="font-mono font-semibold">Q-12350-Penawaran.pdf</span>).
+      </p>
+      <div className="rounded-lg border border-border overflow-hidden">
         <table className="w-full">
           <thead>
             <tr className="bg-bg-ctrl border-b border-border">
-              {["Kode", "Nama Proyek", "Klien", "Status", "Aksi"].map((h, i) => (
-                <th key={h} className={cn("px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider text-text-muted whitespace-nowrap", i === 4 ? "text-right" : "text-left")}>
-                  {h}
-                </th>
-              ))}
+              <th className="px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-text-muted w-[80px]">Kode</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-text-muted">Nama</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-text-muted">Keterangan</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((p) => {
-              const isEditing = editingId === p.id;
-              return (
-                <tr key={p.id} className={cn("border-b border-border-soft hover:bg-bg-hover transition-colors", !p.is_active && "opacity-50")}>
-                  <td className="px-4 py-2.5">
-                    {isEditing ? (
-                      <input value={editDraft.code} onChange={(e) => setEditDraft((prev) => ({ ...prev, code: e.target.value.toUpperCase() }))}
-                        className="h-7 px-2 w-[80px] rounded border border-border bg-bg text-[12px] font-mono outline-none focus:border-primary" />
-                    ) : (
-                      <span className="text-[12.5px] font-mono font-semibold text-text">{p.code}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    {isEditing ? (
-                      <input value={editDraft.name} onChange={(e) => setEditDraft((prev) => ({ ...prev, name: e.target.value }))}
-                        className="h-7 px-2 w-full rounded border border-border bg-bg text-[12.5px] outline-none focus:border-primary" />
-                    ) : (
-                      <span className="text-[13px] text-text">{p.name}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    {isEditing ? (
-                      <div className="relative">
-                        <select value={editDraft.client_id} onChange={(e) => setEditDraft((prev) => ({ ...prev, client_id: e.target.value }))}
-                          className="h-7 pl-2 pr-6 rounded border border-border bg-bg text-[12px] outline-none appearance-none">
-                          {clients.filter((c) => c.is_active).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                        </select>
-                        <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-text-muted pointer-events-none" />
-                      </div>
-                    ) : (
-                      <span className="text-[12.5px] text-text-muted">{clientName(p.client_id)}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span className={cn("badge", p.is_active ? "badge-green" : "badge-muted")}>
-                      {p.is_active ? "Aktif" : "Nonaktif"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    {updatingId === p.id ? (
-                      <span className="text-[11px] text-text-muted animate-pulse">Menyimpan…</span>
-                    ) : isEditing ? (
-                      <div className="flex justify-end gap-1.5">
-                        <button className="btn btn-primary btn-sm btn-icon" onClick={() => handleUpdate(p.id)}><Save className="w-3.5 h-3.5" /></button>
-                        <button className="btn btn-default btn-sm btn-icon" onClick={() => setEditingId(null)}><X className="w-3.5 h-3.5" /></button>
-                      </div>
-                    ) : (
-                      <div className="flex justify-end gap-1.5">
-                        <button className="btn btn-default btn-sm btn-icon" title="Edit"
-                          onClick={() => { setEditingId(p.id); setEditDraft({ code: p.code, name: p.name, client_id: p.client_id }); }}>
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        {p.is_active && (
-                          <button className="btn btn-default btn-sm btn-icon text-red" title="Nonaktifkan" onClick={() => handleDeactivate(p.id)}>
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-            {filtered.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-[13px] text-text-muted">Belum ada proyek</td></tr>
-            )}
+            {KNOWN_DOC_TYPES.map((dt) => (
+              <tr key={dt.value} className="border-b border-border-soft">
+                <td className="px-4 py-3 text-[13px] font-bold font-mono text-primary">{dt.value}</td>
+                <td className="px-4 py-3 text-[13px] font-semibold text-text">{dt.label}</td>
+                <td className="px-4 py-3 text-[12px] text-text-muted">{dt.desc}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -800,22 +602,58 @@ function ProyekTab() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Permissions tab — accordion per role
+   Permissions tab — module + folder access per role
    ═══════════════════════════════════════════════════════════════ */
+type FolderDraft = Record<string, Record<string, { can_view: boolean; can_upload: boolean; can_download: boolean }>>;
+
 function PermissionsTab() {
   const { matrix, loaded, refresh } = usePermissions();
   const [draft, setDraft] = useState<Record<AppRole, Set<Permission>> | null>(null);
+  const [folders, setFolders] = useState<FolderInfo[]>([]);
+  const [folderDraft, setFolderDraft] = useState<FolderDraft>({});
+  const [folderLoaded, setFolderLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<AppRole | null>(null);
 
+  // Load module permissions draft
   useEffect(() => {
     if (!loaded) return;
     const next: Record<AppRole, Set<Permission>> = {} as Record<AppRole, Set<Permission>>;
     for (const [role] of ALL_ROLES) next[role] = new Set((matrix[role] ?? []) as Permission[]);
     setDraft(next);
   }, [loaded, matrix]);
+
+  // Load folder permissions
+  useEffect(() => {
+    getFolderPermissions()
+      .then(({ folders: f, permissions: p }) => {
+        setFolders(f);
+        const fd: FolderDraft = {};
+        for (const [role] of ALL_ROLES) {
+          fd[role] = {};
+          for (const folder of f) {
+            // Default: no access
+            fd[role][folder.id] = { can_view: false, can_upload: false, can_download: false };
+          }
+        }
+        for (const perm of p) {
+          if (!fd[perm.role]) fd[perm.role] = {};
+          fd[perm.role][perm.folder_id] = {
+            can_view: perm.can_view,
+            can_upload: perm.can_upload,
+            can_download: perm.can_download,
+          };
+        }
+        setFolderDraft(fd);
+        setFolderLoaded(true);
+      })
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "Gagal memuat izin folder");
+        setFolderLoaded(true);
+      });
+  }, []);
 
   const togglePerm = (role: AppRole, perm: Permission) => {
     if (!draft || role === "admin") return;
@@ -827,31 +665,74 @@ function PermissionsTab() {
     });
   };
 
+  const toggleFolderPerm = (role: string, folderId: string, field: "can_view" | "can_upload" | "can_download") => {
+    if (role === "admin") return;
+    setFolderDraft((prev) => ({
+      ...prev,
+      [role]: {
+        ...prev[role],
+        [folderId]: {
+          ...prev[role]?.[folderId],
+          [field]: !prev[role]?.[folderId]?.[field],
+        },
+      },
+    }));
+  };
+
   const resetDraft = () => {
     if (!loaded) return;
     const next: Record<AppRole, Set<Permission>> = {} as Record<AppRole, Set<Permission>>;
     for (const [role] of ALL_ROLES) next[role] = new Set((matrix[role] ?? []) as Permission[]);
     setDraft(next); setError(null); setSuccess(null);
+    // Re-fetch folder perms
+    setFolderLoaded(false);
+    getFolderPermissions()
+      .then(({ folders: f, permissions: p }) => {
+        setFolders(f);
+        const fd: FolderDraft = {};
+        for (const [role] of ALL_ROLES) {
+          fd[role] = {};
+          for (const folder of f) fd[role][folder.id] = { can_view: false, can_upload: false, can_download: false };
+        }
+        for (const perm of p) {
+          if (!fd[perm.role]) fd[perm.role] = {};
+          fd[perm.role][perm.folder_id] = { can_view: perm.can_view, can_upload: perm.can_upload, can_download: perm.can_download };
+        }
+        setFolderDraft(fd);
+      })
+      .finally(() => setFolderLoaded(true));
   };
 
   const save = async () => {
     if (!draft) return;
     setSaving(true); setError(null); setSuccess(null);
     try {
-      const payload: Record<string, string[]> = {};
-      for (const [role, perms] of Object.entries(draft)) payload[role] = Array.from(perms as Set<Permission>);
+      // Save module permissions
+      const modulePayload: Record<string, string[]> = {};
+      for (const [role, perms] of Object.entries(draft)) modulePayload[role] = Array.from(perms as Set<Permission>);
       const headers = await authHeaders();
-      const res = await fetch(`${API_URL}/api/admin/permissions`, {
-        method: "PUT", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ permissions: payload }),
+      const modRes = await fetch(`${API_URL}/api/admin/permissions`, {
+        method: "PUT", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ permissions: modulePayload }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Gagal menyimpan"); }
+      if (!modRes.ok) { const e = await modRes.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal menyimpan modul permission"); }
+
+      // Save folder permissions
+      const folderPerms: FolderPermEntry[] = [];
+      for (const [role, folderMap] of Object.entries(folderDraft)) {
+        if (role === "admin") continue;
+        for (const [folderId, perms] of Object.entries(folderMap)) {
+          folderPerms.push({ folder_id: folderId, role, ...perms });
+        }
+      }
+      await setFolderPermissions(folderPerms);
+
       await refresh();
       setSuccess("Permission berhasil diperbarui.");
     } catch (e) { setError(e instanceof Error ? e.message : "Terjadi kesalahan"); }
     finally { setSaving(false); }
   };
 
-  if (!loaded || !draft) {
+  if (!loaded || !draft || !folderLoaded) {
     return <LoadingState label="Memuat konfigurasi permission…" />;
   }
 
@@ -860,7 +741,7 @@ function PermissionsTab() {
   return (
     <div className="px-4 md:px-6 py-4">
       <p className="text-[12.5px] text-text-muted mb-4">
-        Konfigurasi izin akses per role. Klik nama role untuk melihat dan mengubah izin.
+        Konfigurasi izin modul dan akses folder per role. Klik nama role untuk membuka pengaturan.
       </p>
 
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
@@ -886,6 +767,7 @@ function PermissionsTab() {
         {/* Non-admin role cards */}
         {nonAdminRoles.map(([role, label]) => {
           const activeCount = draft[role].size;
+          const folderCount = folders.filter((f) => folderDraft[role]?.[f.id]?.can_view).length;
           const isExpanded = expanded === role;
           const initials = label.slice(0, 2).toUpperCase();
 
@@ -900,38 +782,91 @@ function PermissionsTab() {
                   {initials}
                 </div>
                 <span className="text-[13px] font-semibold text-text flex-1">{label}</span>
-                <span className="badge badge-muted">{activeCount}/{ALL_PERMISSIONS.length}</span>
+                <span className="badge badge-muted">{activeCount} modul</span>
+                <span className="badge badge-blue">{folderCount}/{folders.length} folder</span>
                 <ChevronDown className={cn("w-4 h-4 text-text-muted transition-transform duration-200 shrink-0", isExpanded && "rotate-180")} />
               </button>
 
               {isExpanded && (
-                <div className="border-t border-border px-4 py-4">
-                  {PERM_GROUPS.map((group) => (
-                    <div key={group.label} className="mb-4 last:mb-0">
-                      <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-text-light mb-2 px-1">
-                        {group.label}
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
-                        {group.perms.map((perm) => {
-                          const checked = draft[role].has(perm);
-                          return (
-                            <label
-                              key={perm}
-                              className="flex items-center gap-2.5 px-2.5 py-2 rounded-[var(--r)] hover:bg-bg-hover cursor-pointer transition-colors duration-140 select-none"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => togglePerm(role, perm)}
-                                className="w-3.5 h-3.5 cursor-pointer accent-primary shrink-0"
-                              />
-                              <span className="text-[12.5px] text-text leading-snug">{PERMISSION_LABELS[perm]}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
+                <div className="border-t border-border px-4 py-4 space-y-5">
+                  {/* Section 1: Module permissions */}
+                  <div>
+                    <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-text-light mb-3">
+                      Izin Modul
                     </div>
-                  ))}
+                    {PERM_GROUPS.map((group) => (
+                      <div key={group.label} className="mb-3 last:mb-0">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.07em] text-text-light mb-1.5 px-1">
+                          {group.label}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                          {group.perms.map((perm) => {
+                            const checked = draft[role].has(perm);
+                            return (
+                              <label
+                                key={perm}
+                                className="flex items-center gap-2.5 px-2.5 py-1.5 rounded hover:bg-bg-hover cursor-pointer transition-colors select-none"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => togglePerm(role, perm)}
+                                  className="w-3.5 h-3.5 cursor-pointer accent-primary shrink-0"
+                                />
+                                <span className="text-[12.5px] text-text leading-snug">{PERMISSION_LABELS[perm]}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Section 2: Folder access */}
+                  <div>
+                    <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-text-light mb-3">
+                      Akses Folder Dokumen
+                    </div>
+                    {folders.length === 0 ? (
+                      <p className="text-[12px] text-text-muted">Tidak ada folder yang tersedia</p>
+                    ) : (
+                      <div className="rounded-lg border border-border overflow-hidden">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="bg-bg-ctrl border-b border-border">
+                              <th className="px-3 py-2 text-left text-[10.5px] font-bold uppercase tracking-wider text-text-muted">Folder</th>
+                              <th className="px-3 py-2 text-center text-[10.5px] font-bold uppercase tracking-wider text-text-muted w-[64px]">View</th>
+                              <th className="px-3 py-2 text-center text-[10.5px] font-bold uppercase tracking-wider text-text-muted w-[64px]">Upload</th>
+                              <th className="px-3 py-2 text-center text-[10.5px] font-bold uppercase tracking-wider text-text-muted w-[80px]">Download</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {folders.map((folder) => {
+                              const fp = folderDraft[role]?.[folder.id] ?? { can_view: false, can_upload: false, can_download: false };
+                              return (
+                                <tr key={folder.id} className="border-b border-border-soft hover:bg-bg-hover transition-colors">
+                                  <td className="px-3 py-2">
+                                    <div className="text-[12.5px] font-semibold text-text">{folder.name}</div>
+                                    <div className="text-[10.5px] text-text-muted">{folder.dept}</div>
+                                  </td>
+                                  {(["can_view", "can_upload", "can_download"] as const).map((field) => (
+                                    <td key={field} className="px-3 py-2 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={fp[field]}
+                                        onChange={() => toggleFolderPerm(role, folder.id, field)}
+                                        className="w-3.5 h-3.5 cursor-pointer accent-primary"
+                                      />
+                                    </td>
+                                  ))}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1019,7 +954,6 @@ function CreateUserModal({ form, setForm, onCancel, onCreate, creating }: {
             className="btn btn-primary flex-1"
             disabled={creating || !form.username || !form.password || !form.full_name}
             onClick={onCreate}
-            title={!form.full_name ? "Isi nama lengkap terlebih dahulu" : !form.username ? "Isi username terlebih dahulu" : !form.password ? "Isi password terlebih dahulu (min. 6 karakter)" : undefined}
           >
             {creating ? "Membuat…" : "Buat Pengguna"}
           </button>
@@ -1047,7 +981,7 @@ function ResetPasswordModal({ target, onClose, onSuccess, onError }: {
       const res = await fetch(`${API_URL}/api/admin/users/${target.id}/reset-password`, {
         method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ password: pw }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Gagal reset password"); }
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal reset password"); }
       onSuccess();
     } catch (e) { onError(e instanceof Error ? e.message : "Terjadi kesalahan"); }
     finally { setSubmitting(false); }
