@@ -201,7 +201,7 @@ function ActivityLog({ entries }: { entries: ActivityLogEntry[] }) {
               <span className="text-[12px] font-semibold text-text">
                 {ACTION_LABELS[e.action] ?? e.action}
               </span>
-              {e.meta?.filename && (
+              {e.meta?.filename != null && (
                 <span className="text-[11px] text-text-muted font-mono truncate">
                   {String(e.meta.filename)}
                 </span>
