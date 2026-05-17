@@ -14,11 +14,12 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PageGuard } from "@/components/guards/page-guard";
 import { useAuth } from "@/hooks/use-auth";
-import { getFolderFiles, getFolderTree, getFileStatus } from "@/lib/api/library";
+import { getFolderFiles, getFolderTree, getFileStatus, uploadFile } from "@/lib/api/library";
 import { FileList } from "@/features/library/file-list";
 import type { ProcessingFile } from "@/features/library/file-list";
 import { FolderTree, INDEX_FOLDER_ID, TEMP_FOLDER_ID } from "@/features/library/folder-tree";
-import { ProposeModal } from "@/features/library/propose-modal";
+import { BatchUploadModal } from "@/features/library/batch-upload-modal";
+import type { ApprovedItem } from "@/features/library/batch-upload-modal";
 import { PublicIndex } from "@/features/library/public-index";
 import { TempPanel } from "@/features/library/temp-panel";
 import { UploadZone } from "@/features/library/upload-zone";
@@ -50,11 +51,21 @@ export default function LibraryPage() {
   const [filesTotal, setFilesTotal] = useState(0);
 
   const [uploadQueue, setUploadQueue] = useState<File[]>([]);
+  const [approvedQueue, setApprovedQueue] = useState<ApprovedItem[]>([]);
+  const [activeUpload, setActiveUpload] = useState<{
+    fileName: string;
+    progress: number;
+    doneCount: number;
+    total: number;
+  } | null>(null);
   const [toasts, setToasts] = useState<UploadToast[]>([]);
   const [processingFiles, setProcessingFiles] = useState<ProcessingFile[]>([]);
 
   const [dragOver, setDragOver] = useState(false);
   const mainAreaRef = useRef<HTMLDivElement>(null);
+  const uploadingRef = useRef(false);
+  const uploadTotalRef = useRef(0);
+  const uploadDoneRef = useRef(0);
 
   const isSpecialFolder = selectedFolder?.id === TEMP_FOLDER_ID || selectedFolder?.id === INDEX_FOLDER_ID;
   const subFolders = selectedFolder ? (findNode(tree, selectedFolder.id)?.children ?? []) : [];
@@ -155,18 +166,48 @@ export default function LibraryPage() {
     if (valid.length > 0) setUploadQueue((q) => [...q, ...valid]);
   }, [selectedFolder, isSpecialFolder]);
 
-  const advanceQueue = useCallback(() => {
-    setUploadQueue((q) => q.slice(1));
+  const handleApproveAll = useCallback((items: ApprovedItem[]) => {
+    uploadTotalRef.current = items.length;
+    uploadDoneRef.current = 0;
+    setApprovedQueue(items);
   }, []);
 
-  const handleUploadSuccess = useCallback((fileId: string, fileName: string) => {
-    const toast: UploadToast = { id: fileId, fileName, status: "done" };
-    setToasts((t) => [...t, toast]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), 8000);
-    // Track for in-explorer progress
-    setProcessingFiles((p) => [...p, { id: fileId, fileName }]);
-    // Do NOT call advanceQueue here — the modal "File Berikutnya" / "Tutup" button does it
-  }, []);
+  // Sequential background upload processor
+  useEffect(() => {
+    if (approvedQueue.length === 0 || uploadingRef.current) return;
+    uploadingRef.current = true;
+    const item = approvedQueue[0];
+    setActiveUpload({
+      fileName: item.file.name,
+      progress: 0,
+      doneCount: uploadDoneRef.current,
+      total: uploadTotalRef.current,
+    });
+    uploadFile(item.file, item.form, (pct) => {
+      setActiveUpload((a) => a ? { ...a, progress: pct } : null);
+    })
+      .then((result) => {
+        uploadDoneRef.current += 1;
+        uploadingRef.current = false;
+        const toast: UploadToast = { id: result.file_id, fileName: result.file_name, status: "done" };
+        setToasts((t) => [...t, toast]);
+        setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), 8000);
+        setProcessingFiles((p) => [...p, { id: result.file_id, fileName: result.file_name }]);
+        setActiveUpload(null);
+        setApprovedQueue((q) => q.slice(1));
+      })
+      .catch(() => {
+        uploadDoneRef.current += 1;
+        uploadingRef.current = false;
+        const errId = `err-${Date.now()}`;
+        const toast: UploadToast = { id: errId, fileName: item.file.name, status: "error", message: "Upload gagal" };
+        setToasts((t) => [...t, toast]);
+        setTimeout(() => setToasts((t) => t.filter((x) => x.id !== errId)), 8000);
+        setActiveUpload(null);
+        setApprovedQueue((q) => q.slice(1));
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvedQueue]);
 
   const handleFileDeleted = useCallback((id: string) => {
     setFiles((f) => f.filter((x) => x.id !== id));
@@ -330,22 +371,45 @@ export default function LibraryPage() {
           )}
         </div>
 
-        {/* ── Propose modal ── */}
+        {/* ── Batch upload modal ── */}
         {uploadQueue.length > 0 && selectedFolder && !isSpecialFolder && (
-          <ProposeModal
-            file={uploadQueue[0]}
+          <BatchUploadModal
+            files={uploadQueue}
             folder={selectedFolder}
             onClose={() => setUploadQueue([])}
-            onSuccess={handleUploadSuccess}
-            onSkip={advanceQueue}
-            queueIndex={0}
-            queueTotal={uploadQueue.length}
+            onApproveAll={handleApproveAll}
           />
         )}
 
-        {/* ── Upload toasts ── */}
-        {toasts.length > 0 && (
-          <div className="fixed bottom-4 right-4 flex flex-col gap-2 z-50 max-w-[340px]">
+        {/* ── Fixed bottom-right: upload progress + toasts ── */}
+        {(activeUpload || toasts.length > 0) && (
+          <div className="fixed bottom-4 right-4 flex flex-col gap-2 z-50 w-[320px]">
+            {/* Active upload progress panel */}
+            {activeUpload && (
+              <div className="bg-bg border border-border rounded-xl shadow-2xl overflow-hidden">
+                <div className="px-3.5 py-2 border-b border-border bg-bg-ctrl flex items-center gap-2">
+                  <Loader2 className="w-3 h-3 animate-spin text-primary shrink-0" />
+                  <span className="text-[11px] font-bold uppercase tracking-widest text-text-muted flex-1">
+                    Mengunggah {activeUpload.doneCount + 1}/{activeUpload.total}
+                  </span>
+                </div>
+                <div className="px-3.5 py-2.5">
+                  <div className="text-[12px] font-mono truncate text-text mb-2">{activeUpload.fileName}</div>
+                  <div className="h-1.5 bg-bg-hover rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-200"
+                      style={{ width: `${activeUpload.progress}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10.5px] text-text-muted mt-1.5 tabular-nums">
+                    <span>{approvedQueue.length > 1 ? `${approvedQueue.length - 1} file dalam antrian` : ""}</span>
+                    <span>{activeUpload.progress}%</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Toasts */}
             {toasts.map((t) => (
               <div
                 key={t.id}
