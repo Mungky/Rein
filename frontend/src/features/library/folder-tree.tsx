@@ -1,8 +1,8 @@
 "use client";
 
-import { BookOpen, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, Loader2, Plus, X } from "lucide-react";
+import { BookOpen, Check, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, Loader2, Pencil, Plus, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { createFolder } from "@/lib/api/library";
+import { createFolder, renameFolder } from "@/lib/api/library";
 import type { FolderNode } from "./types";
 
 export const TEMP_FOLDER_ID = "__temp__";
@@ -64,6 +64,7 @@ export function FolderTree({ tree, selectedId, onSelect, isAdmin, canCreateFolde
           selectedId={selectedId}
           onSelect={onSelect}
           depth={0}
+          isAdmin={isAdmin}
           canCreateFolder={canCreateFolder}
           onFolderCreated={onFolderCreated}
         />
@@ -102,6 +103,7 @@ function FolderItem({
   selectedId,
   onSelect,
   depth,
+  isAdmin,
   canCreateFolder,
   onFolderCreated,
 }: {
@@ -109,6 +111,7 @@ function FolderItem({
   selectedId: string | null;
   onSelect: (folder: FolderNode) => void;
   depth: number;
+  isAdmin?: boolean;
   canCreateFolder?: boolean;
   onFolderCreated?: () => void;
 }) {
@@ -117,6 +120,11 @@ function FolderItem({
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(node.name);
+  const [renameSaving, setRenameSaving] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const isSelected = selectedId === node.id;
   const deptColor = DEPT_COLORS[node.department] ?? "text-text-muted";
@@ -151,6 +159,17 @@ function FolderItem({
     }
   };
 
+  const handleRename = async () => {
+    const name = renameValue.trim();
+    if (!name || name === node.name) { setRenaming(false); return; }
+    setRenameSaving(true);
+    try {
+      await renameFolder(node.id, name);
+      setRenaming(false);
+      onFolderCreated?.(); // refreshes tree
+    } catch { /* keep input open */ } finally { setRenameSaving(false); }
+  };
+
   return (
     <div>
       <div className="group relative">
@@ -159,6 +178,7 @@ function FolderItem({
             ${isSelected ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text"}
             ${isDept ? "font-semibold" : "font-normal"}`}
           style={{ paddingLeft: `${8 + depth * 16}px` }}
+          disabled={renaming}
           onClick={() => {
             onSelect(node);
             if (node.children.length > 0) setOpen((o) => !o);
@@ -178,14 +198,45 @@ function FolderItem({
           ) : (
             <Folder className={`w-3.5 h-3.5 shrink-0 ${isDept ? deptColor : "text-text-muted"}`} />
           )}
-          <span className="flex-1 text-[12.5px] truncate min-w-0">{node.name}</span>
-          {node.file_count > 0 && (
+          {renaming ? (
+            <div className="flex items-center gap-0.5 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+              <input
+                ref={renameInputRef}
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRename();
+                  if (e.key === "Escape") { setRenaming(false); }
+                }}
+                className="flex-1 text-[12px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
+                disabled={renameSaving}
+              />
+              <button onClick={handleRename} disabled={renameSaving} className="shrink-0 text-green hover:text-green">
+                {renameSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              </button>
+              <button onClick={() => setRenaming(false)} className="shrink-0 text-text-light hover:text-text">
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ) : (
+            <span className="flex-1 text-[12.5px] truncate min-w-0">{node.name}</span>
+          )}
+          {node.file_count > 0 && !renaming && (
             <span className="text-[10px] text-text-light shrink-0 tabular-nums">
               {node.file_count}
             </span>
           )}
         </button>
 
+        {isAdmin && !renaming && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setRenameValue(node.name); setRenaming(true); setTimeout(() => renameInputRef.current?.focus(), 30); }}
+            title="Ganti nama folder"
+            className="absolute right-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
+          >
+            <Pencil className="w-3 h-3" />
+          </button>
+        )}
         {canCreateFolder && (
           <button
             onClick={startCreating}
@@ -207,6 +258,7 @@ function FolderItem({
               selectedId={selectedId}
               onSelect={onSelect}
               depth={depth + 1}
+              isAdmin={isAdmin}
               canCreateFolder={canCreateFolder}
               onFolderCreated={onFolderCreated}
             />

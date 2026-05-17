@@ -242,6 +242,40 @@ export async function setFolderPermissions(permissions: FolderPermEntry[]): Prom
   }
 }
 
+export async function renameFile(
+  fileId: string,
+  fileName: string,
+): Promise<{ id: string; file_name: string }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/files/${fileId}/rename`, {
+    method: "PATCH",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ file_name: fileName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "Gagal rename file");
+  }
+  return res.json();
+}
+
+export async function renameFolder(
+  folderId: string,
+  name: string,
+): Promise<{ id: string; name: string; path: string }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/folders/${folderId}/rename`, {
+    method: "PATCH",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "Gagal rename folder");
+  }
+  return res.json();
+}
+
 export async function setSequence(docType: string, currentNumber: number): Promise<void> {
   const headers = await authHeaders();
   const res = await fetch(`${API}/api/library/sequences/${docType}`, {

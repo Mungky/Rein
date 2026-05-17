@@ -260,6 +260,17 @@ export function ProposeModal({ file, folder, onClose, onSuccess, queueIndex, que
             )}
           </div>
         )}
+        {phase === "uploading" && (
+          <div className="flex gap-2 px-4 py-3 border-t border-border shrink-0">
+            <button
+              onClick={onClose}
+              className="btn btn-default text-text-muted text-[12px]"
+              title="Upload tetap berjalan di latar belakang"
+            >
+              Sembunyikan — lanjut upload di latar
+            </button>
+          </div>
+        )}
         {phase === "done" && (
           <div className="flex gap-2 px-4 py-3 border-t border-border shrink-0">
             {isBatch && onSkip ? (

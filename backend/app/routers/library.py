@@ -986,6 +986,102 @@ async def delete_file(
 
 
 # ---------------------------------------------------------------------------
+# PATCH /api/library/files/{file_id}/rename
+# ---------------------------------------------------------------------------
+
+class RenameFileRequest(BaseModel):
+    file_name: str
+
+
+@router.patch("/files/{file_id}/rename")
+async def rename_file(
+    file_id: uuid.UUID,
+    body: RenameFileRequest,
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Rename a file. Admin can rename any file; uploader can rename their own."""
+    file_result = await db.execute(
+        select(LibraryFile).where(
+            LibraryFile.id == file_id,
+            LibraryFile.is_deleted.is_(False),
+        )
+    )
+    lib_file = file_result.scalar_one_or_none()
+    if not lib_file:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File tidak ditemukan")
+
+    if profile.role != AppRole.admin and lib_file.uploader_id != profile.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Tidak memiliki izin rename file ini")
+
+    new_name = body.file_name.strip()
+    if not new_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Nama file tidak boleh kosong")
+
+    old_name = lib_file.file_name
+    lib_file.file_name = new_name
+
+    if lib_file.gdrive_file_id:
+        from app.services import gdrive
+        try:
+            await gdrive.rename_file(lib_file.gdrive_file_id, new_name)
+        except Exception as exc:
+            logger.warning("Drive rename failed for file %s: %s", file_id, exc)
+
+    await _write_log(
+        db, profile, "rename_file", "file", file_id,
+        metadata={"old_name": old_name, "new_name": new_name},
+    )
+    await db.commit()
+    return {"id": str(lib_file.id), "file_name": lib_file.file_name}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/library/folders/{folder_id}/rename  (admin only)
+# ---------------------------------------------------------------------------
+
+class RenameFolderRequest(BaseModel):
+    name: str
+
+
+@router.patch("/folders/{folder_id}/rename", dependencies=[Depends(require_role(AppRole.admin))])
+async def rename_folder(
+    folder_id: uuid.UUID,
+    body: RenameFolderRequest,
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Admin: rename a folder and update its path."""
+    folder_result = await db.execute(
+        select(LibraryFolder).where(
+            LibraryFolder.id == folder_id,
+            LibraryFolder.is_active.is_(True),
+        )
+    )
+    folder = folder_result.scalar_one_or_none()
+    if not folder:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
+
+    new_name = body.name.strip()
+    if not new_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Nama folder tidak boleh kosong")
+
+    old_path = folder.path
+    folder.name = new_name
+    if " / " in old_path:
+        folder.path = old_path.rsplit(" / ", 1)[0] + " / " + new_name
+    else:
+        folder.path = new_name
+
+    await _write_log(
+        db, profile, "rename_folder", "folder", folder_id,
+        metadata={"old_path": old_path, "new_path": folder.path},
+    )
+    await db.commit()
+    return {"id": str(folder.id), "name": folder.name, "path": folder.path}
+
+
+# ---------------------------------------------------------------------------
 # GET /api/library/log   (admin only)
 # ---------------------------------------------------------------------------
 

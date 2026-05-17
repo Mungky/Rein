@@ -1,8 +1,8 @@
 "use client";
 
-import { FileText, Lock, Loader2, ExternalLink, Trash2 } from "lucide-react";
+import { Check, ExternalLink, FileText, Loader2, Lock, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { pollViewLink, requestViewAccess, deleteFile } from "@/lib/api/library";
+import { deleteFile, pollViewLink, renameFile, requestViewAccess } from "@/lib/api/library";
 import type { LibraryFileMeta, ViewRequestResponse } from "./types";
 
 const DOC_TYPE_COLORS: Record<string, string> = {
@@ -30,14 +30,24 @@ function relTime(iso: string): string {
   return new Date(iso).toLocaleDateString("id", { day: "numeric", month: "short", year: "2-digit" });
 }
 
+export interface ProcessingFile {
+  id: string;
+  fileName: string;
+}
+
 interface FileListProps {
   files: LibraryFileMeta[];
   isAdmin?: boolean;
+  currentUserId?: string;
   onDeleted?: (id: string) => void;
+  onRenamed?: (id: string, newName: string) => void;
+  processingFiles?: ProcessingFile[];
 }
 
-export function FileList({ files, isAdmin, onDeleted }: FileListProps) {
-  if (files.length === 0) {
+export function FileList({ files, isAdmin, currentUserId, onDeleted, onRenamed, processingFiles }: FileListProps) {
+  const hasContent = files.length > 0 || (processingFiles && processingFiles.length > 0);
+
+  if (!hasContent) {
     return (
       <div className="flex flex-col items-center justify-center h-48 gap-2">
         <FileText className="w-8 h-8 text-text-light opacity-30" />
@@ -48,9 +58,34 @@ export function FileList({ files, isAdmin, onDeleted }: FileListProps) {
 
   return (
     <div className="divide-y divide-border-soft">
-      {files.map((f) => (
-        <FileRow key={f.id} file={f} isAdmin={isAdmin} onDeleted={onDeleted} />
+      {/* Processing / in-audit files at top */}
+      {processingFiles?.map((pf) => (
+        <ProcessingRow key={pf.id} fileName={pf.fileName} />
       ))}
+      {files.map((f) => (
+        <FileRow
+          key={f.id}
+          file={f}
+          isAdmin={isAdmin}
+          currentUserId={currentUserId}
+          onDeleted={onDeleted}
+          onRenamed={onRenamed}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ProcessingRow({ fileName }: { fileName: string }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 bg-amber-bg/30">
+      <div className="w-8 h-8 rounded-md bg-amber-bg border border-amber/20 flex items-center justify-center shrink-0">
+        <Loader2 className="w-3.5 h-3.5 text-amber animate-spin" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[13px] font-semibold font-mono truncate text-text">{fileName}</div>
+        <div className="text-[11px] text-amber">Sedang diaudit…</div>
+      </div>
     </div>
   );
 }
@@ -58,16 +93,26 @@ export function FileList({ files, isAdmin, onDeleted }: FileListProps) {
 function FileRow({
   file,
   isAdmin,
+  currentUserId,
   onDeleted,
+  onRenamed,
 }: {
   file: LibraryFileMeta;
   isAdmin?: boolean;
+  currentUserId?: string;
   onDeleted?: (id: string) => void;
+  onRenamed?: (id: string, newName: string) => void;
 }) {
   const [accessState, setAccessState] = useState<ViewRequestResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(file.file_name);
+  const [saving, setSaving] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const canEdit = isAdmin || file.uploader_id === currentUserId;
 
   // Poll for approval while pending
   useEffect(() => {
@@ -79,13 +124,9 @@ function FileRow({
           setAccessState(result);
           if (pollRef.current) clearInterval(pollRef.current);
         }
-      } catch {
-        // ignore transient errors
-      }
+      } catch { /* ignore */ }
     }, 3000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [accessState?.status, file.id]);
 
   const handleAccess = async () => {
@@ -100,11 +141,7 @@ function FileRow({
       if (result.status === "approved" && result.temp_link) {
         window.open(result.temp_link, "_blank");
       }
-    } catch (e) {
-      // silently fail — user sees no change
-    } finally {
-      setLoading(false);
-    }
+    } catch { /* silently fail */ } finally { setLoading(false); }
   };
 
   const handleDelete = async () => {
@@ -113,40 +150,89 @@ function FileRow({
     try {
       await deleteFile(file.id);
       onDeleted?.(file.id);
-    } catch {
-      setDeleting(false);
-    }
+    } catch { setDeleting(false); }
+  };
+
+  const startRename = () => {
+    setRenameValue(file.file_name);
+    setRenaming(true);
+    setTimeout(() => renameInputRef.current?.focus(), 30);
+  };
+
+  const cancelRename = () => {
+    setRenaming(false);
+    setRenameValue(file.file_name);
+  };
+
+  const commitRename = async () => {
+    const name = renameValue.trim();
+    if (!name || name === file.file_name) { cancelRename(); return; }
+    setSaving(true);
+    try {
+      await renameFile(file.id, name);
+      onRenamed?.(file.id, name);
+      setRenaming(false);
+    } catch { /* keep input open */ } finally { setSaving(false); }
   };
 
   const typeColor = DOC_TYPE_COLORS[file.doc_type ?? ""] ?? "text-text-muted bg-bg-hover";
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 hover:bg-bg-hover transition-colors duration-100 group">
-      {/* Icon + type badge */}
       <div className="w-8 h-8 rounded-md bg-bg-ctrl border border-border flex items-center justify-center shrink-0">
         <FileText className="w-3.5 h-3.5 text-text-muted" />
       </div>
 
-      {/* Metadata */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2 mb-0.5">
-          {file.doc_type && (
-            <span className={`text-[9.5px] font-bold px-1.5 py-px rounded shrink-0 ${typeColor}`}>
-              {file.doc_type}
-            </span>
-          )}
-          <span className="text-[13px] font-semibold font-mono truncate">{file.file_name}</span>
-        </div>
-        <div className="text-[11px] text-text-muted truncate">
-          {[file.client_code, file.project_code, formatBytes(file.file_size), relTime(file.created_at)]
-            .filter(Boolean)
-            .join(" · ")}
-        </div>
+        {renaming ? (
+          <div className="flex items-center gap-1">
+            <input
+              ref={renameInputRef}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") cancelRename();
+              }}
+              className="flex-1 text-[13px] font-mono bg-bg-ctrl border border-primary rounded px-2 py-0.5 outline-none min-w-0"
+              disabled={saving}
+            />
+            <button onClick={commitRename} disabled={saving} className="btn btn-ghost btn-icon btn-sm text-green">
+              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+            </button>
+            <button onClick={cancelRename} disabled={saving} className="btn btn-ghost btn-icon btn-sm text-text-muted">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-baseline gap-2 mb-0.5">
+              {file.doc_type && (
+                <span className={`text-[9.5px] font-bold px-1.5 py-px rounded shrink-0 ${typeColor}`}>
+                  {file.doc_type}
+                </span>
+              )}
+              <span className="text-[13px] font-semibold font-mono truncate">{file.file_name}</span>
+            </div>
+            <div className="text-[11px] text-text-muted truncate">
+              {[file.client_code, file.project_code, formatBytes(file.file_size), relTime(file.created_at)]
+                .filter(Boolean).join(" · ")}
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center gap-2 shrink-0">
-        {isAdmin && (
+      <div className="flex items-center gap-1 shrink-0">
+        {canEdit && !renaming && (
+          <button
+            onClick={startRename}
+            className="opacity-0 group-hover:opacity-100 btn btn-ghost btn-icon btn-sm text-text-light hover:text-primary transition-opacity"
+            title="Ganti nama"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {isAdmin && !renaming && (
           <button
             onClick={handleDelete}
             disabled={deleting}
@@ -156,27 +242,23 @@ function FileRow({
             {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
           </button>
         )}
-        <AccessButton
-          status={accessState?.status ?? "none"}
-          loading={loading}
-          tempLink={accessState?.temp_link ?? null}
-          onAccess={handleAccess}
-        />
+        {!renaming && (
+          <AccessButton
+            status={accessState?.status ?? "none"}
+            loading={loading}
+            tempLink={accessState?.temp_link ?? null}
+            onAccess={handleAccess}
+          />
+        )}
       </div>
     </div>
   );
 }
 
 function AccessButton({
-  status,
-  loading,
-  tempLink,
-  onAccess,
+  status, loading, tempLink, onAccess,
 }: {
-  status: string;
-  loading: boolean;
-  tempLink: string | null;
-  onAccess: () => void;
+  status: string; loading: boolean; tempLink: string | null; onAccess: () => void;
 }) {
   if (status === "approved" && tempLink) {
     return (
@@ -184,38 +266,27 @@ function AccessButton({
         onClick={() => window.open(tempLink, "_blank")}
         className="btn btn-sm btn-default gap-1.5 text-green border-green/30 hover:bg-green-bg"
       >
-        <ExternalLink className="w-3 h-3" />
-        Buka
+        <ExternalLink className="w-3 h-3" /> Buka
       </button>
     );
   }
-
   if (status === "pending") {
     return (
       <span className="flex items-center gap-1.5 text-[11.5px] text-amber font-semibold px-2">
-        <Loader2 className="w-3 h-3 animate-spin" />
-        Menunggu…
+        <Loader2 className="w-3 h-3 animate-spin" /> Menunggu…
       </span>
     );
   }
-
   if (status === "denied" || status === "expired") {
-    return (
-      <span className="text-[11.5px] text-red/70 px-2">Ditolak</span>
-    );
+    return <span className="text-[11.5px] text-red/70 px-2">Ditolak</span>;
   }
-
   return (
     <button
       onClick={onAccess}
       disabled={loading}
       className="btn btn-sm btn-default gap-1.5 text-text-muted hover:text-primary hover:border-primary hover:bg-primary-bg"
     >
-      {loading ? (
-        <Loader2 className="w-3 h-3 animate-spin" />
-      ) : (
-        <Lock className="w-3 h-3" />
-      )}
+      {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Lock className="w-3 h-3" />}
       Minta Akses
     </button>
   );
