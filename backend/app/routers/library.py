@@ -10,7 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -33,6 +33,7 @@ from db.models.library_audit_log import (
     LOG_VIEW_REQUEST,
 )
 from db.models.library_file import LibraryFile, LibraryFileStatus
+from db.models.document_sequence import DocumentSequence, KNOWN_DOC_TYPES, DOC_TYPE_LABELS
 from db.models.library_folder import (
     DEPT_LABELS,
     DEPT_ROLE_MAP,
@@ -414,10 +415,6 @@ async def upload_file(
     file: UploadFile = File(...),
     folder_id: str = Form(...),
     doc_type: str | None = Form(None),
-    client_code: str | None = Form(None),
-    client_name: str | None = Form(None),
-    project_code: str | None = Form(None),
-    project_name: str | None = Form(None),
     title: str | None = Form(None),
     note: str | None = Form(None),
 ):
@@ -460,13 +457,37 @@ async def upload_file(
     if not content:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="File kosong")
 
-    # ── Build final filename ───────────────────────────────────────────────────
+    # ── Auto-assign sequence number ────────────────────────────────────────────
     content_hash = hashlib.sha256(content).hexdigest()
+    seq_number = 0
+    if doc_type:
+        seq_result = await db.execute(
+            sa_text(
+                "UPDATE document_sequences SET current_number = current_number + 1, "
+                "updated_at = now() WHERE doc_type = :dt RETURNING current_number"
+            ),
+            {"dt": doc_type},
+        )
+        row = seq_result.fetchone()
+        if row:
+            seq_number = row[0]
+        else:
+            # Doc type not yet seeded — insert and use 1
+            await db.execute(
+                sa_text(
+                    "INSERT INTO document_sequences (doc_type, current_number) "
+                    "VALUES (:dt, 1) ON CONFLICT (doc_type) DO UPDATE "
+                    "SET current_number = document_sequences.current_number + 1, updated_at = now() "
+                    "RETURNING current_number"
+                ),
+                {"dt": doc_type},
+            )
+            seq_number = 1
+
     file_name = _build_filename(
         doc_type=doc_type,
-        client_code=client_code,
+        seq_number=seq_number,
         title=title or _strip_ext(original_name),
-        project_name=project_name,
         note=note,
         ext=ext,
     )
@@ -478,10 +499,6 @@ async def upload_file(
         file_name=file_name,
         doc_type=doc_type,
         title=title or _strip_ext(original_name),
-        client_code=client_code,
-        client_name=client_name,
-        project_code=project_code,
-        project_name=project_name,
         note=note,
         file_size=len(content),
         mime_type=file.content_type or "application/octet-stream",
@@ -490,8 +507,7 @@ async def upload_file(
         uploader_id=profile.id,
         proposal_metadata={
             "doc_type": doc_type,
-            "client_code": client_code,
-            "project_code": project_code,
+            "seq_number": seq_number,
             "title": title,
             "note": note,
         },
@@ -1090,34 +1106,79 @@ async def get_admin_temp(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/library/sequences   (admin only)
+# ---------------------------------------------------------------------------
+
+@router.get("/sequences", dependencies=[Depends(require_role(AppRole.admin))])
+async def list_sequences(
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Return all doc_type sequence counters."""
+    result = await db.execute(
+        select(DocumentSequence).order_by(DocumentSequence.doc_type)
+    )
+    rows = result.scalars().all()
+    seqs = {r.doc_type: r.current_number for r in rows}
+    # Include any known types not yet in DB
+    for dt in KNOWN_DOC_TYPES:
+        if dt not in seqs:
+            seqs[dt] = 0
+    return {
+        "sequences": [
+            {
+                "doc_type": dt,
+                "label": DOC_TYPE_LABELS.get(dt, dt),
+                "current_number": num,
+            }
+            for dt, num in sorted(seqs.items())
+        ]
+    }
+
+
+class SetSequenceRequest(BaseModel):
+    current_number: int
+
+
+@router.patch("/sequences/{doc_type}", dependencies=[Depends(require_role(AppRole.admin))])
+async def set_sequence(
+    doc_type: str,
+    body: SetSequenceRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Admin: manually set the current sequence number for a doc_type."""
+    if body.current_number < 0:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Nomor tidak boleh negatif")
+    doc_type = doc_type.upper()
+    await db.execute(
+        sa_text(
+            "INSERT INTO document_sequences (doc_type, current_number) VALUES (:dt, :n) "
+            "ON CONFLICT (doc_type) DO UPDATE SET current_number = :n, updated_at = now()"
+        ),
+        {"dt": doc_type, "n": body.current_number},
+    )
+    await db.commit()
+    return {"doc_type": doc_type, "current_number": body.current_number}
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _build_filename(
     doc_type: str | None,
-    client_code: str | None,
+    seq_number: int,
     title: str,
-    project_name: str | None,
     note: str | None,
     ext: str,
 ) -> str:
     def clean(s: str) -> str:
         return s.replace("/", "-").replace("\\", "-").strip()
 
-    parts = []
-    if doc_type:
-        parts.append(doc_type.upper())
-    if client_code:
-        parts.append(clean(client_code).upper())
     middle = clean(title) if title else "Untitled"
-    suffix_parts = []
-    if project_name:
-        suffix_parts.append(clean(project_name))
-    if note:
-        suffix_parts.append(clean(note))
-    suffix = ("-" + "-".join(suffix_parts)) if suffix_parts else ""
-    prefix = "-".join(parts) + "-" if parts else ""
-    return f"{prefix}{middle}{suffix}{ext}"
+    suffix = f"-{clean(note)}" if note else ""
+    if doc_type:
+        return f"{doc_type.upper()}-{seq_number}-{middle}{suffix}{ext}"
+    return f"{middle}{suffix}{ext}"
 
 
 def _strip_ext(filename: str) -> str:

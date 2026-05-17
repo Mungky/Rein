@@ -19,22 +19,30 @@ class AppRole(str, enum.Enum):
     engineer_mechanical = "engineer_mechanical"
     engineer_process = "engineer_process"
     engineer_electrical = "engineer_electrical"
+    engineer_civil = "engineer_civil"
     purchasing = "purchasing"
+    procurement = "procurement"
+    safety_man = "safety_man"
+    warehouse_manager = "warehouse_manager"
     operational_manager = "operational_manager"
 
 
 ROLE_LABELS: dict[AppRole, str] = {
     AppRole.admin: "Administrator",
     AppRole.director: "Direktur",
-    AppRole.manager: "Manajer",
-    AppRole.finance: "Keuangan",
-    AppRole.accounting: "Akuntansi",
-    AppRole.human_resources: "SDM",
-    AppRole.engineer_mechanical: "Insinyur Mekanikal",
-    AppRole.engineer_process: "Insinyur Proses",
-    AppRole.engineer_electrical: "Insinyur Elektrikal",
-    AppRole.purchasing: "Pengadaan",
-    AppRole.operational_manager: "Manajer Operasional",
+    AppRole.manager: "General Manager",
+    AppRole.finance: "Finance",
+    AppRole.accounting: "Accounting",
+    AppRole.human_resources: "Human Resources",
+    AppRole.engineer_mechanical: "Mechanical Engineer",
+    AppRole.engineer_process: "Process Engineer",
+    AppRole.engineer_electrical: "Electrical Engineer",
+    AppRole.engineer_civil: "Civil Engineer",
+    AppRole.purchasing: "Purchasing",
+    AppRole.procurement: "Procurement",
+    AppRole.safety_man: "Safety Man",
+    AppRole.warehouse_manager: "Warehouse Manager",
+    AppRole.operational_manager: "Operational Manager",
 }
 
 

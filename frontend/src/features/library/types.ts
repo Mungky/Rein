@@ -96,12 +96,14 @@ export interface ProposeResult {
 export interface UploadFormValues {
   folder_id: string;
   doc_type: string;
-  client_code: string;
-  client_name: string;
-  project_code: string;
-  project_name: string;
   title: string;
   note: string;
+}
+
+export interface DocumentSequence {
+  doc_type: string;
+  label: string;
+  current_number: number;
 }
 
 export interface ViewRequestResponse {

@@ -2,11 +2,11 @@
 
 import { FileText, Loader2, X, AlertCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { clientsApi, projectsApi } from "@/lib/api/clients";
 import { proposeFile, uploadFile } from "@/lib/api/library";
 import type { FolderNode, ProposeResult, UploadFormValues } from "./types";
 
 const DOC_TYPES = [
+  { value: "Q", label: "Q — Quotation" },
   { value: "DRW", label: "DRW — Gambar Teknik" },
   { value: "INV", label: "INV — Invoice" },
   { value: "PO", label: "PO — Purchase Order" },
@@ -38,55 +38,32 @@ export function ProposeModal({ file, folder, onClose, onSuccess }: ProposeModalP
   const [form, setForm] = useState<UploadFormValues>({
     folder_id: folder.id,
     doc_type: "",
-    client_code: "",
-    client_name: "",
-    project_code: "",
-    project_name: "",
     title: stripExt(file.name),
     note: "",
   });
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [clients, setClients] = useState<{ id: string; code: string; name: string }[]>([]);
-  const [projects, setProjects] = useState<{ id: string; code: string; name: string; client_id: string }[]>([]);
 
-  // Load clients + projects + run propose
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const [c, p, prop] = await Promise.all([
-          clientsApi.list(),
-          projectsApi.list(),
-          proposeFile(file.name, file.size, folder.id),
-        ]);
+    proposeFile(file.name, file.size, folder.id)
+      .then((prop) => {
         if (cancelled) return;
-        setClients(c);
-        setProjects(p);
         setProposed(prop);
-        // Pre-fill form from detected metadata
         setForm((prev) => ({
           ...prev,
           doc_type: prop.detected.doc_type.value ?? "",
-          client_code: prop.detected.client.code ?? "",
-          client_name: prop.detected.client.value ?? "",
-          project_code: prop.detected.project.code ?? "",
-          project_name: prop.detected.project.value ?? "",
         }));
         setPhase("editing");
-      } catch (e) {
+      })
+      .catch((e) => {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Gagal mendeteksi metadata");
           setPhase("error");
         }
-      }
-    })();
+      });
     return () => { cancelled = true; };
   }, [file.name, file.size, folder.id]);
-
-  const filteredProjects = form.client_code
-    ? projects.filter((p) => p.client_id === clients.find((c) => c.code === form.client_code)?.id)
-    : projects;
 
   const handleConfirm = useCallback(async () => {
     setPhase("uploading");
@@ -105,12 +82,11 @@ export function ProposeModal({ file, folder, onClose, onSuccess }: ProposeModalP
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
   };
 
-  // Preview filename
   const previewName = buildFilename(form, file.name);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="bg-bg border border-border rounded-xl shadow-2xl w-full max-w-[480px] flex flex-col overflow-hidden">
+      <div className="bg-bg border border-border rounded-xl shadow-2xl w-full max-w-[420px] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border bg-bg-ctrl shrink-0">
           <div className="w-8 h-8 rounded-md bg-red-bg text-red flex items-center justify-center shrink-0">
@@ -148,49 +124,15 @@ export function ProposeModal({ file, folder, onClose, onSuccess }: ProposeModalP
                 </select>
               </FieldRow>
 
-              {/* Client */}
-              <FieldRow label="Klien" confidence={proposed.detected.client.confidence}>
-                <select
-                  value={form.client_code}
-                  onChange={(e) => {
-                    const c = clients.find((x) => x.code === e.target.value);
-                    setForm((p) => ({
-                      ...p,
-                      client_code: e.target.value,
-                      client_name: c?.name ?? "",
-                      project_code: "",
-                      project_name: "",
-                    }));
-                  }}
-                  className="field-select"
-                >
-                  <option value="">— Pilih klien —</option>
-                  {clients.map((c) => <option key={c.id} value={c.code}>{c.code} — {c.name}</option>)}
-                </select>
-              </FieldRow>
-
-              {/* Project */}
-              <FieldRow label="Proyek" confidence={proposed.detected.project.confidence}>
-                <select
-                  value={form.project_code}
-                  onChange={(e) => {
-                    const p = filteredProjects.find((x) => x.code === e.target.value);
-                    setForm((prev) => ({
-                      ...prev,
-                      project_code: e.target.value,
-                      project_name: p?.name ?? "",
-                    }));
-                  }}
-                  className="field-select"
-                >
-                  <option value="">— Pilih proyek —</option>
-                  {filteredProjects.map((p) => <option key={p.id} value={p.code}>{p.code} — {p.name}</option>)}
-                </select>
-              </FieldRow>
+              {/* Title */}
+              <div>
+                <span className="text-[11px] text-text-muted block mb-0.5">Judul / Nama Dokumen</span>
+                <input type="text" value={form.title} onChange={set("title")} className="field-input" />
+              </div>
 
               {/* Note */}
               <div>
-                <span className="text-[11px] text-text-muted block mb-0.5">Note / Revisi</span>
+                <span className="text-[11px] text-text-muted block mb-0.5">Catatan / Revisi</span>
                 <input
                   type="text"
                   value={form.note}
@@ -200,12 +142,6 @@ export function ProposeModal({ file, folder, onClose, onSuccess }: ProposeModalP
                 />
               </div>
 
-              {/* Title / filename middle */}
-              <div>
-                <span className="text-[11px] text-text-muted block mb-0.5">Judul / Nama Tengah</span>
-                <input type="text" value={form.title} onChange={set("title")} className="field-input" />
-              </div>
-
               {/* Filename preview */}
               <div className="bg-bg-ctrl border border-border rounded-lg px-3 py-2">
                 <div className="text-[10px] font-bold uppercase tracking-[0.07em] text-text-light mb-1">
@@ -213,6 +149,9 @@ export function ProposeModal({ file, folder, onClose, onSuccess }: ProposeModalP
                 </div>
                 <div className="text-[11.5px] font-mono break-all leading-relaxed text-text">
                   {previewName}
+                </div>
+                <div className="text-[10px] text-text-light mt-1">
+                  Nomor urutan ditentukan otomatis saat upload
                 </div>
               </div>
 
@@ -304,16 +243,12 @@ function FieldRow({
 function buildFilename(form: UploadFormValues, originalName: string): string {
   const ext = originalName.includes(".") ? "." + originalName.split(".").pop()!.toLowerCase() : "";
   const clean = (s: string) => s.replace(/[\\/:*?"<>|]/g, "").trim();
-  const parts: string[] = [];
-  if (form.doc_type) parts.push(form.doc_type.toUpperCase());
-  if (form.client_code) parts.push(clean(form.client_code).toUpperCase());
-  const middle = form.title ? clean(form.title) : stripExt(originalName);
-  const suffix: string[] = [];
-  if (form.project_name) suffix.push(clean(form.project_name));
-  if (form.note) suffix.push(clean(form.note));
-  const prefix = parts.length > 0 ? parts.join("-") + "-" : "";
-  const suffixStr = suffix.length > 0 ? "-" + suffix.join("-") : "";
-  return `${prefix}${middle}${suffixStr}${ext}`;
+  const title = form.title ? clean(form.title) : stripExt(originalName);
+  const note = form.note ? `-${clean(form.note)}` : "";
+  if (form.doc_type) {
+    return `${form.doc_type.toUpperCase()}-[auto]-${title}${note}${ext}`;
+  }
+  return `${title}${note}${ext}`;
 }
 
 function stripExt(name: string): string {

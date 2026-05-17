@@ -1,6 +1,7 @@
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type {
   ActivityLogEntry,
+  DocumentSequence,
   FolderNode,
   LibraryFileMeta,
   ProposeResult,
@@ -96,10 +97,6 @@ export async function uploadFile(
   form.append("file", file);
   form.append("folder_id", values.folder_id);
   if (values.doc_type) form.append("doc_type", values.doc_type);
-  if (values.client_code) form.append("client_code", values.client_code);
-  if (values.client_name) form.append("client_name", values.client_name);
-  if (values.project_code) form.append("project_code", values.project_code);
-  if (values.project_name) form.append("project_name", values.project_name);
   if (values.title) form.append("title", values.title);
   if (values.note) form.append("note", values.note);
 
@@ -200,4 +197,24 @@ export async function createFolder(body: {
     throw new Error(err.detail || "Gagal membuat folder");
   }
   return res.json();
+}
+
+export async function getSequences(): Promise<{ sequences: DocumentSequence[] }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/sequences`, { headers });
+  if (!res.ok) throw new Error("Gagal memuat nomor urutan");
+  return res.json();
+}
+
+export async function setSequence(docType: string, currentNumber: number): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/sequences/${docType}`, {
+    method: "PATCH",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ current_number: currentNumber }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Gagal mengatur nomor urutan");
+  }
 }

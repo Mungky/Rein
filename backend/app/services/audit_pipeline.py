@@ -19,7 +19,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-KNOWN_DOC_TYPES = {"DRW", "INV", "PO", "SPK", "RFP", "RPT", "SPEC", "OTHER"}
+KNOWN_DOC_TYPES = {"Q", "DRW", "INV", "PO", "SPK", "RFP", "RPT", "SPEC", "OTHER"}
 # Minimum valid filename: TYPE-anything.ext
 _TYPE_PREFIX_RE = re.compile(r"^([A-Z]+)-", re.IGNORECASE)
 

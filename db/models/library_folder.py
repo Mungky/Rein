@@ -18,25 +18,33 @@ class FolderType(str, enum.Enum):
 
 # Maps department slug → which roles own that shelf (can upload)
 DEPT_ROLE_MAP: dict[str, set[str]] = {
+    "purchasing_procurement": {"purchasing", "procurement"},
+    "engineering": {"engineer_mechanical", "engineer_process", "engineer_electrical", "engineer_civil"},
+    "management": {"manager"},
+    "hse": {"safety_man"},
+    "field_operational": {"operational_manager"},
+    "warehouse": {"warehouse_manager"},
     "finance": {"finance"},
+    "human_resources": {"human_resources"},
     "accounting": {"accounting"},
-    "engineering": {"engineer_mechanical", "engineer_process", "engineer_electrical"},
-    "hr": {"human_resources"},
-    "purchasing": {"purchasing"},
-    "management": {"manager", "operational_manager"},
+    "directorate": {"director"},
 }
 
 DEPT_LABELS: dict[str, str] = {
-    "finance": "Keuangan",
-    "accounting": "Akuntansi",
-    "engineering": "Teknik",
-    "hr": "SDM",
-    "purchasing": "Pengadaan",
-    "management": "Manajemen",
+    "purchasing_procurement": "Purchasing & Procurement",
+    "engineering": "Engineering",
+    "management": "Management",
+    "hse": "HSE",
+    "field_operational": "Field Operational",
+    "warehouse": "Warehouse",
+    "finance": "Finance",
+    "human_resources": "Human Resources",
+    "accounting": "Accounting",
+    "directorate": "Directorate",
 }
 
 # Roles that auto-serve as Pustakawan (can approve view requests)
-LIBRARIAN_ROLES: set[str] = {"director", "manager", "operational_manager"}
+LIBRARIAN_ROLES: set[str] = {"director", "manager"}
 
 
 class LibraryFolder(UUIDMixin, TimestampMixin, Base):
