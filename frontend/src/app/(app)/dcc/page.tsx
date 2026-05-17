@@ -32,10 +32,12 @@ interface UploadToast {
 export default function LibraryPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
+  const canCreateFolder = ["admin", "director", "manager", "operational_manager"].includes(profile?.role ?? "");
 
   const [tree, setTree] = useState<FolderNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [treeKey, setTreeKey] = useState(0);
 
   const [selectedFolder, setSelectedFolder] = useState<FolderNode | null>(null);
   const [files, setFiles] = useState<LibraryFileMeta[]>([]);
@@ -47,20 +49,20 @@ export default function LibraryPage() {
 
   const isSpecialFolder = selectedFolder?.id === TEMP_FOLDER_ID || selectedFolder?.id === INDEX_FOLDER_ID;
 
-  // Load folder tree on mount
+  const refreshTree = useCallback(() => setTreeKey((k) => k + 1), []);
+
+  // Load folder tree on mount and on refresh
   useEffect(() => {
-    (async () => {
-      try {
-        const { tree } = await getFolderTree();
+    setTreeLoading(true);
+    getFolderTree()
+      .then(({ tree }) => {
         setTree(tree);
-        if (tree.length > 0) setSelectedFolder(tree[0]);
-      } catch {
-        // noop
-      } finally {
-        setTreeLoading(false);
-      }
-    })();
-  }, []);
+        if (tree.length > 0 && !selectedFolder) setSelectedFolder(tree[0]);
+      })
+      .catch(() => {})
+      .finally(() => setTreeLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [treeKey]);
 
   // Load files when a real folder is selected
   useEffect(() => {
@@ -151,6 +153,8 @@ export default function LibraryPage() {
                   selectedId={selectedFolder?.id ?? null}
                   onSelect={setSelectedFolder}
                   isAdmin={isAdmin}
+                  canCreateFolder={canCreateFolder}
+                  onFolderCreated={refreshTree}
                 />
               )}
             </div>

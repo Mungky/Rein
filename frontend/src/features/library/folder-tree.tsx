@@ -1,7 +1,8 @@
 "use client";
 
-import { BookOpen, ChevronDown, ChevronRight, Clock, Folder, FolderOpen } from "lucide-react";
-import { useState } from "react";
+import { BookOpen, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, Loader2, Plus, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { createFolder } from "@/lib/api/library";
 import type { FolderNode } from "./types";
 
 export const TEMP_FOLDER_ID = "__temp__";
@@ -38,6 +39,8 @@ interface FolderTreeProps {
   selectedId: string | null;
   onSelect: (folder: FolderNode) => void;
   isAdmin?: boolean;
+  canCreateFolder?: boolean;
+  onFolderCreated?: () => void;
 }
 
 const DEPT_COLORS: Record<string, string> = {
@@ -48,7 +51,7 @@ const DEPT_COLORS: Record<string, string> = {
   management: "text-primary",
 };
 
-export function FolderTree({ tree, selectedId, onSelect, isAdmin }: FolderTreeProps) {
+export function FolderTree({ tree, selectedId, onSelect, isAdmin, canCreateFolder, onFolderCreated }: FolderTreeProps) {
   const isTemp = selectedId === TEMP_FOLDER_ID;
   const isIndex = selectedId === INDEX_FOLDER_ID;
 
@@ -61,6 +64,8 @@ export function FolderTree({ tree, selectedId, onSelect, isAdmin }: FolderTreePr
           selectedId={selectedId}
           onSelect={onSelect}
           depth={0}
+          canCreateFolder={canCreateFolder}
+          onFolderCreated={onFolderCreated}
         />
       ))}
 
@@ -97,53 +102,103 @@ function FolderItem({
   selectedId,
   onSelect,
   depth,
+  canCreateFolder,
+  onFolderCreated,
 }: {
   node: FolderNode;
   selectedId: string | null;
   onSelect: (folder: FolderNode) => void;
   depth: number;
+  canCreateFolder?: boolean;
+  onFolderCreated?: () => void;
 }) {
   const [open, setOpen] = useState(depth === 0);
-  const hasChildren = node.children.length > 0;
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const isSelected = selectedId === node.id;
   const deptColor = DEPT_COLORS[node.department] ?? "text-text-muted";
   const isDept = node.folder_type === "department";
 
+  const startCreating = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setOpen(true);
+    setCreating(true);
+    setNewName("");
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  const cancelCreating = () => {
+    setCreating(false);
+    setNewName("");
+  };
+
+  const handleCreate = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    setSaving(true);
+    try {
+      await createFolder({ name, department: node.department, folder_type: "custom", parent_id: node.id });
+      setCreating(false);
+      setNewName("");
+      onFolderCreated?.();
+    } catch {
+      // keep input open so user can retry
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div>
-      <button
-        className={`w-full flex items-center gap-1.5 px-2 py-[5px] rounded text-left transition-colors duration-100
-          ${isSelected ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text"}
-          ${isDept ? "font-semibold" : "font-normal"}`}
-        style={{ paddingLeft: `${8 + depth * 16}px` }}
-        onClick={() => {
-          onSelect(node);
-          if (hasChildren) setOpen((o) => !o);
-        }}
-      >
-        {hasChildren ? (
-          open ? (
-            <ChevronDown className={`w-3 h-3 shrink-0 ${isSelected ? "text-primary" : "text-text-light"}`} />
+      <div className="group relative">
+        <button
+          className={`w-full flex items-center gap-1.5 px-2 py-[5px] rounded text-left transition-colors duration-100
+            ${isSelected ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text"}
+            ${isDept ? "font-semibold" : "font-normal"}`}
+          style={{ paddingLeft: `${8 + depth * 16}px` }}
+          onClick={() => {
+            onSelect(node);
+            if (node.children.length > 0) setOpen((o) => !o);
+          }}
+        >
+          {node.children.length > 0 ? (
+            open ? (
+              <ChevronDown className={`w-3 h-3 shrink-0 ${isSelected ? "text-primary" : "text-text-light"}`} />
+            ) : (
+              <ChevronRight className={`w-3 h-3 shrink-0 ${isSelected ? "text-primary" : "text-text-light"}`} />
+            )
           ) : (
-            <ChevronRight className={`w-3 h-3 shrink-0 ${isSelected ? "text-primary" : "text-text-light"}`} />
-          )
-        ) : (
-          <span className="w-3 shrink-0" />
-        )}
-        {isSelected || open ? (
-          <FolderOpen className={`w-3.5 h-3.5 shrink-0 ${isDept ? deptColor : "text-text-muted"}`} />
-        ) : (
-          <Folder className={`w-3.5 h-3.5 shrink-0 ${isDept ? deptColor : "text-text-muted"}`} />
-        )}
-        <span className="flex-1 text-[12.5px] truncate min-w-0">{node.name}</span>
-        {node.file_count > 0 && (
-          <span className="text-[10px] text-text-light shrink-0 tabular-nums">
-            {node.file_count}
-          </span>
-        )}
-      </button>
+            <span className="w-3 shrink-0" />
+          )}
+          {isSelected || open ? (
+            <FolderOpen className={`w-3.5 h-3.5 shrink-0 ${isDept ? deptColor : "text-text-muted"}`} />
+          ) : (
+            <Folder className={`w-3.5 h-3.5 shrink-0 ${isDept ? deptColor : "text-text-muted"}`} />
+          )}
+          <span className="flex-1 text-[12.5px] truncate min-w-0">{node.name}</span>
+          {node.file_count > 0 && (
+            <span className="text-[10px] text-text-light shrink-0 tabular-nums">
+              {node.file_count}
+            </span>
+          )}
+        </button>
 
-      {open && hasChildren && (
+        {canCreateFolder && (
+          <button
+            onClick={startCreating}
+            title="Tambah sub-folder"
+            className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity
+              w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
+          >
+            <Plus className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+
+      {open && (
         <div>
           {node.children.map((child) => (
             <FolderItem
@@ -152,8 +207,39 @@ function FolderItem({
               selectedId={selectedId}
               onSelect={onSelect}
               depth={depth + 1}
+              canCreateFolder={canCreateFolder}
+              onFolderCreated={onFolderCreated}
             />
           ))}
+
+          {creating && (
+            <div
+              className="flex items-center gap-1 px-2 py-[3px]"
+              style={{ paddingLeft: `${8 + (depth + 1) * 16}px` }}
+            >
+              <span className="w-3 shrink-0" />
+              <Folder className="w-3.5 h-3.5 shrink-0 text-text-light" />
+              <input
+                ref={inputRef}
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCreate();
+                  if (e.key === "Escape") cancelCreating();
+                }}
+                placeholder="Nama folder…"
+                className="flex-1 text-[12px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
+                disabled={saving}
+              />
+              {saving ? (
+                <Loader2 className="w-3 h-3 shrink-0 text-primary animate-spin" />
+              ) : (
+                <button onClick={cancelCreating} className="shrink-0 text-text-light hover:text-text">
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
