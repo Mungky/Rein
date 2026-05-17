@@ -96,6 +96,8 @@ export interface ProposeResult {
 export interface UploadFormValues {
   folder_id: string;
   doc_type: string;
+  /** Existing archive number — if set, used as-is instead of auto-incrementing */
+  doc_number: string;
   title: string;
   note: string;
 }

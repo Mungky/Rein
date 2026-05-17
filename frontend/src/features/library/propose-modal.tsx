@@ -17,6 +17,18 @@ const DOC_TYPES = [
   { value: "OTHER", label: "OTHER — Lainnya" },
 ];
 
+const KNOWN_TYPES = new Set(["Q", "DRW", "INV", "PO", "SPK", "RFP", "RPT", "SPEC", "OTHER"]);
+
+/** Parse existing archive number from a filename like "Q-2514-Nama File.pdf" */
+function parseExistingNumber(filename: string): { docType: string; docNumber: string; titleRest: string } | null {
+  const base = stripExt(filename);
+  const match = base.match(/^([A-Za-z]+)-(\S+)-(.+)$/);
+  if (!match) return null;
+  const type = match[1].toUpperCase();
+  if (!KNOWN_TYPES.has(type)) return null;
+  return { docType: type, docNumber: match[2], titleRest: match[3].trim() };
+}
+
 type Phase = "detecting" | "editing" | "uploading" | "done" | "error";
 
 interface ProposeModalProps {
@@ -24,10 +36,8 @@ interface ProposeModalProps {
   folder: FolderNode;
   onClose: () => void;
   onSuccess: (fileId: string, fileName: string) => void;
-  /** Batch context: current index and total count */
   queueIndex?: number;
   queueTotal?: number;
-  /** Skip this file and move to the next in queue */
   onSkip?: () => void;
 }
 
@@ -39,12 +49,17 @@ function barColor(c: number) {
 
 export function ProposeModal({ file, folder, onClose, onSuccess, queueIndex, queueTotal, onSkip }: ProposeModalProps) {
   const isBatch = queueTotal !== undefined && queueTotal > 1;
+
+  // Detect existing TYPE-NUMBER-title pattern from filename
+  const parsed = parseExistingNumber(file.name);
+
   const [phase, setPhase] = useState<Phase>("detecting");
   const [proposed, setProposed] = useState<ProposeResult | null>(null);
   const [form, setForm] = useState<UploadFormValues>({
     folder_id: folder.id,
-    doc_type: "",
-    title: stripExt(file.name),
+    doc_type: parsed?.docType ?? "",
+    doc_number: parsed?.docNumber ?? "",
+    title: parsed?.titleRest ?? stripExt(file.name),
     note: "",
   });
   const [progress, setProgress] = useState(0);
@@ -58,7 +73,8 @@ export function ProposeModal({ file, folder, onClose, onSuccess, queueIndex, que
         setProposed(prop);
         setForm((prev) => ({
           ...prev,
-          doc_type: prop.detected.doc_type.value ?? "",
+          // Only override doc_type from AI if we didn't already detect it from filename
+          doc_type: prev.doc_type || prop.detected.doc_type.value || "",
         }));
         setPhase("editing");
       })
@@ -92,7 +108,7 @@ export function ProposeModal({ file, folder, onClose, onSuccess, queueIndex, que
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="bg-bg border border-border rounded-xl shadow-2xl w-full max-w-[420px] flex flex-col overflow-hidden">
+      <div className="bg-bg border border-border rounded-xl shadow-2xl w-full max-w-[440px] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border bg-bg-ctrl shrink-0">
           <div className="w-8 h-8 rounded-md bg-red-bg text-red flex items-center justify-center shrink-0">
@@ -123,19 +139,44 @@ export function ProposeModal({ file, folder, onClose, onSuccess, queueIndex, que
             </div>
           )}
 
-          {(phase === "editing" || phase === "uploading" || phase === "done") && proposed && (
+          {(phase === "editing" || phase === "uploading" || phase === "done") && (
             <div className="flex flex-col gap-3">
               <p className="text-[11px] font-bold uppercase tracking-[0.07em] text-text-light">
                 Metadata — Edit Sebelum Konfirmasi
               </p>
 
               {/* Doc type */}
-              <FieldRow label="Tipe Dokumen" confidence={proposed.detected.doc_type.confidence}>
-                <select value={form.doc_type} onChange={set("doc_type")} className="field-select">
-                  <option value="">— Pilih tipe —</option>
-                  {DOC_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
-              </FieldRow>
+              {proposed ? (
+                <FieldRow label="Tipe Dokumen" confidence={proposed.detected.doc_type.confidence}>
+                  <select value={form.doc_type} onChange={set("doc_type")} className="field-select">
+                    <option value="">— Pilih tipe —</option>
+                    {DOC_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                </FieldRow>
+              ) : (
+                <div>
+                  <span className="text-[11px] text-text-muted block mb-0.5">Tipe Dokumen</span>
+                  <select value={form.doc_type} onChange={set("doc_type")} className="field-select">
+                    <option value="">— Pilih tipe —</option>
+                    {DOC_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {/* Existing archive number */}
+              <div>
+                <span className="text-[11px] text-text-muted block mb-0.5">
+                  Nomor Arsip
+                  <span className="ml-1 text-text-light">(opsional — kosongkan untuk auto)</span>
+                </span>
+                <input
+                  type="text"
+                  value={form.doc_number}
+                  onChange={set("doc_number")}
+                  placeholder="cth: 2514"
+                  className="field-input font-mono"
+                />
+              </div>
 
               {/* Title */}
               <div>
@@ -163,9 +204,11 @@ export function ProposeModal({ file, folder, onClose, onSuccess, queueIndex, que
                 <div className="text-[11.5px] font-mono break-all leading-relaxed text-text">
                   {previewName}
                 </div>
-                <div className="text-[10px] text-text-light mt-1">
-                  Nomor urutan ditentukan otomatis saat upload
-                </div>
+                {!form.doc_number && (
+                  <div className="text-[10px] text-text-light mt-1">
+                    Nomor urutan ditentukan otomatis saat upload
+                  </div>
+                )}
               </div>
 
               {/* Upload progress */}
@@ -208,9 +251,7 @@ export function ProposeModal({ file, folder, onClose, onSuccess, queueIndex, que
           <div className="flex gap-2 px-4 py-3 border-t border-border shrink-0">
             <button onClick={onClose} className="btn btn-default">Batal</button>
             {isBatch && onSkip && phase === "editing" && (
-              <button onClick={onSkip} className="btn btn-default">
-                Lewati
-              </button>
+              <button onClick={onSkip} className="btn btn-default">Lewati</button>
             )}
             {phase === "editing" && (
               <button onClick={handleConfirm} className="btn btn-primary flex-1">
@@ -270,7 +311,8 @@ function buildFilename(form: UploadFormValues, originalName: string): string {
   const title = form.title ? clean(form.title) : stripExt(originalName);
   const note = form.note ? `-${clean(form.note)}` : "";
   if (form.doc_type) {
-    return `${form.doc_type.toUpperCase()}-[auto]-${title}${note}${ext}`;
+    const num = form.doc_number ? clean(form.doc_number) : "[auto]";
+    return `${form.doc_type.toUpperCase()}-${num}-${title}${note}${ext}`;
   }
   return `${title}${note}${ext}`;
 }

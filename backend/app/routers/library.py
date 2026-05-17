@@ -451,6 +451,7 @@ async def upload_file(
     file: UploadFile = File(...),
     folder_id: str = Form(...),
     doc_type: str | None = Form(None),
+    doc_number: str | None = Form(None),
     title: str | None = Form(None),
     note: str | None = Form(None),
 ):
@@ -493,10 +494,14 @@ async def upload_file(
     if not content:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="File kosong")
 
-    # ── Auto-assign sequence number ────────────────────────────────────────────
+    # ── Assign archive number (user-supplied or auto-increment) ───────────────
     content_hash = hashlib.sha256(content).hexdigest()
     seq_number = 0
-    if doc_type:
+    archive_number = ""
+    if doc_number and doc_number.strip():
+        # User supplied an existing archive number — use as-is, do not touch sequence
+        archive_number = doc_number.strip()
+    elif doc_type:
         seq_result = await db.execute(
             sa_text(
                 "UPDATE document_sequences SET current_number = current_number + 1, "
@@ -519,10 +524,11 @@ async def upload_file(
                 {"dt": doc_type},
             )
             seq_number = 1
+        archive_number = str(seq_number)
 
     file_name = _build_filename(
         doc_type=doc_type,
-        seq_number=seq_number,
+        archive_number=archive_number,
         title=title or _strip_ext(original_name),
         note=note,
         ext=ext,
@@ -543,6 +549,7 @@ async def upload_file(
         uploader_id=profile.id,
         proposal_metadata={
             "doc_type": doc_type,
+            "archive_number": archive_number,
             "seq_number": seq_number,
             "title": title,
             "note": note,
@@ -1301,7 +1308,7 @@ async def set_folder_permissions(
 
 def _build_filename(
     doc_type: str | None,
-    seq_number: int,
+    archive_number: str,
     title: str,
     note: str | None,
     ext: str,
@@ -1312,7 +1319,7 @@ def _build_filename(
     middle = clean(title) if title else "Untitled"
     suffix = f"-{clean(note)}" if note else ""
     if doc_type:
-        return f"{doc_type.upper()}-{seq_number}-{middle}{suffix}{ext}"
+        return f"{doc_type.upper()}-{archive_number}-{middle}{suffix}{ext}"
     return f"{middle}{suffix}{ext}"
 
 

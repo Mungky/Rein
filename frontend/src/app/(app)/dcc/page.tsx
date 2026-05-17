@@ -49,6 +49,8 @@ export default function LibraryPage() {
 
   const isSpecialFolder = selectedFolder?.id === TEMP_FOLDER_ID || selectedFolder?.id === INDEX_FOLDER_ID;
 
+  const subFolders = selectedFolder ? (findNode(tree, selectedFolder.id)?.children ?? []) : [];
+
   const refreshTree = useCallback(() => setTreeKey((k) => k + 1), []);
 
   // Load folder tree on mount and on refresh
@@ -226,11 +228,33 @@ export default function LibraryPage() {
                 <Loader2 className="w-5 h-5 animate-spin text-text-light" />
               </div>
             ) : (
-              <FileList
-                files={files}
-                isAdmin={isAdmin}
-                onDeleted={handleFileDeleted}
-              />
+              <>
+                {subFolders.length > 0 && (
+                  <div className="px-4 pt-3 pb-1">
+                    <p className="text-[10.5px] font-bold uppercase tracking-[0.07em] text-text-light mb-2">Sub-folder</p>
+                    <div className="flex flex-wrap gap-2">
+                      {subFolders.map((sf) => (
+                        <button
+                          key={sf.id}
+                          onClick={() => setSelectedFolder(sf)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-bg-ctrl hover:bg-bg-hover text-[12px] font-medium text-text transition-colors"
+                        >
+                          <FolderOpen className="w-3.5 h-3.5 text-primary shrink-0" />
+                          <span>{sf.name}</span>
+                          {sf.file_count > 0 && (
+                            <span className="text-[10.5px] text-text-muted tabular-nums ml-1">({sf.file_count})</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <FileList
+                  files={files}
+                  isAdmin={isAdmin}
+                  onDeleted={handleFileDeleted}
+                />
+              </>
             )}
           </div>
 
@@ -292,6 +316,15 @@ export default function LibraryPage() {
       </div>
     </PageGuard>
   );
+}
+
+function findNode(nodes: FolderNode[], id: string): FolderNode | null {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    const found = findNode(n.children, id);
+    if (found) return found;
+  }
+  return null;
 }
 
 function EmptyState() {
