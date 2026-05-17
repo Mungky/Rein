@@ -36,13 +36,13 @@ DEPT_MAP: dict[str, tuple[str | None, str]] = {
     "purchasing_procurement": ("1FtfXmIzyoXBttONMhaPvmgehoSvNzX-k", "Purchasing & Procurement"),
     "engineering":            ("1kcvok7dCcDlruEw5p015ZYxmLYvf52Hz", "Engineering"),
     "management":             ("1u_00e7qGZycy7Dhpvb9R6hgJQiqIFl_o", "Management"),
-    "hse":                    (None,                                  "HSE"),            # ← fill in
-    "field_operational":      (None,                                  "Field Operational"),  # ← fill in
-    "warehouse":              (None,                                  "Warehouse"),       # ← fill in
+    "hse":                    ("1ZWA6tuw-dXMwiKwtokGNEx1Zex__mcXp",  "HSE"),
+    "field_operational":      ("1u_00e7qGZycy7Dhpvb9R6hgJQiqIFl_o",  "Field Operational"),
+    "warehouse":              ("1t8InwRbHrPm9-oCRv0SDgxasuxeyEZea",   "Warehouse"),
     "finance":                ("1JVO2En77QZ3BgTdqXa42HYsNy_wyjKtY", "Finance"),
     "human_resources":        ("1u_00e7qGZycy7Dhpvb9R6hgJQiqIFl_o", "Human Resources"),
     "accounting":             ("1W9N_sIt7zZW3CgjgM6Bbnggh23EJA8Z1", "Accounting"),
-    "directorate":            (None,                                  "Directorate"),     # ← fill in
+    "directorate":            ("14d6eaZIi_shXlUdigaHRq4jTetMaSiCI",  "Directorate"),
 }
 
 # Old dept slugs that should be deactivated after migration
