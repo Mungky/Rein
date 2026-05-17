@@ -44,7 +44,7 @@ export default function LibraryPage() {
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesTotal, setFilesTotal] = useState(0);
 
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [uploadQueue, setUploadQueue] = useState<File[]>([]);
   const [toasts, setToasts] = useState<UploadToast[]>([]);
 
   const isSpecialFolder = selectedFolder?.id === TEMP_FOLDER_ID || selectedFolder?.id === INDEX_FOLDER_ID;
@@ -94,12 +94,16 @@ export default function LibraryPage() {
       .finally(() => setFilesLoading(false));
   }, [selectedFolder, isSpecialFolder]);
 
+  const advanceQueue = useCallback(() => {
+    setUploadQueue((q) => q.slice(1));
+  }, []);
+
   const handleUploadSuccess = useCallback((fileId: string, fileName: string) => {
-    setPendingFile(null);
     const toast: UploadToast = { id: fileId, fileName, status: "done" };
     setToasts((t) => [...t, toast]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), 8000);
-  }, []);
+    advanceQueue();
+  }, [advanceQueue]);
 
   const handleFileDeleted = useCallback((id: string) => {
     setFiles((f) => f.filter((x) => x.id !== id));
@@ -127,7 +131,7 @@ export default function LibraryPage() {
             {/* Upload zone — hidden for special panels */}
             <div className="px-3 py-2.5 border-b border-border shrink-0">
               {selectedFolder && !isSpecialFolder ? (
-                <UploadZone compact onFile={(f) => setPendingFile(f)} />
+                <UploadZone compact onFiles={(files) => setUploadQueue((q) => [...q, ...files])} />
               ) : (
                 <div className="text-[11px] text-text-muted text-center py-1">
                   {selectedFolder?.id === TEMP_FOLDER_ID ? "Panel admin" :
@@ -233,18 +237,21 @@ export default function LibraryPage() {
           {/* Drop zone at bottom for empty real folders */}
           {selectedFolder && !isSpecialFolder && !filesLoading && files.length === 0 && (
             <div className="px-6 pb-6">
-              <UploadZone onFile={setPendingFile} />
+              <UploadZone onFiles={(files) => setUploadQueue((q) => [...q, ...files])} />
             </div>
           )}
         </div>
 
         {/* ── Propose modal — only for real folders ── */}
-        {pendingFile && selectedFolder && !isSpecialFolder && (
+        {uploadQueue.length > 0 && selectedFolder && !isSpecialFolder && (
           <ProposeModal
-            file={pendingFile}
+            file={uploadQueue[0]}
             folder={selectedFolder}
-            onClose={() => setPendingFile(null)}
+            onClose={() => setUploadQueue([])}
             onSuccess={handleUploadSuccess}
+            onSkip={advanceQueue}
+            queueIndex={0}
+            queueTotal={uploadQueue.length}
           />
         )}
 

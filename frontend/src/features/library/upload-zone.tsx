@@ -7,7 +7,7 @@ const ALLOWED_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf", ".zip", "
 const MAX_SIZE = 50 * 1024 * 1024;
 
 interface UploadZoneProps {
-  onFile: (file: File) => void;
+  onFiles: (files: File[]) => void;
   disabled?: boolean;
   compact?: boolean;
 }
@@ -20,28 +20,32 @@ function validate(file: File): string | null {
   return null;
 }
 
-export function UploadZone({ onFile, disabled, compact }: UploadZoneProps) {
+export function UploadZone({ onFiles, disabled, compact }: UploadZoneProps) {
   const [dragOver, setDragOver] = useState(false);
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const handle = useCallback((file: File) => {
-    const err = validate(file);
-    if (err) { setValidationError(err); return; }
-    setValidationError(null);
-    onFile(file);
-  }, [onFile]);
+  const handle = useCallback((raw: FileList | File[]) => {
+    const all = Array.from(raw);
+    const valid: File[] = [];
+    const errors: string[] = [];
+    for (const f of all) {
+      const err = validate(f);
+      if (err) errors.push(`${f.name}: ${err}`);
+      else valid.push(f);
+    }
+    setValidationErrors(errors);
+    if (valid.length > 0) onFiles(valid);
+  }, [onFiles]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handle(file);
+    if (e.dataTransfer.files.length > 0) handle(e.dataTransfer.files);
   }, [handle]);
 
   const onInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handle(file);
+    if (e.target.files && e.target.files.length > 0) handle(e.target.files);
     e.target.value = "";
   }, [handle]);
 
@@ -59,6 +63,7 @@ export function UploadZone({ onFile, disabled, compact }: UploadZoneProps) {
         <input
           ref={inputRef}
           type="file"
+          multiple
           className="hidden"
           accept=".docx,.xlsx,.pptx,.pdf,.zip,.rar,.dwg,.step,.stp"
           onChange={onInput}
@@ -86,16 +91,21 @@ export function UploadZone({ onFile, disabled, compact }: UploadZoneProps) {
             {dragOver ? "Lepas file di sini" : "Seret & lepas file, atau klik untuk pilih"}
           </p>
           <p className="text-[11px] text-text-muted mt-0.5">
-            PDF, Word, Excel, PowerPoint, ZIP, RAR, DWG, STEP — maks 50 MB
+            PDF, Word, Excel, PowerPoint, ZIP, RAR, DWG, STEP — maks 50 MB · bisa pilih banyak sekaligus
           </p>
         </div>
       </div>
-      {validationError && (
-        <p className="text-[11.5px] text-red mt-2 px-1">{validationError}</p>
+      {validationErrors.length > 0 && (
+        <div className="mt-2 px-1 space-y-0.5">
+          {validationErrors.map((e, i) => (
+            <p key={i} className="text-[11.5px] text-red">{e}</p>
+          ))}
+        </div>
       )}
       <input
         ref={inputRef}
         type="file"
+        multiple
         className="hidden"
         accept=".docx,.xlsx,.pptx,.pdf,.zip,.rar,.dwg,.step,.stp"
         onChange={onInput}

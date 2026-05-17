@@ -24,6 +24,11 @@ interface ProposeModalProps {
   folder: FolderNode;
   onClose: () => void;
   onSuccess: (fileId: string, fileName: string) => void;
+  /** Batch context: current index and total count */
+  queueIndex?: number;
+  queueTotal?: number;
+  /** Skip this file and move to the next in queue */
+  onSkip?: () => void;
 }
 
 function barColor(c: number) {
@@ -32,7 +37,8 @@ function barColor(c: number) {
   return "var(--red)";
 }
 
-export function ProposeModal({ file, folder, onClose, onSuccess }: ProposeModalProps) {
+export function ProposeModal({ file, folder, onClose, onSuccess, queueIndex, queueTotal, onSkip }: ProposeModalProps) {
+  const isBatch = queueTotal !== undefined && queueTotal > 1;
   const [phase, setPhase] = useState<Phase>("detecting");
   const [proposed, setProposed] = useState<ProposeResult | null>(null);
   const [form, setForm] = useState<UploadFormValues>({
@@ -94,7 +100,14 @@ export function ProposeModal({ file, folder, onClose, onSuccess }: ProposeModalP
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-[13px] font-semibold font-mono truncate">{file.name}</div>
-            <div className="text-[10.5px] text-text-muted">{formatBytes(file.size)} · {folder.path}</div>
+            <div className="text-[10.5px] text-text-muted">
+              {formatBytes(file.size)} · {folder.path}
+              {isBatch && (
+                <span className="ml-2 font-semibold text-primary">
+                  {(queueIndex ?? 0) + 1}/{queueTotal}
+                </span>
+              )}
+            </div>
           </div>
           <button onClick={onClose} className="btn btn-ghost btn-icon btn-sm text-text-muted">
             <X className="w-3.5 h-3.5" />
@@ -194,16 +207,27 @@ export function ProposeModal({ file, folder, onClose, onSuccess }: ProposeModalP
         {(phase === "editing" || phase === "error") && (
           <div className="flex gap-2 px-4 py-3 border-t border-border shrink-0">
             <button onClick={onClose} className="btn btn-default">Batal</button>
+            {isBatch && onSkip && phase === "editing" && (
+              <button onClick={onSkip} className="btn btn-default">
+                Lewati
+              </button>
+            )}
             {phase === "editing" && (
               <button onClick={handleConfirm} className="btn btn-primary flex-1">
-                Konfirmasi & Unggah →
+                Konfirmasi & Unggah {isBatch ? "→" : ""}
               </button>
             )}
           </div>
         )}
         {phase === "done" && (
           <div className="flex gap-2 px-4 py-3 border-t border-border shrink-0">
-            <button onClick={onClose} className="btn btn-default flex-1">Tutup</button>
+            {isBatch && onSkip ? (
+              <button onClick={onSkip} className="btn btn-primary flex-1">
+                File Berikutnya →
+              </button>
+            ) : (
+              <button onClick={onClose} className="btn btn-default flex-1">Tutup</button>
+            )}
           </div>
         )}
       </div>

@@ -235,14 +235,17 @@ async def _check_duplicate(lib_file, db: AsyncSession) -> dict:
 # ---------------------------------------------------------------------------
 
 async def _check_content_ai(lib_file) -> dict:
+    """
+    Non-blocking informational layer. Calls Ollama for a metadata sanity check.
+    Result is recorded but NEVER fails the upload — passes regardless of AI verdict.
+    """
     import httpx
 
     prompt = (
         f"Verifikasi konsistensi metadata dokumen arsip.\n"
         f"Nama file: {lib_file.file_name or lib_file.original_name}\n"
-        f"Tipe dokumen: {lib_file.doc_type or 'tidak diketahui'}\n"
-        f"Klien: {lib_file.client_name or 'tidak diketahui'}\n"
-        f"Proyek: {lib_file.project_name or 'tidak diketahui'}\n\n"
+        f"Tipe dokumen: {lib_file.doc_type or 'tidak diketahui'}\n\n"
+        f"Apakah nama file terlihat konsisten dengan tipe dokumennya? "
         f"Jawab HANYA dengan JSON: "
         f'{{ "valid": true/false, "reason": "alasan singkat dalam Bahasa Indonesia" }}'
     )
@@ -271,15 +274,18 @@ async def _check_content_ai(lib_file) -> dict:
         start, end = text.find("{"), text.rfind("}") + 1
         if start >= 0 and end > start:
             ai = json.loads(text[start:end])
+            ai_valid = bool(ai.get("valid", True))
+            ai_reason = ai.get("reason", "")
+            # Always pass — AI verdict is informational only
             return {
-                "passed": bool(ai.get("valid", True)),
-                "note": ai.get("reason", ""),
+                "passed": True,
+                "ai_valid": ai_valid,
+                "note": ai_reason if not ai_valid else f"OK — {ai_reason}",
             }
 
         return {"passed": True, "note": "Respons AI tidak dapat diparse — dilewati"}
 
     except Exception as exc:
-        # AI audit never blocks — always fall through
         logger.warning("AI content check failed for %s: %s — skipping", lib_file.id, exc)
         return {"passed": True, "note": f"AI audit dilewati: {str(exc)[:80]}"}
 
