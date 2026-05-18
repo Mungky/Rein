@@ -49,9 +49,6 @@ from db.session import get_db
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Temp folder name in Drive — files land here during audit
-DRIVE_TEMP_FOLDER_NAME = "_TEMP_AUDIT"
-
 # Approved link validity
 LINK_TTL_MINUTES = 30
 
@@ -62,15 +59,6 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 # ---------------------------------------------------------------------------
 # Dependency helpers
 # ---------------------------------------------------------------------------
-
-async def _get_temp_folder_id() -> str:
-    """Return or create the Drive TEMP folder under root."""
-    from app.services.gdrive import find_or_create_folder
-
-    return await find_or_create_folder(
-        DRIVE_TEMP_FOLDER_NAME, settings.google_drive_root_folder_id
-    )
-
 
 async def _can_upload_to(db: AsyncSession, profile: Profile, folder: LibraryFolder) -> bool:
     """Admin/director can upload anywhere. Others: check folder_permissions table."""
@@ -444,7 +432,7 @@ async def propose_file(
 # POST /api/library/upload   (multipart form — called after user confirms)
 # ---------------------------------------------------------------------------
 
-@router.post("/upload", status_code=202)
+@router.post("/upload", status_code=201)
 async def upload_file(
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -456,9 +444,12 @@ async def upload_file(
     note: str | None = Form(None),
 ):
     """
-    Receive confirmed file + metadata. Upload to Drive TEMP, then hand off to
-    the 4-layer audit pipeline. Returns 202 immediately so user can close browser.
+    Receive confirmed file + metadata. Upload directly to the folder's Drive location.
+    Returns 201 after Drive upload completes — no background task, errors surface immediately.
     """
+    import io
+    from app.services import gdrive
+
     # ── Validate folder ────────────────────────────────────────────────────────
     folder_result = await db.execute(
         select(LibraryFolder).where(
@@ -469,6 +460,12 @@ async def upload_file(
     folder = folder_result.scalar_one_or_none()
     if not folder:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tujuan tidak ditemukan")
+
+    if not folder.gdrive_folder_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Folder belum dihubungkan ke Google Drive. Minta admin untuk menautkan folder ini ke Drive.",
+        )
 
     if not await _can_upload_to(db, profile, folder):
         raise HTTPException(
@@ -499,7 +496,6 @@ async def upload_file(
     seq_number = 0
     archive_number = ""
     if doc_number and doc_number.strip():
-        # User supplied an existing archive number — use as-is, do not touch sequence
         archive_number = doc_number.strip()
     elif doc_type:
         seq_result = await db.execute(
@@ -513,7 +509,6 @@ async def upload_file(
         if row:
             seq_number = row[0]
         else:
-            # Doc type not yet seeded — insert and use 1
             await db.execute(
                 sa_text(
                     "INSERT INTO document_sequences (doc_type, current_number) "
@@ -526,6 +521,9 @@ async def upload_file(
             seq_number = 1
         archive_number = str(seq_number)
 
+    # Commit sequence increment now to release the row lock before the Drive upload
+    await db.commit()
+
     file_name = _build_filename(
         doc_type=doc_type,
         archive_number=archive_number,
@@ -534,7 +532,23 @@ async def upload_file(
         ext=ext,
     )
 
-    # ── Persist to DB (status = uploading) ────────────────────────────────────
+    # ── Upload to Drive synchronously ─────────────────────────────────────────
+    try:
+        drive_result = await gdrive.upload_file(
+            io.BytesIO(content),
+            file_name,
+            file.content_type or "application/octet-stream",
+            folder.gdrive_folder_id,
+            file_size=len(content),
+        )
+    except Exception as exc:
+        logger.error("Drive upload failed for '%s': %s", file_name, exc)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Gagal mengunggah ke Google Drive: {exc}",
+        )
+
+    # ── Persist to DB (status = passed — Drive already has it) ────────────────
     lib_file = LibraryFile(
         folder_id=uuid.UUID(folder_id),
         original_name=original_name,
@@ -545,7 +559,10 @@ async def upload_file(
         file_size=len(content),
         mime_type=file.content_type or "application/octet-stream",
         content_hash=content_hash,
-        upload_status=LibraryFileStatus.uploading,
+        gdrive_file_id=drive_result.get("id"),
+        gdrive_web_link=drive_result.get("webViewLink"),
+        gdrive_folder_id=folder.gdrive_folder_id,
+        upload_status=LibraryFileStatus.passed,
         uploader_id=profile.id,
         proposal_metadata={
             "doc_type": doc_type,
@@ -564,109 +581,33 @@ async def upload_file(
         target_id=lib_file.id,
         metadata={"filename": file_name, "size": len(content), "folder_id": folder_id},
     )
-    await db.commit()
+    # get_db() commits on successful return
 
-    # ── Drive upload in background (no audit pipeline) ────────────────────────
-    import asyncio
-    asyncio.create_task(
-        _background_upload_to_drive(lib_file.id, folder.gdrive_folder_id, content, file_name, file.content_type or "application/octet-stream", folder.path if folder else "")
-    )
+    # ── Enqueue index update (non-fatal) ──────────────────────────────────────
+    try:
+        from app.services.task_queue import task_queue, TaskType
+        task_queue.enqueue(TaskType.INDEX_TO_SHEETS, {
+            "doc_type": doc_type or "OTHER",
+            "doc_sequence": archive_number,
+            "client_name": "",
+            "client_code": "",
+            "project_name": "",
+            "file_name": file_name,
+            "note": note or "",
+            "folder_path": folder.path,
+            "gdrive_link": drive_result.get("webViewLink", ""),
+            "uploaded_by": profile.full_name,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as enqueue_exc:
+        logger.warning("INDEX_TO_SHEETS enqueue failed (non-fatal): %s", enqueue_exc)
 
     return {
         "file_id": str(lib_file.id),
         "file_name": file_name,
-        "status": "uploading",
-        "message": "File diterima dan sedang diunggah ke Drive.",
+        "status": "passed",
+        "gdrive_web_link": drive_result.get("webViewLink"),
     }
-
-
-async def _background_upload_to_drive(
-    file_id: uuid.UUID,
-    gdrive_folder_id: str | None,
-    content: bytes,
-    file_name: str,
-    mime_type: str,
-    folder_path: str,
-) -> None:
-    """Upload directly to the folder's linked Drive location. No audit pipeline."""
-    import io
-    from app.services import gdrive as _gdrive
-    from app.services.task_queue import task_queue, TaskType
-    from db.session import async_session_factory
-    from db.models.profile import Profile as _Profile
-
-    async def _mark_failed(session_factory) -> None:
-        try:
-            async with session_factory() as db:
-                result = await db.execute(select(LibraryFile).where(LibraryFile.id == file_id))
-                lib_file = result.scalar_one_or_none()
-                if lib_file:
-                    lib_file.upload_status = LibraryFileStatus.failed
-                    await db.commit()
-        except Exception as inner_exc:
-            logger.error("Could not mark file %s as failed: %s", file_id, inner_exc)
-
-    try:
-        # Use the folder's linked Drive ID, or fall back to TEMP
-        if gdrive_folder_id:
-            target_folder_id = gdrive_folder_id
-        else:
-            target_folder_id = await _get_temp_folder_id()
-            logger.warning("Folder has no gdrive_folder_id — uploading file %s to TEMP", file_id)
-
-        drive_result = await _gdrive.upload_file(
-            io.BytesIO(content),
-            file_name,
-            mime_type,
-            target_folder_id,
-            file_size=len(content),
-        )
-
-        # Commit passed status — separate from the enqueue so a queue error can't flip status back
-        index_payload: dict = {}
-        async with async_session_factory() as db:
-            result = await db.execute(select(LibraryFile).where(LibraryFile.id == file_id))
-            lib_file = result.scalar_one_or_none()
-            if not lib_file:
-                return
-
-            lib_file.gdrive_file_id = drive_result.get("id")
-            lib_file.gdrive_web_link = drive_result.get("webViewLink")
-            lib_file.gdrive_folder_id = target_folder_id
-            lib_file.upload_status = LibraryFileStatus.passed
-            await db.commit()
-
-            # Collect indexing payload while session is still open
-            profile_result = await db.execute(
-                select(_Profile).where(_Profile.id == lib_file.uploader_id)
-            )
-            uploader = profile_result.scalar_one_or_none()
-            meta = lib_file.proposal_metadata or {}
-            index_payload = {
-                "doc_type": lib_file.doc_type or "OTHER",
-                "doc_sequence": meta.get("archive_number", ""),
-                "client_name": lib_file.client_name or "",
-                "client_code": lib_file.client_code or "",
-                "project_name": lib_file.project_name or "",
-                "file_name": lib_file.file_name or lib_file.original_name,
-                "note": lib_file.note or "",
-                "folder_path": folder_path,
-                "gdrive_link": lib_file.gdrive_web_link or "",
-                "uploaded_by": uploader.full_name if uploader else str(lib_file.uploader_id),
-                "created_at": lib_file.created_at.isoformat() if lib_file.created_at else "",
-            }
-
-        # Enqueue AFTER session close so a queue error cannot affect DB state
-        try:
-            task_queue.enqueue(TaskType.INDEX_TO_SHEETS, index_payload)
-        except Exception as enqueue_exc:
-            logger.warning("INDEX_TO_SHEETS enqueue failed (non-fatal): %s", enqueue_exc)
-
-        logger.info("File %s uploaded to Drive folder %s, status=passed", file_id, target_folder_id)
-
-    except Exception as exc:
-        logger.error("Drive upload failed for file %s: %s", file_id, exc, exc_info=True)
-        await _mark_failed(async_session_factory)
 
 
 # ---------------------------------------------------------------------------

@@ -14,9 +14,8 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PageGuard } from "@/components/guards/page-guard";
 import { useAuth } from "@/hooks/use-auth";
-import { getFolderFiles, getFolderTree, getFileStatus, uploadFile } from "@/lib/api/library";
+import { getFolderFiles, getFolderTree, uploadFile } from "@/lib/api/library";
 import { FileList } from "@/features/library/file-list";
-import type { ProcessingFile } from "@/features/library/file-list";
 import { FolderTree, INDEX_FOLDER_ID, TEMP_FOLDER_ID } from "@/features/library/folder-tree";
 import { BatchUploadModal } from "@/features/library/batch-upload-modal";
 import type { ApprovedItem } from "@/features/library/batch-upload-modal";
@@ -59,7 +58,6 @@ export default function LibraryPage() {
     total: number;
   } | null>(null);
   const [toasts, setToasts] = useState<UploadToast[]>([]);
-  const [processingFiles, setProcessingFiles] = useState<ProcessingFile[]>([]);
 
   const [dragOver, setDragOver] = useState(false);
   const mainAreaRef = useRef<HTMLDivElement>(null);
@@ -124,35 +122,6 @@ export default function LibraryPage() {
     return () => clearInterval(id);
   }, [selectedFolder, isSpecialFolder, refreshFiles]);
 
-  // Poll processing files until passed/failed
-  useEffect(() => {
-    if (processingFiles.length === 0) return;
-    const id = setInterval(async () => {
-      const done: string[] = [];
-      for (const pf of processingFiles) {
-        try {
-          const s = await getFileStatus(pf.id);
-          if (s.upload_status === "passed" || s.upload_status === "failed") {
-            done.push(pf.id);
-            if (s.upload_status === "failed") {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const failedLayer = (s.audit_layers as any[])?.find((l: any) => l.status === "failed");
-              const reason: string = failedLayer?.result?.reason || failedLayer?.result?.error || "Audit gagal";
-              const errId = `audit-${pf.id}`;
-              setToasts((t) => [...t, { id: errId, fileName: pf.fileName, status: "error", message: reason }]);
-              setTimeout(() => setToasts((t) => t.filter((x) => x.id !== errId)), 15000);
-            }
-          }
-        } catch { /* ignore */ }
-      }
-      if (done.length > 0) {
-        setProcessingFiles((p) => p.filter((f) => !done.includes(f.id)));
-        refreshFiles();
-      }
-    }, 5000);
-    return () => clearInterval(id);
-  }, [processingFiles, refreshFiles]);
-
   // Drag & drop handlers for the main content area
   const handleDragOver = useCallback((e: React.DragEvent) => {
     if (!selectedFolder || isSpecialFolder) return;
@@ -202,15 +171,16 @@ export default function LibraryPage() {
         const toast: UploadToast = { id: result.file_id, fileName: result.file_name, status: "done" };
         setToasts((t) => [...t, toast]);
         setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), 8000);
-        setProcessingFiles((p) => [...p, { id: result.file_id, fileName: result.file_name }]);
+        refreshFiles();
         setActiveUpload(null);
         setApprovedQueue((q) => q.slice(1));
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         uploadDoneRef.current += 1;
         uploadingRef.current = false;
         const errId = `err-${Date.now()}`;
-        const toast: UploadToast = { id: errId, fileName: item.file.name, status: "error", message: "Upload gagal" };
+        const errMsg = err instanceof Error ? err.message : "Upload gagal";
+        const toast: UploadToast = { id: errId, fileName: item.file.name, status: "error", message: errMsg };
         setToasts((t) => [...t, toast]);
         setTimeout(() => setToasts((t) => t.filter((x) => x.id !== errId)), 8000);
         setActiveUpload(null);
@@ -367,14 +337,13 @@ export default function LibraryPage() {
                   currentUserId={profile?.id}
                   onDeleted={handleFileDeleted}
                   onRenamed={handleFileRenamed}
-                  processingFiles={processingFiles}
                 />
               </>
             )}
           </div>
 
           {/* Drop zone at bottom for empty folders */}
-          {selectedFolder && !isSpecialFolder && !filesLoading && files.length === 0 && processingFiles.length === 0 && (
+          {selectedFolder && !isSpecialFolder && !filesLoading && files.length === 0 && (
             <div className="px-6 pb-6">
               <UploadZone onFiles={(files) => setUploadQueue((q) => [...q, ...files])} />
             </div>
@@ -437,7 +406,7 @@ export default function LibraryPage() {
                   </div>
                   <div className="text-[11px] text-text-muted mt-0.5">
                     {t.status === "done"
-                      ? "File diunggah ke Drive dan tersimpan di perpustakaan"
+                      ? "Tersimpan di Google Drive dan perpustakaan"
                       : t.message ?? "Upload gagal"}
                   </div>
                 </div>

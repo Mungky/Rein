@@ -131,7 +131,7 @@ export async function uploadFile(
     }
 
     xhr.onload = () => {
-      if (xhr.status === 202) {
+      if (xhr.status >= 200 && xhr.status < 300) {
         resolve(JSON.parse(xhr.responseText));
       } else {
         try {
@@ -144,7 +144,7 @@ export async function uploadFile(
     };
     xhr.onerror = () => reject(new Error("Koneksi terputus saat upload"));
     xhr.ontimeout = () => reject(new Error("Koneksi timeout — coba lagi"));
-    xhr.timeout = 120_000;
+    xhr.timeout = 600_000;
     xhr.send(form);
   });
 }
