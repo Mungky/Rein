@@ -335,13 +335,18 @@ function FileCard({
           </div>
 
           {/* Preview nama file */}
-          <div className="bg-bg-ctrl border border-border rounded px-2.5 py-1.5">
+          <div className={`border rounded px-2.5 py-1.5 ${!item.form.doc_type ? "bg-amber-bg border-amber/40" : "bg-bg-ctrl border-border"}`}>
             <div className="text-[9.5px] font-bold uppercase tracking-widest text-text-light mb-0.5">
               Preview nama file
             </div>
             <div className="text-[11px] font-mono break-all text-text leading-relaxed">
               {preview}
             </div>
+            {!item.form.doc_type && (
+              <div className="text-[9.5px] text-amber font-semibold mt-0.5">
+                Pilih tipe dokumen — file tanpa tipe akan ditolak saat audit
+              </div>
+            )}
             {!item.form.doc_number && item.form.doc_type && (
               <div className="text-[9.5px] text-text-light mt-0.5">
                 Nomor urutan ditentukan otomatis saat upload

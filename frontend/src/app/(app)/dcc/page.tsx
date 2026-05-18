@@ -132,7 +132,17 @@ export default function LibraryPage() {
       for (const pf of processingFiles) {
         try {
           const s = await getFileStatus(pf.id);
-          if (s.upload_status === "passed" || s.upload_status === "failed") done.push(pf.id);
+          if (s.upload_status === "passed" || s.upload_status === "failed") {
+            done.push(pf.id);
+            if (s.upload_status === "failed") {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const failedLayer = (s.audit_layers as any[])?.find((l: any) => l.status === "failed");
+              const reason: string = failedLayer?.result?.reason || failedLayer?.result?.error || "Audit gagal";
+              const errId = `audit-${pf.id}`;
+              setToasts((t) => [...t, { id: errId, fileName: pf.fileName, status: "error", message: reason }]);
+              setTimeout(() => setToasts((t) => t.filter((x) => x.id !== errId)), 15000);
+            }
+          }
         } catch { /* ignore */ }
       }
       if (done.length > 0) {
