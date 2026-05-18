@@ -70,7 +70,6 @@ export function FolderTree({ tree, selectedId, onSelect, isAdmin, canCreateFolde
         />
       ))}
 
-      {/* Index Publik — visible to all roles */}
       <div className="mx-3 my-1 border-t border-border-soft" />
       <button
         onClick={() => onSelect(INDEX_FOLDER_NODE)}
@@ -82,7 +81,6 @@ export function FolderTree({ tree, selectedId, onSelect, isAdmin, canCreateFolde
         <span className="flex-1 text-[12.5px] truncate">Index Publik</span>
       </button>
 
-      {/* Riwayat & Sementara — admin only */}
       {isAdmin && (
         <button
           onClick={() => onSelect(TEMP_FOLDER_NODE)}
@@ -138,8 +136,11 @@ function FolderItem({
   const isSelected = selectedId === node.id;
   const deptColor = DEPT_COLORS[node.department] ?? "text-text-muted";
   const isDept = node.folder_type === "department";
-  // True when any inline edit mode is active — hides hover action buttons
   const isEditing = renaming || linking || deleteConfirm;
+
+  const pl = `${8 + depth * 16}px`;
+
+  // ── handlers ────────────────────────────────────────────────────────────────
 
   const startCreating = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -147,11 +148,6 @@ function FolderItem({
     setCreating(true);
     setNewName("");
     setTimeout(() => inputRef.current?.focus(), 50);
-  };
-
-  const cancelCreating = () => {
-    setCreating(false);
-    setNewName("");
   };
 
   const handleCreate = async () => {
@@ -163,11 +159,7 @@ function FolderItem({
       setCreating(false);
       setNewName("");
       onFolderCreated?.();
-    } catch {
-      // keep input open so user can retry
-    } finally {
-      setSaving(false);
-    }
+    } catch { /* keep open */ } finally { setSaving(false); }
   };
 
   const handleRename = async () => {
@@ -178,7 +170,7 @@ function FolderItem({
       await renameFolder(node.id, name);
       setRenaming(false);
       onFolderCreated?.();
-    } catch { /* keep input open */ } finally { setRenameSaving(false); }
+    } catch { /* keep open */ } finally { setRenameSaving(false); }
   };
 
   const handleLink = async () => {
@@ -202,97 +194,117 @@ function FolderItem({
       onFolderCreated?.();
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : "Gagal menghapus folder");
+    } finally {
       setDeleteLoading(false);
     }
   };
 
+  // ── shared icon row ─────────────────────────────────────────────────────────
+
+  const chevron = node.children.length > 0
+    ? (open
+        ? <ChevronDown className={`w-3 h-3 shrink-0 ${isSelected ? "text-primary" : "text-text-light"}`} />
+        : <ChevronRight className={`w-3 h-3 shrink-0 ${isSelected ? "text-primary" : "text-text-light"}`} />)
+    : <span className="w-3 shrink-0" />;
+
+  const folderIcon = isSelected || open
+    ? <FolderOpen className={`w-3.5 h-3.5 shrink-0 ${isDept ? deptColor : "text-text-muted"}`} />
+    : <Folder className={`w-3.5 h-3.5 shrink-0 ${isDept ? deptColor : "text-text-muted"}`} />;
+
+  // ── render ──────────────────────────────────────────────────────────────────
+
   return (
     <div>
       <div className="group relative">
-        <button
-          className={`w-full flex items-center gap-1.5 px-2 py-[5px] rounded text-left transition-colors duration-100
-            ${isSelected ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text"}
-            ${isDept ? "font-semibold" : "font-normal"}
-            ${deleteConfirm ? "bg-red-bg/60" : ""}`}
-          style={{ paddingLeft: `${8 + depth * 16}px` }}
-          disabled={isEditing}
-          onClick={() => {
-            if (isEditing) return;
-            onSelect(node);
-            if (node.children.length > 0) setOpen((o) => !o);
-          }}
-        >
-          {node.children.length > 0 ? (
-            open ? (
-              <ChevronDown className={`w-3 h-3 shrink-0 ${isSelected ? "text-primary" : "text-text-light"}`} />
-            ) : (
-              <ChevronRight className={`w-3 h-3 shrink-0 ${isSelected ? "text-primary" : "text-text-light"}`} />
-            )
-          ) : (
-            <span className="w-3 shrink-0" />
-          )}
-          {isSelected || open ? (
-            <FolderOpen className={`w-3.5 h-3.5 shrink-0 ${deleteConfirm ? "text-red" : isDept ? deptColor : "text-text-muted"}`} />
-          ) : (
-            <Folder className={`w-3.5 h-3.5 shrink-0 ${deleteConfirm ? "text-red" : isDept ? deptColor : "text-text-muted"}`} />
-          )}
 
-          {renaming ? (
-            <div className="flex items-center gap-0.5 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
-              <input
-                ref={renameInputRef}
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleRename();
-                  if (e.key === "Escape") setRenaming(false);
-                }}
-                className="flex-1 text-[12px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
-                disabled={renameSaving}
-              />
-              <button onClick={handleRename} disabled={renameSaving} className="shrink-0 text-green hover:text-green ml-1">
-                {renameSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-              </button>
-              <button onClick={() => setRenaming(false)} className="shrink-0 text-text-light hover:text-text">
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ) : linking ? (
-            <div className="flex items-center gap-0.5 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
-              <input
-                ref={linkInputRef}
-                value={linkValue}
-                onChange={(e) => setLinkValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleLink();
-                  if (e.key === "Escape") { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }
-                }}
-                placeholder="ID atau URL folder Drive…"
-                className="flex-1 text-[11px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
-                disabled={linkSaving}
-              />
-              <button onClick={handleLink} disabled={linkSaving} className="shrink-0 text-green hover:text-green ml-1">
-                {linkSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-              </button>
-              <button onClick={() => { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }} className="shrink-0 text-text-light hover:text-text">
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ) : deleteConfirm ? (
-            <div className="flex items-center gap-1 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
-              <span className="flex-1 text-[11px] text-red font-semibold truncate min-w-0">
-                {deleteError ?? "Hapus folder ini?"}
-              </span>
-              {!deleteError && (
-                <button onClick={handleDelete} disabled={deleteLoading} className="shrink-0 text-red hover:text-red ml-1">
-                  {deleteLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+        {/* ── EDITING MODE: plain div (no disabled-button issues with child inputs) ── */}
+        {isEditing ? (
+          <div
+            className={`w-full flex items-center gap-1.5 py-[5px] rounded transition-colors duration-100
+              ${isDept ? "font-semibold" : "font-normal"}
+              ${deleteConfirm ? "bg-red-bg" : "bg-primary-bg/30"}`}
+            style={{ paddingLeft: pl, paddingRight: "8px" }}
+          >
+            {chevron}
+            {folderIcon}
+
+            {renaming && (
+              <>
+                <input
+                  ref={renameInputRef}
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleRename();
+                    if (e.key === "Escape") setRenaming(false);
+                  }}
+                  className="flex-1 text-[12px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
+                  disabled={renameSaving}
+                  autoFocus
+                />
+                <button onClick={handleRename} disabled={renameSaving} className="shrink-0 text-green hover:text-green ml-1">
+                  {renameSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
                 </button>
-              )}
-              <button onClick={() => { setDeleteConfirm(false); setDeleteError(null); }} className="shrink-0 text-text-light hover:text-text">
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ) : (
+                <button onClick={() => setRenaming(false)} className="shrink-0 text-text-light hover:text-text">
+                  <X className="w-3 h-3" />
+                </button>
+              </>
+            )}
+
+            {linking && (
+              <>
+                <input
+                  ref={linkInputRef}
+                  value={linkValue}
+                  onChange={(e) => setLinkValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleLink();
+                    if (e.key === "Escape") { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }
+                  }}
+                  placeholder="ID atau URL folder Drive…"
+                  className="flex-1 text-[11px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
+                  disabled={linkSaving}
+                  autoFocus
+                />
+                <button onClick={handleLink} disabled={linkSaving} className="shrink-0 text-green hover:text-green ml-1">
+                  {linkSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                </button>
+                <button onClick={() => { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }} className="shrink-0 text-text-light hover:text-text">
+                  <X className="w-3 h-3" />
+                </button>
+              </>
+            )}
+
+            {deleteConfirm && (
+              <>
+                <span className="flex-1 text-[11px] text-red font-semibold truncate min-w-0">
+                  {deleteError ?? "Hapus folder ini?"}
+                </span>
+                {!deleteError && (
+                  <button onClick={handleDelete} disabled={deleteLoading} className="shrink-0 text-red hover:text-red ml-1">
+                    {deleteLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                  </button>
+                )}
+                <button onClick={() => { setDeleteConfirm(false); setDeleteError(null); }} className="shrink-0 text-text-light hover:text-text">
+                  <X className="w-3 h-3" />
+                </button>
+              </>
+            )}
+          </div>
+        ) : (
+          /* ── NORMAL MODE: clickable button ── */
+          <button
+            className={`w-full flex items-center gap-1.5 px-2 py-[5px] rounded text-left transition-colors duration-100
+              ${isSelected ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text"}
+              ${isDept ? "font-semibold" : "font-normal"}`}
+            style={{ paddingLeft: pl }}
+            onClick={() => {
+              onSelect(node);
+              if (node.children.length > 0) setOpen((o) => !o);
+            }}
+          >
+            {chevron}
+            {folderIcon}
             <span className="flex-1 text-[12.5px] truncate min-w-0 flex items-center gap-1">
               {node.name}
               {isAdmin && (
@@ -301,19 +313,15 @@ function FolderItem({
                 </span>
               )}
             </span>
-          )}
+            {node.file_count > 0 && (
+              <span className="text-[10px] text-text-light shrink-0 tabular-nums">{node.file_count}</span>
+            )}
+          </button>
+        )}
 
-          {node.file_count > 0 && !isEditing && (
-            <span className="text-[10px] text-text-light shrink-0 tabular-nums">
-              {node.file_count}
-            </span>
-          )}
-        </button>
-
-        {/* Hover action buttons — hidden during any edit mode */}
+        {/* ── Hover action buttons (only in normal mode) ── */}
         {!isEditing && (
           <>
-            {/* Trash: admin only, non-dept folders */}
             {isAdmin && !isDept && (
               <button
                 onClick={(e) => { e.stopPropagation(); setDeleteError(null); setDeleteConfirm(true); }}
@@ -323,7 +331,6 @@ function FolderItem({
                 <Trash2 className="w-3 h-3" />
               </button>
             )}
-            {/* Link to Drive: admin only */}
             {isAdmin && (
               <button
                 onClick={(e) => { e.stopPropagation(); setLinkValue(node.gdrive_folder_id ?? ""); setLinking(true); setTimeout(() => linkInputRef.current?.focus(), 30); }}
@@ -333,7 +340,6 @@ function FolderItem({
                 {node.gdrive_folder_id ? <Link2 className="w-3 h-3" /> : <Link2Off className="w-3 h-3" />}
               </button>
             )}
-            {/* Rename: admin only */}
             {isAdmin && (
               <button
                 onClick={(e) => { e.stopPropagation(); setRenameValue(node.name); setRenaming(true); setTimeout(() => renameInputRef.current?.focus(), 30); }}
@@ -343,7 +349,6 @@ function FolderItem({
                 <Pencil className="w-3 h-3" />
               </button>
             )}
-            {/* Create sub-folder */}
             {canCreateFolder && (
               <button
                 onClick={startCreating}
@@ -374,8 +379,8 @@ function FolderItem({
 
           {creating && (
             <div
-              className="flex items-center gap-1 px-2 py-[3px]"
-              style={{ paddingLeft: `${8 + (depth + 1) * 16}px` }}
+              className="flex items-center gap-1 py-[3px]"
+              style={{ paddingLeft: `${8 + (depth + 1) * 16}px`, paddingRight: "8px" }}
             >
               <span className="w-3 shrink-0" />
               <Folder className="w-3.5 h-3.5 shrink-0 text-text-light" />
@@ -385,16 +390,17 @@ function FolderItem({
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleCreate();
-                  if (e.key === "Escape") cancelCreating();
+                  if (e.key === "Escape") { setCreating(false); setNewName(""); }
                 }}
                 placeholder="Nama folder…"
                 className="flex-1 text-[12px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
                 disabled={saving}
+                autoFocus
               />
               {saving ? (
                 <Loader2 className="w-3 h-3 shrink-0 text-primary animate-spin" />
               ) : (
-                <button onClick={cancelCreating} className="shrink-0 text-text-light hover:text-text">
+                <button onClick={() => { setCreating(false); setNewName(""); }} className="shrink-0 text-text-light hover:text-text">
                   <X className="w-3 h-3" />
                 </button>
               )}
