@@ -91,8 +91,11 @@ async def run_audit(file_id: str) -> None:
 
         if all_passed:
             await _move_to_final_folder(lib_file, db)
+            await db.commit()
+            await _enqueue_sheets_index(lib_file, db)
+        else:
+            await db.commit()
 
-        await db.commit()
         logger.info(
             "audit complete for file %s: %s",
             file_id,
@@ -327,6 +330,47 @@ async def _move_to_final_folder(lib_file, db: AsyncSession) -> None:
             folder.path,
             exc,
         )
+
+
+# ---------------------------------------------------------------------------
+# Post-audit: enqueue Google Sheets indexing
+# ---------------------------------------------------------------------------
+
+async def _enqueue_sheets_index(lib_file, db: AsyncSession) -> None:
+    """Enqueue INDEX_TO_SHEETS after a file passes all audit layers."""
+    from app.services.task_queue import task_queue, TaskType
+    from db.models.library_folder import LibraryFolder
+    from db.models.profile import Profile
+
+    try:
+        folder_result = await db.execute(
+            select(LibraryFolder).where(LibraryFolder.id == lib_file.folder_id)
+        )
+        folder = folder_result.scalar_one_or_none()
+
+        profile_result = await db.execute(
+            select(Profile).where(Profile.id == lib_file.uploader_id)
+        )
+        profile = profile_result.scalar_one_or_none()
+
+        meta = lib_file.proposal_metadata or {}
+
+        task_queue.enqueue(TaskType.INDEX_TO_SHEETS, {
+            "doc_type": lib_file.doc_type or "OTHER",
+            "doc_sequence": meta.get("archive_number", ""),
+            "client_name": lib_file.client_name or "",
+            "client_code": lib_file.client_code or "",
+            "project_name": lib_file.project_name or "",
+            "file_name": lib_file.file_name or lib_file.original_name,
+            "note": lib_file.note or "",
+            "folder_path": folder.path if folder else "",
+            "gdrive_link": lib_file.gdrive_web_link or "",
+            "uploaded_by": profile.full_name if profile else str(lib_file.uploader_id),
+            "created_at": lib_file.created_at.isoformat() if lib_file.created_at else "",
+        })
+        logger.info("Sheets indexing enqueued for file %s", lib_file.id)
+    except Exception as exc:
+        logger.error("Failed to enqueue Sheets indexing for file %s: %s", lib_file.id, exc)
 
 
 # ---------------------------------------------------------------------------
