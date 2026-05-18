@@ -556,16 +556,7 @@ async def upload_file(
         },
     )
     db.add(lib_file)
-    await db.flush()  # materialize lib_file.id before FK references
-
-    # Create 4 pending audit job rows
-    for layer, name in LAYER_NAMES.items():
-        db.add(AuditJob(
-            file_id=lib_file.id,
-            layer=layer,
-            layer_name=name,
-            status="pending",
-        ))
+    await db.flush()
 
     await _write_log(
         db, profile, LOG_UPLOAD,
@@ -575,62 +566,87 @@ async def upload_file(
     )
     await db.commit()
 
-    # ── Drive upload + audit pipeline (background, user can close browser) ────
+    # ── Drive upload in background (no audit pipeline) ────────────────────────
     import asyncio
     asyncio.create_task(
-        _background_upload_and_audit(lib_file.id, content, file_name, file.content_type or "application/octet-stream")
+        _background_upload_to_drive(lib_file.id, folder.gdrive_folder_id, content, file_name, file.content_type or "application/octet-stream", folder.path if folder else "")
     )
 
     return {
         "file_id": str(lib_file.id),
         "file_name": file_name,
         "status": "uploading",
-        "message": "File diterima dan sedang diproses. Anda dapat menutup browser.",
+        "message": "File diterima dan sedang diunggah ke Drive.",
     }
 
 
-async def _background_upload_and_audit(
+async def _background_upload_to_drive(
     file_id: uuid.UUID,
+    gdrive_folder_id: str | None,
     content: bytes,
     file_name: str,
     mime_type: str,
+    folder_path: str,
 ) -> None:
-    """Upload to Drive TEMP, then enqueue 4-layer audit. Fire-and-forget."""
+    """Upload directly to the folder's linked Drive location. No audit pipeline."""
     import io
     from app.services import gdrive
     from app.services.task_queue import task_queue, TaskType
     from db.session import async_session_factory
+    from db.models.profile import Profile
 
     try:
-        temp_folder_id = await _get_temp_folder_id()
+        # Use the folder's linked Drive ID, or fall back to TEMP
+        if gdrive_folder_id:
+            target_folder_id = gdrive_folder_id
+        else:
+            target_folder_id = await _get_temp_folder_id()
+            logger.warning("Folder has no gdrive_folder_id — uploading file %s to TEMP", file_id)
+
         drive_result = await gdrive.upload_file(
             io.BytesIO(content),
             file_name,
             mime_type,
-            temp_folder_id,
+            target_folder_id,
             file_size=len(content),
         )
 
         async with async_session_factory() as db:
-            result = await db.execute(
-                select(LibraryFile).where(LibraryFile.id == file_id)
-            )
+            result = await db.execute(select(LibraryFile).where(LibraryFile.id == file_id))
             lib_file = result.scalar_one_or_none()
-            if lib_file:
-                lib_file.gdrive_file_id = drive_result.get("id")
-                lib_file.gdrive_web_link = drive_result.get("webViewLink")
-                lib_file.upload_status = LibraryFileStatus.in_audit
-                await db.commit()
+            if not lib_file:
+                return
 
-        task_queue.enqueue(TaskType.AUDIT_FILE, {"file_id": str(file_id)})
-        logger.info("File %s uploaded to Drive TEMP, audit enqueued", file_id)
+            lib_file.gdrive_file_id = drive_result.get("id")
+            lib_file.gdrive_web_link = drive_result.get("webViewLink")
+            lib_file.gdrive_folder_id = target_folder_id
+            lib_file.upload_status = LibraryFileStatus.passed
+            await db.commit()
+
+            # Enqueue Sheets indexing
+            profile_result = await db.execute(select(Profile).where(Profile.id == lib_file.uploader_id))
+            profile = profile_result.scalar_one_or_none()
+            meta = lib_file.proposal_metadata or {}
+            task_queue.enqueue(TaskType.INDEX_TO_SHEETS, {
+                "doc_type": lib_file.doc_type or "OTHER",
+                "doc_sequence": meta.get("archive_number", ""),
+                "client_name": lib_file.client_name or "",
+                "client_code": lib_file.client_code or "",
+                "project_name": lib_file.project_name or "",
+                "file_name": lib_file.file_name or lib_file.original_name,
+                "note": lib_file.note or "",
+                "folder_path": folder_path,
+                "gdrive_link": lib_file.gdrive_web_link or "",
+                "uploaded_by": profile.full_name if profile else str(lib_file.uploader_id),
+                "created_at": lib_file.created_at.isoformat() if lib_file.created_at else "",
+            })
+
+        logger.info("File %s uploaded to Drive folder %s, status=passed", file_id, target_folder_id)
 
     except Exception as exc:
-        logger.error("Background upload failed for file %s: %s", file_id, exc, exc_info=True)
+        logger.error("Drive upload failed for file %s: %s", file_id, exc, exc_info=True)
         async with async_session_factory() as db:
-            result = await db.execute(
-                select(LibraryFile).where(LibraryFile.id == file_id)
-            )
+            result = await db.execute(select(LibraryFile).where(LibraryFile.id == file_id))
             lib_file = result.scalar_one_or_none()
             if lib_file:
                 lib_file.upload_status = LibraryFileStatus.failed
@@ -1189,6 +1205,47 @@ async def get_public_index_sheets(
     rows = await read_public_index_display()
     headers: list[str] = list(rows[0].keys()) if rows else []
     return {"headers": headers, "rows": rows}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/library/public-list   (all authenticated users)
+# ---------------------------------------------------------------------------
+
+@router.get("/public-list")
+async def get_public_list(
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Return all passed files: name, uploader, timestamp. No sensitive metadata."""
+    from db.models.profile import Profile as ProfileModel
+    result = await db.execute(
+        select(
+            LibraryFile.id,
+            LibraryFile.file_name,
+            LibraryFile.original_name,
+            LibraryFile.created_at,
+            ProfileModel.full_name,
+        )
+        .join(ProfileModel, LibraryFile.uploader_id == ProfileModel.id)
+        .where(
+            LibraryFile.upload_status == LibraryFileStatus.passed,
+            LibraryFile.is_deleted.is_(False),
+        )
+        .order_by(LibraryFile.created_at.desc())
+        .limit(1000)
+    )
+    rows = result.all()
+    return {
+        "files": [
+            {
+                "id": str(r.id),
+                "file_name": r.file_name or r.original_name,
+                "uploaded_by": r.full_name,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ]
+    }
 
 
 # ---------------------------------------------------------------------------

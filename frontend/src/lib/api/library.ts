@@ -312,6 +312,13 @@ export async function getPublicIndexSheets(): Promise<{ headers: string[]; rows:
   return res.json();
 }
 
+export async function getPublicList(): Promise<{ files: { id: string; file_name: string; uploaded_by: string; created_at: string }[] }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/public-list`, { headers });
+  if (!res.ok) throw new Error("Gagal memuat daftar file publik");
+  return res.json();
+}
+
 export async function setSequence(docType: string, currentNumber: number): Promise<void> {
   const headers = await authHeaders();
   const res = await fetch(`${API}/api/library/sequences/${docType}`, {

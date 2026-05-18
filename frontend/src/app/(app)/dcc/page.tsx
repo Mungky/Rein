@@ -437,7 +437,7 @@ export default function LibraryPage() {
                   </div>
                   <div className="text-[11px] text-text-muted mt-0.5">
                     {t.status === "done"
-                      ? "File diterima — sedang melewati 4-layer audit di background"
+                      ? "File diunggah ke Drive dan tersimpan di perpustakaan"
                       : t.message ?? "Upload gagal"}
                   </div>
                 </div>
