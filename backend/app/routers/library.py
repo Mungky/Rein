@@ -1117,6 +1117,66 @@ async def link_folder_to_drive(
 
 
 # ---------------------------------------------------------------------------
+# DELETE /api/library/folders/{folder_id}   (admin only)
+# ---------------------------------------------------------------------------
+
+@router.delete("/folders/{folder_id}", dependencies=[Depends(require_role(AppRole.admin))])
+async def delete_folder(
+    folder_id: uuid.UUID,
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Admin: soft-delete a non-department folder (and all its empty descendants)."""
+    result = await db.execute(
+        select(LibraryFolder).where(
+            LibraryFolder.id == folder_id,
+            LibraryFolder.is_active.is_(True),
+        )
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
+    if folder.folder_type == FolderType.department:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Folder departemen tidak dapat dihapus")
+
+    # Refuse if folder has active files
+    files_count_result = await db.execute(
+        select(func.count(LibraryFile.id)).where(
+            LibraryFile.folder_id == folder_id,
+            LibraryFile.upload_status == LibraryFileStatus.passed,
+            LibraryFile.is_deleted.is_(False),
+        )
+    )
+    file_count = files_count_result.scalar_one()
+    if file_count > 0:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=f"Folder masih memiliki {file_count} file aktif. Hapus file terlebih dahulu.",
+        )
+
+    # Recursively soft-delete the folder and all descendants
+    async def _deactivate(fid: uuid.UUID) -> None:
+        children_result = await db.execute(
+            select(LibraryFolder).where(
+                LibraryFolder.parent_id == fid,
+                LibraryFolder.is_active.is_(True),
+            )
+        )
+        for child in children_result.scalars().all():
+            await _deactivate(child.id)
+        f_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == fid))
+        f = f_result.scalar_one_or_none()
+        if f:
+            f.is_active = False
+
+    await _deactivate(folder_id)
+    await _write_log(db, profile, "delete_folder", "folder", folder_id,
+                     metadata={"name": folder.name, "path": folder.path})
+    await db.commit()
+    return {"id": str(folder_id), "deleted": True}
+
+
+# ---------------------------------------------------------------------------
 # GET /api/library/public-index/sheets
 # ---------------------------------------------------------------------------
 

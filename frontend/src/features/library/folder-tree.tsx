@@ -1,8 +1,8 @@
 "use client";
 
-import { BookOpen, Check, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, HardDrive, Link2, Link2Off, Loader2, Pencil, Plus, X } from "lucide-react";
+import { BookOpen, Check, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, HardDrive, Link2, Link2Off, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { createFolder, linkFolderToDrive, renameFolder } from "@/lib/api/library";
+import { createFolder, deleteFolder, linkFolderToDrive, renameFolder } from "@/lib/api/library";
 import type { FolderNode } from "./types";
 
 export const TEMP_FOLDER_ID = "__temp__";
@@ -131,9 +131,15 @@ function FolderItem({
   const [linkSaving, setLinkSaving] = useState(false);
   const linkInputRef = useRef<HTMLInputElement>(null);
 
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const isSelected = selectedId === node.id;
   const deptColor = DEPT_COLORS[node.department] ?? "text-text-muted";
   const isDept = node.folder_type === "department";
+  // True when any inline edit mode is active — hides hover action buttons
+  const isEditing = renaming || linking || deleteConfirm;
 
   const startCreating = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -171,13 +177,12 @@ function FolderItem({
     try {
       await renameFolder(node.id, name);
       setRenaming(false);
-      onFolderCreated?.(); // refreshes tree
+      onFolderCreated?.();
     } catch { /* keep input open */ } finally { setRenameSaving(false); }
   };
 
   const handleLink = async () => {
     const raw = linkValue.trim();
-    // Accept full Drive URL or bare folder ID
     const match = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/);
     const driveId = match ? match[1] : raw;
     setLinkSaving(true);
@@ -188,16 +193,31 @@ function FolderItem({
     } catch { /* keep open */ } finally { setLinkSaving(false); }
   };
 
+  const handleDelete = async () => {
+    setDeleteLoading(true);
+    setDeleteError(null);
+    try {
+      await deleteFolder(node.id);
+      setDeleteConfirm(false);
+      onFolderCreated?.();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Gagal menghapus folder");
+      setDeleteLoading(false);
+    }
+  };
+
   return (
     <div>
       <div className="group relative">
         <button
           className={`w-full flex items-center gap-1.5 px-2 py-[5px] rounded text-left transition-colors duration-100
             ${isSelected ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text"}
-            ${isDept ? "font-semibold" : "font-normal"}`}
+            ${isDept ? "font-semibold" : "font-normal"}
+            ${deleteConfirm ? "bg-red-bg/60" : ""}`}
           style={{ paddingLeft: `${8 + depth * 16}px` }}
-          disabled={renaming}
+          disabled={isEditing}
           onClick={() => {
+            if (isEditing) return;
             onSelect(node);
             if (node.children.length > 0) setOpen((o) => !o);
           }}
@@ -212,10 +232,11 @@ function FolderItem({
             <span className="w-3 shrink-0" />
           )}
           {isSelected || open ? (
-            <FolderOpen className={`w-3.5 h-3.5 shrink-0 ${isDept ? deptColor : "text-text-muted"}`} />
+            <FolderOpen className={`w-3.5 h-3.5 shrink-0 ${deleteConfirm ? "text-red" : isDept ? deptColor : "text-text-muted"}`} />
           ) : (
-            <Folder className={`w-3.5 h-3.5 shrink-0 ${isDept ? deptColor : "text-text-muted"}`} />
+            <Folder className={`w-3.5 h-3.5 shrink-0 ${deleteConfirm ? "text-red" : isDept ? deptColor : "text-text-muted"}`} />
           )}
+
           {renaming ? (
             <div className="flex items-center gap-0.5 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
               <input
@@ -224,12 +245,12 @@ function FolderItem({
                 onChange={(e) => setRenameValue(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleRename();
-                  if (e.key === "Escape") { setRenaming(false); }
+                  if (e.key === "Escape") setRenaming(false);
                 }}
                 className="flex-1 text-[12px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
                 disabled={renameSaving}
               />
-              <button onClick={handleRename} disabled={renameSaving} className="shrink-0 text-green hover:text-green">
+              <button onClick={handleRename} disabled={renameSaving} className="shrink-0 text-green hover:text-green ml-1">
                 {renameSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
               </button>
               <button onClick={() => setRenaming(false)} className="shrink-0 text-text-light hover:text-text">
@@ -246,14 +267,28 @@ function FolderItem({
                   if (e.key === "Enter") handleLink();
                   if (e.key === "Escape") { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }
                 }}
-                placeholder="Paste folder ID atau URL Drive…"
+                placeholder="ID atau URL folder Drive…"
                 className="flex-1 text-[11px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
                 disabled={linkSaving}
               />
-              <button onClick={handleLink} disabled={linkSaving} className="shrink-0 text-green hover:text-green">
+              <button onClick={handleLink} disabled={linkSaving} className="shrink-0 text-green hover:text-green ml-1">
                 {linkSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
               </button>
               <button onClick={() => { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }} className="shrink-0 text-text-light hover:text-text">
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ) : deleteConfirm ? (
+            <div className="flex items-center gap-1 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+              <span className="flex-1 text-[11px] text-red font-semibold truncate min-w-0">
+                {deleteError ?? "Hapus folder ini?"}
+              </span>
+              {!deleteError && (
+                <button onClick={handleDelete} disabled={deleteLoading} className="shrink-0 text-red hover:text-red ml-1">
+                  {deleteLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                </button>
+              )}
+              <button onClick={() => { setDeleteConfirm(false); setDeleteError(null); }} className="shrink-0 text-text-light hover:text-text">
                 <X className="w-3 h-3" />
               </button>
             </div>
@@ -268,40 +303,58 @@ function FolderItem({
               )}
             </span>
           )}
-          {node.file_count > 0 && !renaming && (
+
+          {node.file_count > 0 && !isEditing && (
             <span className="text-[10px] text-text-light shrink-0 tabular-nums">
               {node.file_count}
             </span>
           )}
         </button>
 
-        {isAdmin && !renaming && !linking && (
-          <button
-            onClick={(e) => { e.stopPropagation(); setLinkValue(node.gdrive_folder_id ?? ""); setLinking(true); setTimeout(() => linkInputRef.current?.focus(), 30); }}
-            title={node.gdrive_folder_id ? "Ubah link Drive" : "Hubungkan ke Drive"}
-            className="absolute right-10 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
-          >
-            {node.gdrive_folder_id ? <Link2 className="w-3 h-3" /> : <Link2Off className="w-3 h-3" />}
-          </button>
-        )}
-        {isAdmin && !renaming && !linking && (
-          <button
-            onClick={(e) => { e.stopPropagation(); setRenameValue(node.name); setRenaming(true); setTimeout(() => renameInputRef.current?.focus(), 30); }}
-            title="Ganti nama folder"
-            className="absolute right-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
-          >
-            <Pencil className="w-3 h-3" />
-          </button>
-        )}
-        {canCreateFolder && (
-          <button
-            onClick={startCreating}
-            title="Tambah sub-folder"
-            className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity
-              w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
-          >
-            <Plus className="w-3 h-3" />
-          </button>
+        {/* Hover action buttons — hidden during any edit mode */}
+        {!isEditing && (
+          <>
+            {/* Trash: admin only, non-dept folders */}
+            {isAdmin && !isDept && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setDeleteError(null); setDeleteConfirm(true); }}
+                title="Hapus folder"
+                className="absolute right-[56px] top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-red/20 text-text-light hover:text-red"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )}
+            {/* Link to Drive: admin only */}
+            {isAdmin && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setLinkValue(node.gdrive_folder_id ?? ""); setLinking(true); setTimeout(() => linkInputRef.current?.focus(), 30); }}
+                title={node.gdrive_folder_id ? "Ubah link Drive" : "Hubungkan ke Drive"}
+                className="absolute right-10 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
+              >
+                {node.gdrive_folder_id ? <Link2 className="w-3 h-3" /> : <Link2Off className="w-3 h-3" />}
+              </button>
+            )}
+            {/* Rename: admin only */}
+            {isAdmin && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setRenameValue(node.name); setRenaming(true); setTimeout(() => renameInputRef.current?.focus(), 30); }}
+                title="Ganti nama folder"
+                className="absolute right-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            )}
+            {/* Create sub-folder */}
+            {canCreateFolder && (
+              <button
+                onClick={startCreating}
+                title="Tambah sub-folder"
+                className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+            )}
+          </>
         )}
       </div>
 

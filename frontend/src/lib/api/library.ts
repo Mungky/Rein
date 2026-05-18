@@ -276,6 +276,18 @@ export async function renameFolder(
   return res.json();
 }
 
+export async function deleteFolder(folderId: string): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/folders/${folderId}`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "Gagal menghapus folder");
+  }
+}
+
 export async function linkFolderToDrive(
   folderId: string,
   gdriveFolderId: string | null,
