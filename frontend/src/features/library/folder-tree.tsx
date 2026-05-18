@@ -296,10 +296,9 @@ function FolderItem({
             <span className="flex-1 text-[12.5px] truncate min-w-0 flex items-center gap-1">
               {node.name}
               {isAdmin && (
-                <HardDrive
-                  className={`w-2.5 h-2.5 shrink-0 ${node.gdrive_folder_id ? "text-green opacity-70" : "text-text-light opacity-30"}`}
-                  title={node.gdrive_folder_id ? `Drive: ${node.gdrive_folder_id}` : "Belum terhubung ke Drive"}
-                />
+                <span title={node.gdrive_folder_id ? `Drive: ${node.gdrive_folder_id}` : "Belum terhubung ke Drive"}>
+                  <HardDrive className={`w-2.5 h-2.5 shrink-0 ${node.gdrive_folder_id ? "text-green opacity-70" : "text-text-light opacity-30"}`} />
+                </span>
               )}
             </span>
           )}
