@@ -10,7 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getAdminTemp } from "@/lib/api/library";
+import { getAdminTemp, resetStuckUploads } from "@/lib/api/library";
 import type { ActivityLogEntry, TempFile } from "./types";
 
 const STATUS_LABELS: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -53,6 +53,7 @@ function relTime(iso: string): string {
 export function TempPanel() {
   const [data, setData] = useState<{ temp_files: TempFile[]; activity_log: ActivityLogEntry[] } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [resetting, setResetting] = useState(false);
   const [tab, setTab] = useState<"temp" | "log">("temp");
 
   const load = () => {
@@ -63,7 +64,19 @@ export function TempPanel() {
       .finally(() => setLoading(false));
   };
 
+  const handleResetStuck = () => {
+    setResetting(true);
+    resetStuckUploads()
+      .then((res) => {
+        if (res.reset_count > 0) load();
+      })
+      .catch(() => {})
+      .finally(() => setResetting(false));
+  };
+
   useEffect(() => { load(); }, []);
+
+  const stuckCount = data?.temp_files.filter((f) => f.upload_status === "uploading").length ?? 0;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -71,6 +84,17 @@ export function TempPanel() {
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border shrink-0">
         <span className="text-[12.5px] font-semibold text-text">Riwayat &amp; Sementara</span>
         <div className="flex-1" />
+        {stuckCount > 0 && (
+          <button
+            onClick={handleResetStuck}
+            disabled={resetting}
+            className="btn btn-default btn-sm gap-1.5 text-amber border-amber/40 hover:bg-amber-bg"
+            title={`Reset ${stuckCount} file stuck ke status Gagal`}
+          >
+            {resetting ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
+            Reset {stuckCount} Stuck
+          </button>
+        )}
         <button
             onClick={load}
             disabled={loading}

@@ -163,8 +163,14 @@ async def upload_file(
 
     try:
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _do_upload)
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, _do_upload),
+            timeout=600,  # 10 min hard limit — thread may still run but task moves on
+        )
         return result
+    except asyncio.TimeoutError:
+        logger.error("Drive upload timed out after 600s for %s", file_name)
+        raise TimeoutError(f"Drive upload timed out for {file_name}")
     except HttpError as e:
         logger.error("Drive upload failed for %s: %s", file_name, e)
         raise
@@ -230,7 +236,10 @@ async def find_or_create_folder(name: str, parent_id: str) -> str:
         return result["id"]
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _do)
+    return await asyncio.wait_for(
+        loop.run_in_executor(None, _do),
+        timeout=60,
+    )
 
 
 async def rename_file(file_id: str, new_name: str) -> dict:

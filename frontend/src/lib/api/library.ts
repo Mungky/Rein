@@ -15,10 +15,18 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function authHeaders(): Promise<Record<string, string>> {
   const supabase = getSupabaseClient();
-  const { data: { session } } = await supabase!.auth.getSession();
-  return session?.access_token
-    ? { Authorization: `Bearer ${session.access_token}` }
-    : {};
+  try {
+    const sessionPromise = supabase!.auth.getSession();
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("session timeout")), 8000),
+    );
+    const { data: { session } } = await Promise.race([sessionPromise, timeout]);
+    return session?.access_token
+      ? { Authorization: `Bearer ${session.access_token}` }
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 // ── Folder tree ──────────────────────────────────────────────────────────────
@@ -55,6 +63,16 @@ export async function getPublicIndex(): Promise<{ departments: PublicIndexDept[]
   const headers = await authHeaders();
   const res = await fetch(`${API}/api/library/public-index`, { headers });
   if (!res.ok) throw new Error("Gagal memuat index publik");
+  return res.json();
+}
+
+export async function resetStuckUploads(): Promise<{ reset_count: number }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/admin/reset-stuck`, {
+    method: "POST",
+    headers,
+  });
+  if (!res.ok) throw new Error("Gagal reset file stuck");
   return res.json();
 }
 
@@ -125,6 +143,8 @@ export async function uploadFile(
       }
     };
     xhr.onerror = () => reject(new Error("Koneksi terputus saat upload"));
+    xhr.ontimeout = () => reject(new Error("Koneksi timeout — coba lagi"));
+    xhr.timeout = 120_000;
     xhr.send(form);
   });
 }

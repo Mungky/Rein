@@ -590,10 +590,21 @@ async def _background_upload_to_drive(
 ) -> None:
     """Upload directly to the folder's linked Drive location. No audit pipeline."""
     import io
-    from app.services import gdrive
+    from app.services import gdrive as _gdrive
     from app.services.task_queue import task_queue, TaskType
     from db.session import async_session_factory
-    from db.models.profile import Profile
+    from db.models.profile import Profile as _Profile
+
+    async def _mark_failed(session_factory) -> None:
+        try:
+            async with session_factory() as db:
+                result = await db.execute(select(LibraryFile).where(LibraryFile.id == file_id))
+                lib_file = result.scalar_one_or_none()
+                if lib_file:
+                    lib_file.upload_status = LibraryFileStatus.failed
+                    await db.commit()
+        except Exception as inner_exc:
+            logger.error("Could not mark file %s as failed: %s", file_id, inner_exc)
 
     try:
         # Use the folder's linked Drive ID, or fall back to TEMP
@@ -603,7 +614,7 @@ async def _background_upload_to_drive(
             target_folder_id = await _get_temp_folder_id()
             logger.warning("Folder has no gdrive_folder_id — uploading file %s to TEMP", file_id)
 
-        drive_result = await gdrive.upload_file(
+        drive_result = await _gdrive.upload_file(
             io.BytesIO(content),
             file_name,
             mime_type,
@@ -611,6 +622,8 @@ async def _background_upload_to_drive(
             file_size=len(content),
         )
 
+        # Commit passed status — separate from the enqueue so a queue error can't flip status back
+        index_payload: dict = {}
         async with async_session_factory() as db:
             result = await db.execute(select(LibraryFile).where(LibraryFile.id == file_id))
             lib_file = result.scalar_one_or_none()
@@ -623,11 +636,13 @@ async def _background_upload_to_drive(
             lib_file.upload_status = LibraryFileStatus.passed
             await db.commit()
 
-            # Enqueue Sheets indexing
-            profile_result = await db.execute(select(Profile).where(Profile.id == lib_file.uploader_id))
-            profile = profile_result.scalar_one_or_none()
+            # Collect indexing payload while session is still open
+            profile_result = await db.execute(
+                select(_Profile).where(_Profile.id == lib_file.uploader_id)
+            )
+            uploader = profile_result.scalar_one_or_none()
             meta = lib_file.proposal_metadata or {}
-            task_queue.enqueue(TaskType.INDEX_TO_SHEETS, {
+            index_payload = {
                 "doc_type": lib_file.doc_type or "OTHER",
                 "doc_sequence": meta.get("archive_number", ""),
                 "client_name": lib_file.client_name or "",
@@ -637,20 +652,21 @@ async def _background_upload_to_drive(
                 "note": lib_file.note or "",
                 "folder_path": folder_path,
                 "gdrive_link": lib_file.gdrive_web_link or "",
-                "uploaded_by": profile.full_name if profile else str(lib_file.uploader_id),
+                "uploaded_by": uploader.full_name if uploader else str(lib_file.uploader_id),
                 "created_at": lib_file.created_at.isoformat() if lib_file.created_at else "",
-            })
+            }
+
+        # Enqueue AFTER session close so a queue error cannot affect DB state
+        try:
+            task_queue.enqueue(TaskType.INDEX_TO_SHEETS, index_payload)
+        except Exception as enqueue_exc:
+            logger.warning("INDEX_TO_SHEETS enqueue failed (non-fatal): %s", enqueue_exc)
 
         logger.info("File %s uploaded to Drive folder %s, status=passed", file_id, target_folder_id)
 
     except Exception as exc:
         logger.error("Drive upload failed for file %s: %s", file_id, exc, exc_info=True)
-        async with async_session_factory() as db:
-            result = await db.execute(select(LibraryFile).where(LibraryFile.id == file_id))
-            lib_file = result.scalar_one_or_none()
-            if lib_file:
-                lib_file.upload_status = LibraryFileStatus.failed
-                await db.commit()
+        await _mark_failed(async_session_factory)
 
 
 # ---------------------------------------------------------------------------
@@ -818,7 +834,7 @@ async def request_view_access(
         "request_id": str(view_req.id),
         "expires_at": expires_at.isoformat(),
         "message": (
-            f"Permintaan dikirim ke {len(librarians)} Pustakawan. "
+            f"Permintaan dikirim ke {len(recipient_emails)} penerima. "
             f"Persetujuan pertama membuka akses (berlaku {VIEW_REQUEST_TTL_SECONDS // 60} menit)."
         ),
     }
@@ -1420,6 +1436,31 @@ async def get_admin_temp(
             for e in log_entries
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/library/admin/reset-stuck   (admin only)
+# Resets files stuck in "uploading" for longer than 15 minutes to "failed"
+# ---------------------------------------------------------------------------
+
+@router.post("/admin/reset-stuck", dependencies=[Depends(require_role(AppRole.admin))])
+async def reset_stuck_uploads(
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Mark stuck 'uploading' files (older than 15 min) as 'failed' so they can be retried."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+    result = await db.execute(
+        select(LibraryFile).where(
+            LibraryFile.upload_status == LibraryFileStatus.uploading,
+            LibraryFile.is_deleted.is_(False),
+            LibraryFile.created_at < cutoff,
+        )
+    )
+    stuck = result.scalars().all()
+    for f in stuck:
+        f.upload_status = LibraryFileStatus.failed
+    await db.commit()
+    return {"reset_count": len(stuck)}
 
 
 # ---------------------------------------------------------------------------
