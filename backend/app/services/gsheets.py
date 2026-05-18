@@ -280,6 +280,44 @@ async def get_public_index_count() -> int:
     return await loop.run_in_executor(None, _do)
 
 
+async def read_public_index_display() -> list[dict]:
+    """Read all data rows from the public index spreadsheet.
+
+    Returns a list of dicts keyed by the sheet's header row.
+    Empty rows are skipped.
+    """
+    pub_sid = settings.google_sheets_public_spreadsheet_id
+    if not pub_sid:
+        return []
+
+    def _do() -> list[dict]:
+        svc = _get_sheets_service()
+        try:
+            result = (
+                svc.spreadsheets()
+                .values()
+                .get(spreadsheetId=pub_sid, range=f"'{PUBLIC_SHEET}'!A:Z")
+                .execute()
+            )
+            rows = result.get("values", [])
+            if len(rows) < 2:
+                return []
+            headers = [str(h).strip() for h in rows[0]]
+            data = []
+            for row in rows[1:]:
+                if not any(str(c).strip() for c in row):
+                    continue
+                record = {headers[i]: (row[i] if i < len(row) else "") for i in range(len(headers))}
+                data.append(record)
+            return data
+        except Exception as e:
+            logger.error("Failed to read public index display: %s", e)
+            return []
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _do)
+
+
 async def delete_document_row(row_id: int, doc_type: str = "OTHER") -> None:
     """Clear a document row in the given type sheet."""
     def _do() -> None:

@@ -253,6 +253,26 @@ async def rename_file(file_id: str, new_name: str) -> dict:
     return await loop.run_in_executor(None, _do)
 
 
+async def rename_folder(folder_id: str, new_name: str) -> dict:
+    """Rename a folder in Google Drive. Returns updated folder metadata."""
+    def _do():
+        service = _get_drive_service()
+        result = (
+            service.files()
+            .update(
+                fileId=folder_id,
+                body={"name": new_name},
+                fields="id,name",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        return dict(result)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _do)
+
+
 async def get_file(file_id: str) -> dict:
     """Get file metadata from Google Drive."""
     def _do():

@@ -1073,12 +1073,62 @@ async def rename_folder(
     else:
         folder.path = new_name
 
+    if folder.gdrive_folder_id:
+        from app.services import gdrive as gdrive_svc
+        try:
+            await gdrive_svc.rename_folder(folder.gdrive_folder_id, new_name)
+        except Exception as exc:
+            logger.warning("Drive rename failed for folder %s: %s", folder_id, exc)
+
     await _write_log(
         db, profile, "rename_folder", "folder", folder_id,
         metadata={"old_path": old_path, "new_path": folder.path},
     )
     await db.commit()
     return {"id": str(folder.id), "name": folder.name, "path": folder.path}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/library/admin/folders/{folder_id}/gdrive-link  (admin only)
+# ---------------------------------------------------------------------------
+
+class FolderGDriveLinkRequest(BaseModel):
+    gdrive_folder_id: str | None = None
+
+
+@router.patch("/admin/folders/{folder_id}/gdrive-link", dependencies=[Depends(require_role(AppRole.admin))])
+async def link_folder_to_drive(
+    folder_id: uuid.UUID,
+    body: FolderGDriveLinkRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Admin: set or clear the Google Drive folder ID linked to a library folder."""
+    result = await db.execute(
+        select(LibraryFolder).where(LibraryFolder.id == folder_id)
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
+
+    drive_id = body.gdrive_folder_id.strip() if body.gdrive_folder_id else None
+    folder.gdrive_folder_id = drive_id or None
+    await db.commit()
+    return {"id": str(folder.id), "gdrive_folder_id": folder.gdrive_folder_id}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/library/public-index/sheets
+# ---------------------------------------------------------------------------
+
+@router.get("/public-index/sheets")
+async def get_public_index_sheets(
+    profile: Annotated[Profile, Depends(get_current_profile)],
+):
+    """Return rows from the public Google Sheets index spreadsheet."""
+    from app.services.gsheets import read_public_index_display
+    rows = await read_public_index_display()
+    headers: list[str] = list(rows[0].keys()) if rows else []
+    return {"headers": headers, "rows": rows}
 
 
 # ---------------------------------------------------------------------------
@@ -1163,11 +1213,22 @@ async def create_folder(
         created_by=profile.id,
     )
     db.add(folder)
+    await db.flush()  # get folder.id before commit
+
+    # Auto-create matching GDrive folder if parent is linked to Drive
+    if body.parent_id and parent and parent.gdrive_folder_id:
+        from app.services import gdrive as gdrive_svc
+        try:
+            drive_id = await gdrive_svc.find_or_create_folder(body.name, parent.gdrive_folder_id)
+            folder.gdrive_folder_id = drive_id
+        except Exception as exc:
+            logger.warning("Failed to create GDrive folder for '%s': %s", body.name, exc)
+
     await _write_log(db, profile, LOG_FOLDER_CREATE, "folder",
                      metadata={"name": body.name, "department": body.department})
     await db.commit()
 
-    return {"id": str(folder.id), "path": folder.path}
+    return {"id": str(folder.id), "path": folder.path, "gdrive_folder_id": folder.gdrive_folder_id}
 
 
 # ---------------------------------------------------------------------------

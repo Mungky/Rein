@@ -276,6 +276,30 @@ export async function renameFolder(
   return res.json();
 }
 
+export async function linkFolderToDrive(
+  folderId: string,
+  gdriveFolderId: string | null,
+): Promise<{ id: string; gdrive_folder_id: string | null }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/admin/folders/${folderId}/gdrive-link`, {
+    method: "PATCH",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ gdrive_folder_id: gdriveFolderId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "Gagal menghubungkan folder ke Drive");
+  }
+  return res.json();
+}
+
+export async function getPublicIndexSheets(): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/public-index/sheets`, { headers });
+  if (!res.ok) throw new Error("Gagal memuat data spreadsheet");
+  return res.json();
+}
+
 export async function setSequence(docType: string, currentNumber: number): Promise<void> {
   const headers = await authHeaders();
   const res = await fetch(`${API}/api/library/sequences/${docType}`, {

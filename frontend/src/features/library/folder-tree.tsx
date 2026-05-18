@@ -1,8 +1,8 @@
 "use client";
 
-import { BookOpen, Check, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, Loader2, Pencil, Plus, X } from "lucide-react";
+import { BookOpen, Check, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, HardDrive, Link2, Link2Off, Loader2, Pencil, Plus, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { createFolder, renameFolder } from "@/lib/api/library";
+import { createFolder, linkFolderToDrive, renameFolder } from "@/lib/api/library";
 import type { FolderNode } from "./types";
 
 export const TEMP_FOLDER_ID = "__temp__";
@@ -126,6 +126,11 @@ function FolderItem({
   const [renameSaving, setRenameSaving] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
+  const [linking, setLinking] = useState(false);
+  const [linkValue, setLinkValue] = useState(node.gdrive_folder_id ?? "");
+  const [linkSaving, setLinkSaving] = useState(false);
+  const linkInputRef = useRef<HTMLInputElement>(null);
+
   const isSelected = selectedId === node.id;
   const deptColor = DEPT_COLORS[node.department] ?? "text-text-muted";
   const isDept = node.folder_type === "department";
@@ -168,6 +173,19 @@ function FolderItem({
       setRenaming(false);
       onFolderCreated?.(); // refreshes tree
     } catch { /* keep input open */ } finally { setRenameSaving(false); }
+  };
+
+  const handleLink = async () => {
+    const raw = linkValue.trim();
+    // Accept full Drive URL or bare folder ID
+    const match = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    const driveId = match ? match[1] : raw;
+    setLinkSaving(true);
+    try {
+      await linkFolderToDrive(node.id, driveId || null);
+      setLinking(false);
+      onFolderCreated?.();
+    } catch { /* keep open */ } finally { setLinkSaving(false); }
   };
 
   return (
@@ -218,8 +236,37 @@ function FolderItem({
                 <X className="w-3 h-3" />
               </button>
             </div>
+          ) : linking ? (
+            <div className="flex items-center gap-0.5 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+              <input
+                ref={linkInputRef}
+                value={linkValue}
+                onChange={(e) => setLinkValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleLink();
+                  if (e.key === "Escape") { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }
+                }}
+                placeholder="Paste folder ID atau URL Drive…"
+                className="flex-1 text-[11px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
+                disabled={linkSaving}
+              />
+              <button onClick={handleLink} disabled={linkSaving} className="shrink-0 text-green hover:text-green">
+                {linkSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              </button>
+              <button onClick={() => { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }} className="shrink-0 text-text-light hover:text-text">
+                <X className="w-3 h-3" />
+              </button>
+            </div>
           ) : (
-            <span className="flex-1 text-[12.5px] truncate min-w-0">{node.name}</span>
+            <span className="flex-1 text-[12.5px] truncate min-w-0 flex items-center gap-1">
+              {node.name}
+              {isAdmin && (
+                <HardDrive
+                  className={`w-2.5 h-2.5 shrink-0 ${node.gdrive_folder_id ? "text-green opacity-70" : "text-text-light opacity-30"}`}
+                  title={node.gdrive_folder_id ? `Drive: ${node.gdrive_folder_id}` : "Belum terhubung ke Drive"}
+                />
+              )}
+            </span>
           )}
           {node.file_count > 0 && !renaming && (
             <span className="text-[10px] text-text-light shrink-0 tabular-nums">
@@ -228,7 +275,16 @@ function FolderItem({
           )}
         </button>
 
-        {isAdmin && !renaming && (
+        {isAdmin && !renaming && !linking && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setLinkValue(node.gdrive_folder_id ?? ""); setLinking(true); setTimeout(() => linkInputRef.current?.focus(), 30); }}
+            title={node.gdrive_folder_id ? "Ubah link Drive" : "Hubungkan ke Drive"}
+            className="absolute right-10 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
+          >
+            {node.gdrive_folder_id ? <Link2 className="w-3 h-3" /> : <Link2Off className="w-3 h-3" />}
+          </button>
+        )}
+        {isAdmin && !renaming && !linking && (
           <button
             onClick={(e) => { e.stopPropagation(); setRenameValue(node.name); setRenaming(true); setTimeout(() => renameInputRef.current?.focus(), 30); }}
             title="Ganti nama folder"
