@@ -1,9 +1,10 @@
 "use client";
 
-import { Check, ExternalLink, FileText, FolderInput, FolderOpen, Loader2, Lock, MoreVertical, Pencil, Trash2, X } from "lucide-react";
+import { Check, ExternalLink, FileText, FolderInput, Loader2, Lock, MoreVertical, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { deleteFile, moveFile, pollViewLink, renameFile, requestViewAccess } from "@/lib/api/library";
 import type { FolderMyPerms } from "@/lib/api/library";
+import { MoveModal } from "./move-modal";
 import type { FolderNode, LibraryFileMeta, ViewRequestResponse } from "./types";
 
 const DOC_TYPE_COLORS: Record<string, string> = {
@@ -42,13 +43,20 @@ interface FileListProps {
   currentUserId?: string;
   tree?: FolderNode[];
   perms?: FolderMyPerms | null;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (id: string) => void;
+  onToggleAll?: () => void;
   onDeleted?: (id: string) => void;
   onRenamed?: (id: string, newName: string) => void;
   onMoved?: (id: string) => void;
   processingFiles?: ProcessingFile[];
 }
 
-export function FileList({ files, isAdmin, currentUserId, tree, perms, onDeleted, onRenamed, onMoved, processingFiles }: FileListProps) {
+export function FileList({
+  files, isAdmin, currentUserId, tree, perms,
+  selectedIds, onToggleSelect, onToggleAll,
+  onDeleted, onRenamed, onMoved, processingFiles,
+}: FileListProps) {
   const hasContent = files.length > 0 || (processingFiles && processingFiles.length > 0);
 
   if (!hasContent) {
@@ -60,22 +68,48 @@ export function FileList({ files, isAdmin, currentUserId, tree, perms, onDeleted
     );
   }
 
+  const selectionEnabled = Boolean(selectedIds && onToggleSelect && onToggleAll);
+  const allChecked = selectionEnabled && files.length > 0 && files.every((f) => selectedIds!.has(f.id));
+  const someChecked = selectionEnabled && files.some((f) => selectedIds!.has(f.id));
+
   return (
-    <div className="divide-y divide-border-soft">
-      {processingFiles?.map((pf) => <ProcessingRow key={pf.id} fileName={pf.fileName} />)}
-      {files.map((f) => (
-        <FileRow
-          key={f.id}
-          file={f}
-          isAdmin={isAdmin}
-          currentUserId={currentUserId}
-          tree={tree}
-          perms={perms}
-          onDeleted={onDeleted}
-          onRenamed={onRenamed}
-          onMoved={onMoved}
-        />
-      ))}
+    <div>
+      {selectionEnabled && files.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-border-soft bg-bg-ctrl/30">
+          <input
+            type="checkbox"
+            checked={allChecked}
+            ref={(el) => {
+              if (el) el.indeterminate = someChecked && !allChecked;
+            }}
+            onChange={onToggleAll}
+            className="w-3.5 h-3.5 cursor-pointer accent-primary"
+          />
+          <span className="text-[11px] text-text-muted">
+            {someChecked
+              ? `${[...selectedIds!].filter((id) => files.find((f) => f.id === id)).length} dari ${files.length} dipilih`
+              : `Pilih semua (${files.length})`}
+          </span>
+        </div>
+      )}
+      <div className="divide-y divide-border-soft">
+        {processingFiles?.map((pf) => <ProcessingRow key={pf.id} fileName={pf.fileName} />)}
+        {files.map((f) => (
+          <FileRow
+            key={f.id}
+            file={f}
+            isAdmin={isAdmin}
+            currentUserId={currentUserId}
+            tree={tree}
+            perms={perms}
+            selected={selectedIds?.has(f.id) ?? false}
+            onToggleSelect={onToggleSelect}
+            onDeleted={onDeleted}
+            onRenamed={onRenamed}
+            onMoved={onMoved}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -100,6 +134,8 @@ function FileRow({
   currentUserId,
   tree,
   perms,
+  selected,
+  onToggleSelect,
   onDeleted,
   onRenamed,
   onMoved,
@@ -109,6 +145,8 @@ function FileRow({
   currentUserId?: string;
   tree?: FolderNode[];
   perms?: FolderMyPerms | null;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
   onDeleted?: (id: string) => void;
   onRenamed?: (id: string, newName: string) => void;
   onMoved?: (id: string) => void;
@@ -208,7 +246,15 @@ function FileRow({
   const typeColor = DOC_TYPE_COLORS[file.doc_type ?? ""] ?? "text-text-muted bg-bg-hover";
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 hover:bg-bg-hover transition-colors duration-100 group">
+    <div className={`flex items-center gap-3 px-4 py-3 transition-colors duration-100 group ${selected ? "bg-primary-bg/50" : "hover:bg-bg-hover"}`}>
+      {onToggleSelect && (
+        <input
+          type="checkbox"
+          checked={selected ?? false}
+          onChange={() => onToggleSelect(file.id)}
+          className="w-3.5 h-3.5 cursor-pointer accent-primary shrink-0"
+        />
+      )}
       <div className="w-8 h-8 rounded-md bg-bg-ctrl border border-border flex items-center justify-center shrink-0">
         <FileText className="w-3.5 h-3.5 text-text-muted" />
       </div>
@@ -303,7 +349,8 @@ function FileRow({
           currentFolderId={null}
           onClose={() => setShowMoveModal(false)}
           onMove={handleMove}
-          fileName={file.file_name}
+          title="Pindahkan File"
+          subtitle={file.file_name}
         />
       )}
     </div>
@@ -347,88 +394,3 @@ function AccessButton({
   );
 }
 
-function MoveModal({
-  tree, currentFolderId, onClose, onMove, fileName,
-}: {
-  tree: FolderNode[];
-  currentFolderId: string | null;
-  onClose: () => void;
-  onMove: (folderId: string) => void;
-  fileName: string;
-}) {
-  const [target, setTarget] = useState<string | null>(null);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="bg-bg border border-border rounded-xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden" style={{ maxHeight: "80vh" }}>
-        <div className="px-4 py-3 border-b border-border bg-bg-ctrl">
-          <div className="text-[13px] font-semibold truncate">Pindahkan File</div>
-          <div className="text-[11px] text-text-muted font-mono truncate">{fileName}</div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          <FolderPicker
-            tree={tree}
-            depth={0}
-            currentFolderId={currentFolderId}
-            target={target}
-            onSelect={setTarget}
-          />
-        </div>
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border">
-          <button onClick={onClose} className="btn btn-default">Batal</button>
-          <button
-            onClick={() => target && onMove(target)}
-            disabled={!target}
-            className="btn btn-primary gap-1.5"
-          >
-            <FolderInput className="w-3.5 h-3.5" />
-            Pindahkan
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FolderPicker({
-  tree, depth, currentFolderId, target, onSelect,
-}: {
-  tree: FolderNode[];
-  depth: number;
-  currentFolderId: string | null;
-  target: string | null;
-  onSelect: (id: string) => void;
-}) {
-  return (
-    <>
-      {tree.map((node) => (
-        <div key={node.id}>
-          <button
-            type="button"
-            disabled={node.id === currentFolderId}
-            onClick={() => onSelect(node.id)}
-            className={`w-full flex items-center gap-1.5 py-1.5 rounded text-left text-[12px]
-              ${target === node.id ? "bg-primary-bg text-primary font-semibold" : "hover:bg-bg-hover text-text"}
-              ${node.id === currentFolderId ? "opacity-40 cursor-not-allowed" : ""}`}
-            style={{ paddingLeft: `${8 + depth * 16}px`, paddingRight: 8 }}
-          >
-            <FolderOpen className="w-3.5 h-3.5 text-primary shrink-0" />
-            <span className="flex-1 truncate">{node.name}</span>
-            {node.file_count > 0 && (
-              <span className="text-[10px] text-text-light tabular-nums">{node.file_count}</span>
-            )}
-          </button>
-          {node.children.length > 0 && (
-            <FolderPicker
-              tree={node.children}
-              depth={depth + 1}
-              currentFolderId={currentFolderId}
-              target={target}
-              onSelect={onSelect}
-            />
-          )}
-        </div>
-      ))}
-    </>
-  );
-}

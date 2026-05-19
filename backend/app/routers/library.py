@@ -299,7 +299,8 @@ async def list_folder_files(
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(200, ge=1, le=500),
+    search: str | None = Query(None, description="Cari di file_name / original_name / doc_type"),
 ):
     """List file metadata in a folder (etalase — all roles can read)."""
     folder_result = await db.execute(
@@ -319,13 +320,26 @@ async def list_folder_files(
         )
 
     offset = (page - 1) * page_size
+
+    base_filters = [
+        LibraryFile.folder_id == folder_id,
+        LibraryFile.upload_status == LibraryFileStatus.passed,
+        LibraryFile.is_deleted.is_(False),
+    ]
+    if search:
+        pattern = f"%{search.lower()}%"
+        base_filters.append(
+            sa_text(
+                "lower(coalesce(library_files.file_name, '')) LIKE :pat "
+                "OR lower(coalesce(library_files.original_name, '')) LIKE :pat "
+                "OR lower(coalesce(library_files.doc_type, '')) LIKE :pat "
+                "OR lower(coalesce(library_files.title, '')) LIKE :pat"
+            ).bindparams(pat=pattern)
+        )
+
     files_result = await db.execute(
         select(LibraryFile)
-        .where(
-            LibraryFile.folder_id == folder_id,
-            LibraryFile.upload_status == LibraryFileStatus.passed,
-            LibraryFile.is_deleted.is_(False),
-        )
+        .where(*base_filters)
         .order_by(LibraryFile.created_at.desc())
         .offset(offset)
         .limit(page_size)
@@ -333,11 +347,7 @@ async def list_folder_files(
     files = files_result.scalars().all()
 
     total_result = await db.execute(
-        select(func.count(LibraryFile.id)).where(
-            LibraryFile.folder_id == folder_id,
-            LibraryFile.upload_status == LibraryFileStatus.passed,
-            LibraryFile.is_deleted.is_(False),
-        )
+        select(func.count(LibraryFile.id)).where(*base_filters)
     )
     total = total_result.scalar() or 0
 

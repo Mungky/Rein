@@ -7,7 +7,9 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  Search,
   Upload,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageGuard } from "@/components/guards/page-guard";
@@ -24,7 +26,10 @@ import { UploadZone } from "@/features/library/upload-zone";
 import { useUploadQueue } from "@/features/library/use-upload-queue";
 import { UploadQueuePanel } from "@/features/library/upload-queue-panel";
 import { extractFilesFromDrop } from "@/features/library/file-system-utils";
+import { MoveModal } from "@/features/library/move-modal";
+import { deleteFile, moveFile } from "@/lib/api/library";
 import type { FolderNode } from "@/features/library/types";
+import { FolderInput, Trash2 } from "lucide-react";
 
 const ALLOWED_EXTS = new Set([".docx", ".xlsx", ".pptx", ".pdf", ".zip", ".rar", ".dwg", ".step", ".stp"]);
 const MAX_SIZE = 50 * 1024 * 1024;
@@ -45,7 +50,11 @@ export default function LibraryPage() {
   const [tree, setTree] = useState<FolderNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(220);
+  const [resizing, setResizing] = useState(false);
   const [treeKey, setTreeKey] = useState(0);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
 
   const [selectedFolder, setSelectedFolderState] = useState<FolderNode | null>(null);
 
@@ -58,6 +67,11 @@ export default function LibraryPage() {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const queue = useUploadQueue();
 
+  // Multi-select state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkMove, setShowBulkMove] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState<{ action: string; done: number; total: number } | null>(null);
+
   const [dragOver, setDragOver] = useState(false);
   const mainAreaRef = useRef<HTMLDivElement>(null);
 
@@ -69,6 +83,48 @@ export default function LibraryPage() {
   }, [tree, selectedFolder]);
 
   const refreshTree = useCallback(() => setTreeKey((k) => k + 1), []);
+
+  // ── Resizable sidebar (drag the divider) ──────────────────────────────────
+  useEffect(() => {
+    const saved = window.localStorage.getItem("library:sidebarWidth");
+    if (saved) {
+      const w = parseInt(saved, 10);
+      if (w >= 160 && w <= 600) setSidebarWidth(w);
+    }
+  }, []);
+
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!resizing) return;
+    const onMove = (e: MouseEvent) => {
+      const w = Math.max(160, Math.min(600, e.clientX));
+      setSidebarWidth(w);
+    };
+    const onUp = () => {
+      setResizing(false);
+      window.localStorage.setItem("library:sidebarWidth", String(sidebarWidth));
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [resizing, sidebarWidth]);
+
+  // ── Debounce search input ─────────────────────────────────────────────────
+  useEffect(() => {
+    const id = setTimeout(() => setSearch(searchDraft), 300);
+    return () => clearTimeout(id);
+  }, [searchDraft]);
 
   // ── Browser history integration ────────────────────────────────────────────
   // Each folder navigation pushes a History API entry. The browser back/forward
@@ -138,12 +194,12 @@ export default function LibraryPage() {
   }, [treeKey]);
 
   // ── File loading ───────────────────────────────────────────────────────────
-  const loadFiles = useCallback((folder: FolderNode) => {
+  const loadFiles = useCallback((folder: FolderNode, searchTerm = "") => {
     setFilesLoading(true);
     setFiles([]);
     setFilesError(null);
     setMyPerms(null);
-    getFolderFiles(folder.id)
+    getFolderFiles(folder.id, { search: searchTerm || undefined })
       .then((result) => {
         setFiles(result.files);
         setFilesTotal(result.total);
@@ -157,13 +213,19 @@ export default function LibraryPage() {
 
   useEffect(() => {
     if (!selectedFolder || isSpecialFolder) return;
-    loadFiles(selectedFolder);
-  }, [selectedFolder, isSpecialFolder, loadFiles]);
+    loadFiles(selectedFolder, search);
+  }, [selectedFolder, isSpecialFolder, search, loadFiles]);
+
+  // Reset search when switching folders
+  useEffect(() => {
+    setSearchDraft("");
+    setSearch("");
+  }, [selectedFolder?.id]);
 
   const refreshFiles = useCallback(() => {
     if (!selectedFolder || isSpecialFolder) return;
-    loadFiles(selectedFolder);
-  }, [selectedFolder, isSpecialFolder, loadFiles]);
+    loadFiles(selectedFolder, search);
+  }, [selectedFolder, isSpecialFolder, search, loadFiles]);
 
   // Auto-refresh after a successful batch
   const handleUploadDone = useCallback(() => {
@@ -216,12 +278,91 @@ export default function LibraryPage() {
     setFilesTotal((n) => n - 1);
   }, []);
 
+  // Clear selection when switching folders
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [selectedFolder?.id]);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const allSelected = files.length > 0 && files.every((f) => prev.has(f.id));
+      return allSelected ? new Set() : new Set(files.map((f) => f.id));
+    });
+  }, [files]);
+
+  // Run a bulk operation with concurrency 3
+  const runBulk = useCallback(async (
+    ids: string[],
+    label: string,
+    op: (id: string) => Promise<unknown>,
+  ) => {
+    setBulkBusy({ action: label, done: 0, total: ids.length });
+    const queue = [...ids];
+    let done = 0;
+    const succeeded: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        const id = queue.shift();
+        if (!id) return;
+        try {
+          await op(id);
+          succeeded.push(id);
+        } catch (e) {
+          failed.push({ id, error: e instanceof Error ? e.message : "Gagal" });
+        }
+        done += 1;
+        setBulkBusy({ action: label, done, total: ids.length });
+      }
+    };
+
+    await Promise.all([worker(), worker(), worker()]);
+    setBulkBusy(null);
+    setSelectedIds(new Set());
+
+    if (failed.length > 0) {
+      alert(`${succeeded.length} berhasil, ${failed.length} gagal.\nContoh error: ${failed[0].error}`);
+    }
+    return { succeeded, failed };
+  }, []);
+
+  const handleBulkDelete = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    if (!confirm(`Hapus ${ids.length} file ke Trash Google Drive? (dapat dipulihkan 30 hari)`)) return;
+    const { succeeded } = await runBulk(ids, "Menghapus", (id) => deleteFile(id));
+    setFiles((f) => f.filter((x) => !succeeded.includes(x.id)));
+    setFilesTotal((n) => n - succeeded.length);
+  }, [selectedIds, runBulk]);
+
+  const handleBulkMove = useCallback(async (targetFolderId: string) => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setShowBulkMove(false);
+    const { succeeded } = await runBulk(ids, "Memindahkan", (id) => moveFile(id, targetFolderId));
+    setFiles((f) => f.filter((x) => !succeeded.includes(x.id)));
+    setFilesTotal((n) => n - succeeded.length);
+  }, [selectedIds, runBulk]);
+
   return (
     <PageGuard permission="dcc:view">
       <div className="flex h-full overflow-hidden">
         {/* ── Sidebar ── */}
         {sidebarOpen && (
-          <aside className="w-[220px] min-w-[220px] shrink-0 border-r border-border bg-bg-sidebar flex flex-col overflow-hidden">
+          <aside
+            className="shrink-0 border-r border-border bg-bg-sidebar flex flex-col overflow-hidden"
+            style={{ width: sidebarWidth, minWidth: sidebarWidth }}
+          >
             <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border shrink-0">
               <FolderOpen className="w-3.5 h-3.5 text-primary shrink-0" />
               <span className="text-[12.5px] font-bold flex-1">Perpustakaan</span>
@@ -263,6 +404,15 @@ export default function LibraryPage() {
               )}
             </div>
           </aside>
+        )}
+
+        {/* Resize divider */}
+        {sidebarOpen && (
+          <div
+            onMouseDown={startResize}
+            className={`w-1 cursor-col-resize shrink-0 transition-colors ${resizing ? "bg-primary/60" : "bg-transparent hover:bg-primary/30"}`}
+            title="Tarik untuk mengubah lebar"
+          />
         )}
 
         {/* ── Main content ── */}
@@ -368,12 +518,81 @@ export default function LibraryPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Search bar */}
+                <div className="px-4 pt-3 pb-2 flex items-center gap-2">
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-light pointer-events-none" />
+                    <input
+                      type="text"
+                      value={searchDraft}
+                      onChange={(e) => setSearchDraft(e.target.value)}
+                      placeholder="Cari file di folder ini…"
+                      className="field-input pl-8 pr-7 text-[12.5px] w-full"
+                    />
+                    {searchDraft && (
+                      <button onClick={() => setSearchDraft("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-text-light hover:text-text">
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                  {search && (
+                    <span className="text-[11px] text-text-muted tabular-nums">
+                      {filesTotal} hasil
+                    </span>
+                  )}
+                </div>
+
+                {/* Bulk action bar */}
+                {selectedIds.size > 0 && (
+                  <div className="px-4 py-2 bg-primary-bg border-y border-primary/30 flex items-center gap-2">
+                    <span className="text-[12px] font-semibold text-primary">
+                      {selectedIds.size} file dipilih
+                    </span>
+                    <button onClick={() => setSelectedIds(new Set())} className="text-[11px] underline text-text-muted">
+                      Batal
+                    </button>
+                    <div className="flex-1" />
+                    {(isAdmin || myPerms?.can_move) && (
+                      <button
+                        onClick={() => setShowBulkMove(true)}
+                        disabled={Boolean(bulkBusy)}
+                        className="btn btn-default btn-sm gap-1.5"
+                      >
+                        <FolderInput className="w-3 h-3" /> Pindahkan
+                      </button>
+                    )}
+                    {(isAdmin || myPerms?.can_delete) && (
+                      <button
+                        onClick={handleBulkDelete}
+                        disabled={Boolean(bulkBusy)}
+                        className="btn btn-default btn-sm gap-1.5 text-red border-red/30 hover:bg-red-bg"
+                      >
+                        <Trash2 className="w-3 h-3" /> Hapus
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Bulk busy progress */}
+                {bulkBusy && (
+                  <div className="px-4 py-2 bg-amber-bg border-y border-amber/30 flex items-center gap-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber" />
+                    <span className="text-[12px] text-amber">
+                      {bulkBusy.action} {bulkBusy.done}/{bulkBusy.total}…
+                    </span>
+                  </div>
+                )}
+
                 <FileList
                   files={files}
                   isAdmin={isAdmin}
                   currentUserId={profile?.id}
                   tree={tree}
                   perms={myPerms}
+                  selectedIds={selectedIds}
+                  onToggleSelect={toggleSelect}
+                  onToggleAll={toggleAll}
                   onDeleted={handleFileDeleted}
                   onRenamed={handleFileRenamed}
                   onMoved={handleFileMoved}
@@ -396,6 +615,18 @@ export default function LibraryPage() {
             folder={selectedFolder}
             onClose={() => setPendingFiles([])}
             onApproveAll={handleApproveAll}
+          />
+        )}
+
+        {/* ── Bulk move modal ── */}
+        {showBulkMove && selectedFolder && (
+          <MoveModal
+            tree={tree}
+            currentFolderId={selectedFolder.id}
+            onClose={() => setShowBulkMove(false)}
+            onMove={handleBulkMove}
+            title={`Pindahkan ${selectedIds.size} file`}
+            subtitle="Pilih folder tujuan"
           />
         )}
 

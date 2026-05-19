@@ -56,12 +56,15 @@ export type FolderFilesResult = {
 
 export async function getFolderFiles(
   folderId: string,
-  page = 1,
-  pageSize = 50,
+  opts: { page?: number; pageSize?: number; search?: string } = {},
 ): Promise<FolderFilesResult> {
   const headers = await authHeaders();
+  const q = new URLSearchParams();
+  q.set("page", String(opts.page ?? 1));
+  q.set("page_size", String(opts.pageSize ?? 200));
+  if (opts.search) q.set("search", opts.search);
   const res = await fetch(
-    `${API}/api/library/folders/${folderId}/files?page=${page}&page_size=${pageSize}`,
+    `${API}/api/library/folders/${folderId}/files?${q}`,
     { headers },
   );
   if (!res.ok) {

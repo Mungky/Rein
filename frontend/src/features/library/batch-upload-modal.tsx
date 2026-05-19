@@ -29,13 +29,25 @@ function formatBytes(b: number): string {
   return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Detect doc_type prefix from filename. Accepts both:
+ *   - "TYPE-NUMBER-TITLE.ext"  (full format)
+ *   - "TYPE-anything"          (just type, no archive number)
+ * Returns null if the leading token before the first dash isn't a known type.
+ */
 function parseExistingNumber(filename: string): { docType: string; docNumber: string; titleRest: string } | null {
   const base = stripExt(filename);
-  const match = base.match(/^([A-Za-z]+)-(\S+)-(.+)$/);
-  if (!match) return null;
-  const type = match[1].toUpperCase();
-  if (!KNOWN_TYPES.has(type)) return null;
-  return { docType: type, docNumber: match[2], titleRest: match[3].trim() };
+  const firstDash = base.indexOf("-");
+  if (firstDash === -1) return null;
+  const prefix = base.slice(0, firstDash).toUpperCase().trim();
+  if (!KNOWN_TYPES.has(prefix)) return null;
+  const rest = base.slice(firstDash + 1).trim();
+  // Looks like "12345-rest" — treat as number-then-title
+  const numMatch = rest.match(/^(\d{2,}[\w]*)\s*-\s*(.+)$/);
+  if (numMatch) {
+    return { docType: prefix, docNumber: numMatch[1], titleRest: numMatch[2].trim() };
+  }
+  return { docType: prefix, docNumber: "", titleRest: rest };
 }
 
 function buildFilename(form: UploadFormValues, originalName: string): string {
@@ -153,6 +165,39 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
     setItems((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  // ── Bulk doc_type setters ───────────────────────────────────────────────────
+  const [bulkType, setBulkType] = useState("");
+
+  const applyBulkToAll = useCallback(() => {
+    if (!bulkType) return;
+    setItems((prev) =>
+      prev.map((it) => ({ ...it, form: { ...it.form, doc_type: bulkType } }))
+    );
+  }, [bulkType]);
+
+  const applyBulkToEmpty = useCallback(() => {
+    if (!bulkType) return;
+    setItems((prev) =>
+      prev.map((it) =>
+        it.form.doc_type
+          ? it
+          : { ...it, form: { ...it.form, doc_type: bulkType } }
+      )
+    );
+  }, [bulkType]);
+
+  const fillEmptyWithOther = useCallback(() => {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.form.doc_type
+          ? it
+          : { ...it, form: { ...it.form, doc_type: "OTHER" } }
+      )
+    );
+  }, []);
+
+  const emptyTypeCount = items.filter((it) => !it.form.doc_type).length;
+
   const handleStart = () => {
     if (items.length === 0) return;
     onApproveAll(items.map((it) => ({ file: it.file, form: it.form })));
@@ -183,6 +228,50 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
+
+        {/* Bulk doc_type toolbar */}
+        {items.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-bg-ctrl border-b border-border shrink-0">
+            <span className="text-[10.5px] font-bold uppercase tracking-wider text-text-light shrink-0">
+              Atur sekaligus
+            </span>
+            <select
+              value={bulkType}
+              onChange={(e) => setBulkType(e.target.value)}
+              className="field-select text-[11.5px] w-[150px]"
+            >
+              <option value="">— Tipe Dokumen —</option>
+              {DOC_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+            <button
+              onClick={applyBulkToAll}
+              disabled={!bulkType}
+              className="btn btn-default btn-sm text-[11px]"
+              title="Set tipe ini untuk semua file"
+            >
+              Terapkan ke semua
+            </button>
+            <button
+              onClick={applyBulkToEmpty}
+              disabled={!bulkType || emptyTypeCount === 0}
+              className="btn btn-default btn-sm text-[11px]"
+              title={`Hanya untuk ${emptyTypeCount} file tanpa tipe`}
+            >
+              Yang kosong saja ({emptyTypeCount})
+            </button>
+            {emptyTypeCount > 0 && (
+              <button
+                onClick={fillEmptyWithOther}
+                className="btn btn-default btn-sm text-[11px] text-text-muted"
+                title="Tandai semua tanpa tipe sebagai OTHER"
+              >
+                Kosong → OTHER
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Scrollable file list */}
         <div className="flex-1 overflow-y-auto divide-y divide-border-soft">
