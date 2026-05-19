@@ -21,6 +21,9 @@ class FolderPermission(UUIDMixin, TimestampMixin, Base):
     can_view: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
     can_upload: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
     can_download: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
+    can_rename: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
+    can_delete: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
+    can_move: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
 
     __table_args__ = (
         UniqueConstraint("folder_id", "role", name="uq_folder_permissions_folder_role"),

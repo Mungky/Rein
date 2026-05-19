@@ -37,7 +37,6 @@ from db.models.document_sequence import DocumentSequence, KNOWN_DOC_TYPES, DOC_T
 from db.models.folder_permission import FolderPermission
 from db.models.library_folder import (
     DEPT_LABELS,
-    DEPT_ROLE_MAP,
     LIBRARIAN_ROLES,
     FolderType,
     LibraryFolder,
@@ -60,10 +59,20 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 # Dependency helpers
 # ---------------------------------------------------------------------------
 
-async def _can_upload_to(db: AsyncSession, profile: Profile, folder: LibraryFolder) -> bool:
-    """Admin/director can upload anywhere. Others: check folder_permissions table."""
-    if profile.role in (AppRole.admin, AppRole.director):
+async def _has_folder_perm(
+    db: AsyncSession,
+    profile: Profile,
+    folder: LibraryFolder,
+    field: str,
+) -> bool:
+    """Check folder_permissions for a given field. Admin always allowed.
+
+    Permission is granted on the *root* dept folder and applies to all
+    children of that department.
+    """
+    if profile.role == AppRole.admin:
         return True
+    col = getattr(FolderPermission, field)
     result = await db.execute(
         select(FolderPermission)
         .join(LibraryFolder, FolderPermission.folder_id == LibraryFolder.id)
@@ -71,35 +80,41 @@ async def _can_upload_to(db: AsyncSession, profile: Profile, folder: LibraryFold
             LibraryFolder.department == folder.department,
             LibraryFolder.parent_id.is_(None),
             FolderPermission.role == profile.role,
-            FolderPermission.can_upload.is_(True),
+            col.is_(True),
         )
     )
-    if result.scalar_one_or_none() is not None:
-        return True
-    # Fallback to DEPT_ROLE_MAP if no permissions seeded yet
-    return profile.role.value in DEPT_ROLE_MAP.get(folder.department, set())
+    return result.scalar_one_or_none() is not None
 
 
-async def _can_view_dept(db: AsyncSession, profile: Profile, folder: LibraryFolder) -> bool:
-    """Admin/director can browse any dept. Others: check folder_permissions table."""
-    if profile.role in (AppRole.admin, AppRole.director):
-        return True
-    result = await db.execute(
-        select(FolderPermission)
-        .join(LibraryFolder, FolderPermission.folder_id == LibraryFolder.id)
-        .where(
-            LibraryFolder.department == folder.department,
-            LibraryFolder.parent_id.is_(None),
-            FolderPermission.role == profile.role,
-            FolderPermission.can_view.is_(True),
-        )
-    )
-    if result.scalar_one_or_none() is not None:
-        return True
-    return profile.role.value in DEPT_ROLE_MAP.get(folder.department, set())
+async def _can_view_dept(db, profile, folder) -> bool:
+    return await _has_folder_perm(db, profile, folder, "can_view")
+
+
+async def _can_upload_to(db, profile, folder) -> bool:
+    return await _has_folder_perm(db, profile, folder, "can_upload")
+
+
+async def _can_download_from(db, profile, folder) -> bool:
+    return await _has_folder_perm(db, profile, folder, "can_download")
+
+
+async def _can_rename_in(db, profile, folder) -> bool:
+    return await _has_folder_perm(db, profile, folder, "can_rename")
+
+
+async def _can_delete_in(db, profile, folder) -> bool:
+    return await _has_folder_perm(db, profile, folder, "can_delete")
+
+
+async def _can_move_in(db, profile, folder) -> bool:
+    return await _has_folder_perm(db, profile, folder, "can_move")
 
 
 def _is_librarian(profile: Profile) -> bool:
+    """Pustakawan = anyone in LIBRARIAN_ROLES (director, manager) + admin.
+
+    Used to gate view-request approval endpoints. Admin always counts.
+    """
     return profile.role.value in LIBRARIAN_ROLES or profile.role == AppRole.admin
 
 
@@ -144,10 +159,14 @@ async def get_folder_tree(
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Return folder tree filtered to the user's own dept (admin/director get all)."""
+    """Return folder tree filtered to depts the user has can_view on.
+
+    Admin sees all. Others only see departments where folder_permissions
+    grants them can_view on the root folder.
+    """
     base_where = [LibraryFolder.is_active.is_(True)]
 
-    if profile.role not in (AppRole.admin, AppRole.director):
+    if profile.role != AppRole.admin:
         fp_result = await db.execute(
             select(LibraryFolder.department)
             .join(FolderPermission, FolderPermission.folder_id == LibraryFolder.id)
@@ -158,12 +177,6 @@ async def get_folder_tree(
             )
         )
         user_depts = [row[0] for row in fp_result.all()]
-        if not user_depts:
-            # Fallback if folder_permissions not yet seeded
-            user_depts = [
-                dept for dept, roles in DEPT_ROLE_MAP.items()
-                if profile.role.value in roles
-            ]
         if not user_depts:
             return {"tree": []}
         base_where.append(LibraryFolder.department.in_(user_depts))
@@ -299,28 +312,11 @@ async def list_folder_files(
     if not folder:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
 
-    # Cross-dept: return summary only (no file listing)
     if not await _can_view_dept(db, profile, folder):
-        row = (
-            await db.execute(
-                select(func.count(LibraryFile.id), func.max(LibraryFile.created_at)).where(
-                    LibraryFile.folder_id == folder_id,
-                    LibraryFile.upload_status == LibraryFileStatus.passed,
-                    LibraryFile.is_deleted.is_(False),
-                )
-            )
-        ).one()
-        return {
-            "restricted": True,
-            "folder": {
-                "id": str(folder.id),
-                "name": folder.name,
-                "department": folder.department,
-                "dept_label": DEPT_LABELS.get(folder.department, folder.department),
-            },
-            "file_count": row[0] or 0,
-            "last_updated": row[1].isoformat() if row[1] else None,
-        }
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki izin melihat folder ini",
+        )
 
     offset = (page - 1) * page_size
     files_result = await db.execute(
@@ -595,9 +591,11 @@ async def upload_file(
             "file_name": file_name,
             "note": note or "",
             "folder_path": folder.path,
+            "department": folder.department,
+            "dept_label": DEPT_LABELS.get(folder.department, folder.department),
             "gdrive_link": drive_result.get("webViewLink", ""),
             "uploaded_by": profile.full_name,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
         })
     except Exception as enqueue_exc:
         logger.warning("INDEX_TO_SHEETS enqueue failed (non-fatal): %s", enqueue_exc)
@@ -681,19 +679,13 @@ async def request_view_access(
     if not lib_file:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File tidak ditemukan")
 
-    # Director: direct access — return link immediately
-    if profile.role == AppRole.director and lib_file.gdrive_web_link:
-        await _write_log(db, profile, LOG_VIEW_APPROVED, "file", file_id,
-                         metadata={"direct": True})
-        await db.commit()
-        return {
-            "status": "approved",
-            "direct_access": True,
-            "temp_link": lib_file.gdrive_web_link,
-            "message": "Akses langsung diberikan sebagai Direktur",
-        }
+    # Look up the file's folder for permission check
+    folder_result = await db.execute(
+        select(LibraryFolder).where(LibraryFolder.id == lib_file.folder_id)
+    )
+    file_folder = folder_result.scalar_one_or_none()
 
-    # Admin: full access too
+    # Admin: always direct access
     if profile.role == AppRole.admin and lib_file.gdrive_web_link:
         await _write_log(db, profile, LOG_VIEW_APPROVED, "file", file_id,
                          metadata={"direct": True, "role": "admin"})
@@ -703,6 +695,18 @@ async def request_view_access(
             "direct_access": True,
             "temp_link": lib_file.gdrive_web_link,
             "message": "Akses diberikan sebagai Administrator",
+        }
+
+    # User with can_download on this dept: direct access (no approval needed)
+    if file_folder and lib_file.gdrive_web_link and await _can_download_from(db, profile, file_folder):
+        await _write_log(db, profile, LOG_VIEW_APPROVED, "file", file_id,
+                         metadata={"direct": True, "role": profile.role.value})
+        await db.commit()
+        return {
+            "status": "approved",
+            "direct_access": True,
+            "temp_link": lib_file.gdrive_web_link,
+            "message": "Akses langsung berdasarkan izin download folder",
         }
 
     # Check existing pending request (avoid duplicates)
@@ -871,6 +875,202 @@ async def deny_view_request(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/library/view-requests/inbox   (Pustakawan: list pending)
+# ---------------------------------------------------------------------------
+
+@router.get("/view-requests/inbox")
+async def list_view_request_inbox(
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Pustakawan inbox: list pending view requests + recently resolved."""
+    if not _is_librarian(profile):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Hanya Pustakawan yang dapat melihat inbox permintaan",
+        )
+
+    now = datetime.now(timezone.utc)
+    # Auto-expire stale pending
+    stale_result = await db.execute(
+        select(ViewRequest).where(
+            ViewRequest.status == "pending",
+            ViewRequest.expires_at < now,
+        )
+    )
+    for r in stale_result.scalars().all():
+        r.status = "expired"
+
+    pending_result = await db.execute(
+        select(ViewRequest, LibraryFile, Profile)
+        .join(LibraryFile, ViewRequest.file_id == LibraryFile.id)
+        .join(Profile, ViewRequest.requester_id == Profile.id)
+        .where(ViewRequest.status == "pending", ViewRequest.expires_at >= now)
+        .order_by(ViewRequest.created_at.desc())
+    )
+    pending = pending_result.all()
+
+    recent_result = await db.execute(
+        select(ViewRequest, LibraryFile, Profile)
+        .join(LibraryFile, ViewRequest.file_id == LibraryFile.id)
+        .join(Profile, ViewRequest.requester_id == Profile.id)
+        .where(ViewRequest.status.in_(("approved", "denied", "expired")))
+        .order_by(ViewRequest.approved_at.desc().nullslast(), ViewRequest.created_at.desc())
+        .limit(50)
+    )
+    recent = recent_result.all()
+
+    await db.commit()
+
+    def _shape(req: ViewRequest, lib_file: LibraryFile, requester: Profile) -> dict:
+        return {
+            "id": str(req.id),
+            "status": req.status,
+            "file_id": str(lib_file.id),
+            "file_name": lib_file.file_name or lib_file.original_name,
+            "doc_type": lib_file.doc_type,
+            "requester_name": requester.full_name,
+            "requester_username": requester.username,
+            "requester_role": requester.role.value,
+            "created_at": req.created_at.isoformat(),
+            "expires_at": req.expires_at.isoformat() if req.expires_at else None,
+            "approved_at": req.approved_at.isoformat() if req.approved_at else None,
+        }
+
+    return {
+        "pending": [_shape(*row) for row in pending],
+        "recent": [_shape(*row) for row in recent],
+    }
+
+
+@router.post("/view-requests/{req_id}/decide")
+async def decide_view_request(
+    req_id: uuid.UUID,
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    action: str = Query(..., pattern="^(approve|deny)$"),
+):
+    """Approve or deny a view request via UI (Pustakawan only)."""
+    if not _is_librarian(profile):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
+
+    req_result = await db.execute(select(ViewRequest).where(ViewRequest.id == req_id))
+    req = req_result.scalar_one_or_none()
+    if not req:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Permintaan tidak ditemukan")
+    if req.status != "pending":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=f"Permintaan sudah dalam status '{req.status}'",
+        )
+
+    now = datetime.now(timezone.utc)
+    if req.expires_at < now:
+        req.status = "expired"
+        await db.commit()
+        raise HTTPException(status.HTTP_410_GONE, detail="Permintaan sudah kedaluwarsa")
+
+    if action == "deny":
+        req.status = "denied"
+        req.approved_by = profile.id
+        req.approved_at = now
+        await _write_log(db, profile, LOG_VIEW_DENIED, "view_request", req.id,
+                         metadata={"file_id": str(req.file_id)})
+        await db.commit()
+        return {"status": "denied", "id": str(req.id)}
+
+    # action == approve
+    file_result = await db.execute(select(LibraryFile).where(LibraryFile.id == req.file_id))
+    lib_file = file_result.scalar_one_or_none()
+
+    req.status = "approved"
+    req.approved_by = profile.id
+    req.approved_at = now
+    req.temp_link = lib_file.gdrive_web_link if lib_file else None
+    req.link_expires_at = now + timedelta(minutes=LINK_TTL_MINUTES)
+
+    await _write_log(db, profile, LOG_VIEW_APPROVED, "view_request", req.id,
+                     metadata={"file_id": str(req.file_id), "requester_id": str(req.requester_id)})
+    await db.commit()
+    return {
+        "status": "approved",
+        "id": str(req.id),
+        "link_expires_at": req.link_expires_at.isoformat(),
+    }
+
+
+@router.get("/admin/email-config", dependencies=[Depends(require_role(AppRole.admin))])
+async def get_email_config():
+    """Admin: check SMTP + LIBRARIAN_EMAILS configuration without exposing secrets."""
+    raw_emails = settings.librarian_emails or settings.smtp_from
+    recipients = [e.strip() for e in raw_emails.split(",") if e.strip()]
+    return {
+        "smtp_configured": bool(settings.smtp_user and settings.smtp_password),
+        "smtp_host": settings.smtp_host,
+        "smtp_port": settings.smtp_port,
+        "smtp_from": settings.smtp_from or None,
+        "librarian_emails_configured": bool(settings.librarian_emails),
+        "recipient_count": len(recipients),
+        "recipients_redacted": [_redact_email(e) for e in recipients],
+    }
+
+
+def _redact_email(email: str) -> str:
+    """Show 'b**i@gmail.com' instead of full email."""
+    if "@" not in email:
+        return email
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        return local + "@" + domain
+    return local[0] + "*" * (len(local) - 2) + local[-1] + "@" + domain
+
+
+@router.post("/admin/email-test", dependencies=[Depends(require_role(AppRole.admin))])
+async def send_test_email(
+    profile: Annotated[Profile, Depends(get_current_profile)],
+):
+    """Admin: send a test email to all LIBRARIAN_EMAILS recipients (synchronous, surfaces errors)."""
+    from app.services.email import send_email
+
+    raw_emails = settings.librarian_emails or settings.smtp_from
+    recipients = [e.strip() for e in raw_emails.split(",") if e.strip()]
+    if not recipients:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="LIBRARIAN_EMAILS / SMTP_FROM tidak diset di environment.",
+        )
+
+    if not settings.smtp_user or not settings.smtp_password:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SMTP_USER / SMTP_PASSWORD tidak diset — email tidak dapat dikirim.",
+        )
+
+    sent = 0
+    errors: list[str] = []
+    for email in recipients:
+        try:
+            await send_email(
+                to=email,
+                subject="[REIN Library] Test Email",
+                body=(
+                    f"Halo,\n\nIni adalah email tes dari REIN Digital Library.\n"
+                    f"Jika Anda menerima email ini, konfigurasi notifikasi sudah benar.\n\n"
+                    f"Dikirim oleh: {profile.full_name} ({profile.username})\n"
+                ),
+            )
+            sent += 1
+        except Exception as exc:
+            errors.append(f"{_redact_email(email)}: {exc}")
+
+    return {
+        "sent": sent,
+        "recipients": len(recipients),
+        "errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /api/library/files/{file_id}/link
 # Returns temp link if view_request is approved and not yet expired
 # ---------------------------------------------------------------------------
@@ -882,13 +1082,26 @@ async def get_file_link(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Poll for approved temp link. Frontend calls this after request_view_access."""
-    # Admin + Director bypass
-    if profile.role in (AppRole.admin, AppRole.director):
+    # Admin: always direct
+    if profile.role == AppRole.admin:
         file_result = await db.execute(
             select(LibraryFile).where(LibraryFile.id == file_id)
         )
         lib_file = file_result.scalar_one_or_none()
         if lib_file and lib_file.gdrive_web_link:
+            return {"status": "approved", "temp_link": lib_file.gdrive_web_link}
+
+    # User with can_download: direct
+    file_result = await db.execute(
+        select(LibraryFile).where(LibraryFile.id == file_id)
+    )
+    lib_file = file_result.scalar_one_or_none()
+    if lib_file:
+        folder_result = await db.execute(
+            select(LibraryFolder).where(LibraryFolder.id == lib_file.folder_id)
+        )
+        folder = folder_result.scalar_one_or_none()
+        if folder and lib_file.gdrive_web_link and await _can_download_from(db, profile, folder):
             return {"status": "approved", "temp_link": lib_file.gdrive_web_link}
 
     now = datetime.now(timezone.utc)
@@ -933,13 +1146,17 @@ async def get_file_link(
 # DELETE /api/library/files/{file_id}   (admin only)
 # ---------------------------------------------------------------------------
 
-@router.delete("/files/{file_id}", dependencies=[Depends(require_role(AppRole.admin))])
+@router.delete("/files/{file_id}")
 async def delete_file(
     file_id: uuid.UUID,
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Soft-delete a file. Only admin can do this."""
+    """Soft-delete a file + move to Drive Trash.
+
+    Allowed: admin OR user with can_delete on the file's folder OR the original uploader.
+    File goes to Drive Trash (recoverable for 30 days), not permanent delete.
+    """
     file_result = await db.execute(
         select(LibraryFile).where(LibraryFile.id == file_id)
     )
@@ -947,20 +1164,142 @@ async def delete_file(
     if not lib_file:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File tidak ditemukan")
 
+    folder_result = await db.execute(
+        select(LibraryFolder).where(LibraryFolder.id == lib_file.folder_id)
+    )
+    folder = folder_result.scalar_one_or_none()
+
+    is_admin = profile.role == AppRole.admin
+    is_uploader = lib_file.uploader_id == profile.id
+    can_delete = is_admin or is_uploader
+    if not can_delete and folder:
+        can_delete = await _can_delete_in(db, profile, folder)
+    if not can_delete:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki izin menghapus file ini",
+        )
+
+    # Move to Drive Trash first (recoverable). Soft-fail so DB state isn't blocked.
+    drive_trashed = False
+    if lib_file.gdrive_file_id:
+        from app.services import gdrive
+        try:
+            await gdrive.trash_file(lib_file.gdrive_file_id)
+            drive_trashed = True
+        except Exception as exc:
+            logger.warning("Drive trash failed for file %s: %s", file_id, exc)
+
     lib_file.is_deleted = True
     lib_file.upload_status = LibraryFileStatus.archived
 
     await _write_log(
         db, profile, LOG_FILE_DELETE, "file", file_id,
-        metadata={"filename": lib_file.file_name, "folder_id": str(lib_file.folder_id)},
+        metadata={
+            "filename": lib_file.file_name,
+            "folder_id": str(lib_file.folder_id),
+            "drive_trashed": drive_trashed,
+        },
     )
     await db.commit()
-    return {"message": "File dihapus dari perpustakaan"}
+    return {
+        "message": "File dipindahkan ke Trash Google Drive (dapat dipulihkan 30 hari)",
+        "drive_trashed": drive_trashed,
+    }
 
 
 # ---------------------------------------------------------------------------
 # PATCH /api/library/files/{file_id}/rename
 # ---------------------------------------------------------------------------
+
+class MoveFileRequest(BaseModel):
+    target_folder_id: str
+
+
+@router.patch("/files/{file_id}/move")
+async def move_file(
+    file_id: uuid.UUID,
+    body: MoveFileRequest,
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Move a file to another folder.
+
+    Allowed: admin OR user with can_move on source folder AND can_upload on
+    destination folder. Drive is synced — file moves between Drive folders too.
+    """
+    file_result = await db.execute(
+        select(LibraryFile).where(
+            LibraryFile.id == file_id,
+            LibraryFile.is_deleted.is_(False),
+        )
+    )
+    lib_file = file_result.scalar_one_or_none()
+    if not lib_file:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File tidak ditemukan")
+
+    target_uuid = uuid.UUID(body.target_folder_id)
+    if target_uuid == lib_file.folder_id:
+        return {"id": str(lib_file.id), "folder_id": str(lib_file.folder_id), "moved": False}
+
+    src_result = await db.execute(
+        select(LibraryFolder).where(LibraryFolder.id == lib_file.folder_id)
+    )
+    src_folder = src_result.scalar_one_or_none()
+
+    dst_result = await db.execute(
+        select(LibraryFolder).where(
+            LibraryFolder.id == target_uuid,
+            LibraryFolder.is_active.is_(True),
+        )
+    )
+    dst_folder = dst_result.scalar_one_or_none()
+    if not dst_folder:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tujuan tidak ditemukan")
+
+    is_admin = profile.role == AppRole.admin
+    if not is_admin:
+        if src_folder and not await _can_move_in(db, profile, src_folder):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail="Tidak memiliki izin memindahkan file dari folder asal",
+            )
+        if not await _can_upload_to(db, profile, dst_folder):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail="Tidak memiliki izin upload ke folder tujuan",
+            )
+
+    # Drive sync (best-effort)
+    drive_moved = False
+    if lib_file.gdrive_file_id and dst_folder.gdrive_folder_id:
+        from app.services import gdrive
+        try:
+            await gdrive.move_file(lib_file.gdrive_file_id, dst_folder.gdrive_folder_id)
+            drive_moved = True
+        except Exception as exc:
+            logger.warning("Drive move failed for file %s: %s", file_id, exc)
+
+    old_folder_id = lib_file.folder_id
+    lib_file.folder_id = target_uuid
+    lib_file.gdrive_folder_id = dst_folder.gdrive_folder_id
+
+    await _write_log(
+        db, profile, "move_file", "file", file_id,
+        metadata={
+            "from_folder_id": str(old_folder_id),
+            "to_folder_id": str(target_uuid),
+            "drive_moved": drive_moved,
+        },
+    )
+    await db.commit()
+    return {
+        "id": str(lib_file.id),
+        "folder_id": str(lib_file.folder_id),
+        "moved": True,
+        "drive_moved": drive_moved,
+    }
+
 
 class RenameFileRequest(BaseModel):
     file_name: str
@@ -973,7 +1312,10 @@ async def rename_file(
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Rename a file. Admin can rename any file; uploader can rename their own."""
+    """Rename a file.
+
+    Allowed: admin OR user with can_rename on file's folder OR the uploader.
+    """
     file_result = await db.execute(
         select(LibraryFile).where(
             LibraryFile.id == file_id,
@@ -984,7 +1326,17 @@ async def rename_file(
     if not lib_file:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File tidak ditemukan")
 
-    if profile.role != AppRole.admin and lib_file.uploader_id != profile.id:
+    is_admin = profile.role == AppRole.admin
+    is_uploader = lib_file.uploader_id == profile.id
+    can_rename = is_admin or is_uploader
+    if not can_rename:
+        folder_result = await db.execute(
+            select(LibraryFolder).where(LibraryFolder.id == lib_file.folder_id)
+        )
+        folder = folder_result.scalar_one_or_none()
+        if folder:
+            can_rename = await _can_rename_in(db, profile, folder)
+    if not can_rename:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Tidak memiliki izin rename file ini")
 
     new_name = body.file_name.strip()
@@ -1017,14 +1369,14 @@ class RenameFolderRequest(BaseModel):
     name: str
 
 
-@router.patch("/folders/{folder_id}/rename", dependencies=[Depends(require_role(AppRole.admin))])
+@router.patch("/folders/{folder_id}/rename")
 async def rename_folder(
     folder_id: uuid.UUID,
     body: RenameFolderRequest,
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Admin: rename a folder and update its path."""
+    """Rename a folder. Allowed: admin OR user with can_rename on the dept."""
     folder_result = await db.execute(
         select(LibraryFolder).where(
             LibraryFolder.id == folder_id,
@@ -1034,6 +1386,16 @@ async def rename_folder(
     folder = folder_result.scalar_one_or_none()
     if not folder:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
+
+    if profile.role != AppRole.admin and not await _can_rename_in(db, profile, folder):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Tidak memiliki izin rename folder ini")
+
+    # Department root folders should not be renamed (they map to fixed dept slugs)
+    if folder.folder_type == FolderType.department and folder.parent_id is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Folder departemen induk tidak dapat di-rename",
+        )
 
     new_name = body.name.strip()
     if not new_name:
@@ -1093,13 +1455,19 @@ async def link_folder_to_drive(
 # DELETE /api/library/folders/{folder_id}   (admin only)
 # ---------------------------------------------------------------------------
 
-@router.delete("/folders/{folder_id}", dependencies=[Depends(require_role(AppRole.admin))])
+@router.delete("/folders/{folder_id}")
 async def delete_folder(
     folder_id: uuid.UUID,
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    cascade: bool = Query(False, description="Hapus juga semua file aktif di dalam folder"),
 ):
-    """Admin: soft-delete a non-department folder (and all its empty descendants)."""
+    """Soft-delete a non-department folder + move to Drive Trash.
+
+    Allowed: admin OR user with can_delete on the dept.
+    If cascade=true, all active files inside are also trashed (recoverable via Drive Trash).
+    Department root folders cannot be deleted.
+    """
     result = await db.execute(
         select(LibraryFolder).where(
             LibraryFolder.id == folder_id,
@@ -1109,44 +1477,90 @@ async def delete_folder(
     folder = result.scalar_one_or_none()
     if not folder:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
-    if folder.folder_type == FolderType.department:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Folder departemen tidak dapat dihapus")
+    if folder.folder_type == FolderType.department and folder.parent_id is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Folder departemen induk tidak dapat dihapus")
 
-    # Refuse if folder has active files
-    files_count_result = await db.execute(
-        select(func.count(LibraryFile.id)).where(
-            LibraryFile.folder_id == folder_id,
-            LibraryFile.upload_status == LibraryFileStatus.passed,
-            LibraryFile.is_deleted.is_(False),
-        )
-    )
-    file_count = files_count_result.scalar_one()
-    if file_count > 0:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail=f"Folder masih memiliki {file_count} file aktif. Hapus file terlebih dahulu.",
-        )
+    if profile.role != AppRole.admin and not await _can_delete_in(db, profile, folder):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Tidak memiliki izin menghapus folder ini")
 
-    # Recursively soft-delete the folder and all descendants
-    async def _deactivate(fid: uuid.UUID) -> None:
+    # Count active files across folder + all descendants
+    async def _collect_descendant_ids(fid: uuid.UUID) -> list[uuid.UUID]:
+        ids: list[uuid.UUID] = [fid]
         children_result = await db.execute(
-            select(LibraryFolder).where(
+            select(LibraryFolder.id).where(
                 LibraryFolder.parent_id == fid,
                 LibraryFolder.is_active.is_(True),
             )
         )
-        for child in children_result.scalars().all():
-            await _deactivate(child.id)
+        for (child_id,) in children_result.all():
+            ids.extend(await _collect_descendant_ids(child_id))
+        return ids
+
+    all_folder_ids = await _collect_descendant_ids(folder_id)
+
+    active_files_result = await db.execute(
+        select(LibraryFile).where(
+            LibraryFile.folder_id.in_(all_folder_ids),
+            LibraryFile.upload_status == LibraryFileStatus.passed,
+            LibraryFile.is_deleted.is_(False),
+        )
+    )
+    active_files = active_files_result.scalars().all()
+
+    if active_files and not cascade:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=(
+                f"Folder masih memiliki {len(active_files)} file aktif. "
+                "Hapus file dulu atau gunakan cascade=true."
+            ),
+        )
+
+    # Trash all files in Drive first (best-effort)
+    from app.services import gdrive
+    trashed_count = 0
+    for lib_file in active_files:
+        if lib_file.gdrive_file_id:
+            try:
+                await gdrive.trash_file(lib_file.gdrive_file_id)
+                trashed_count += 1
+            except Exception as exc:
+                logger.warning("Failed to trash Drive file %s: %s", lib_file.gdrive_file_id, exc)
+        lib_file.is_deleted = True
+        lib_file.upload_status = LibraryFileStatus.archived
+
+    # Trash Drive folder (recursive — Drive moves all contents to trash with it)
+    folder_drive_trashed = False
+    if folder.gdrive_folder_id:
+        try:
+            await gdrive.trash_folder(folder.gdrive_folder_id)
+            folder_drive_trashed = True
+        except Exception as exc:
+            logger.warning("Failed to trash Drive folder %s: %s", folder.gdrive_folder_id, exc)
+
+    # Soft-delete folder + all descendants
+    for fid in all_folder_ids:
         f_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == fid))
         f = f_result.scalar_one_or_none()
         if f:
             f.is_active = False
 
-    await _deactivate(folder_id)
-    await _write_log(db, profile, "delete_folder", "folder", folder_id,
-                     metadata={"name": folder.name, "path": folder.path})
+    await _write_log(
+        db, profile, "delete_folder", "folder", folder_id,
+        metadata={
+            "name": folder.name, "path": folder.path,
+            "files_trashed": trashed_count,
+            "drive_folder_trashed": folder_drive_trashed,
+            "cascade": cascade,
+        },
+    )
     await db.commit()
-    return {"id": str(folder_id), "deleted": True}
+    return {
+        "id": str(folder_id),
+        "deleted": True,
+        "files_trashed": trashed_count,
+        "drive_folder_trashed": folder_drive_trashed,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1264,10 +1678,8 @@ async def create_folder(
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Create a sub-folder inside an existing department shelf."""
-    if profile.role not in (AppRole.admin, AppRole.director, AppRole.manager, AppRole.operational_manager):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Tidak memiliki izin membuat folder")
-
+    """Create a sub-folder. Allowed: admin OR user with can_upload on the dept."""
+    parent = None
     parent_path = ""
     if body.parent_id:
         parent_result = await db.execute(
@@ -1277,6 +1689,16 @@ async def create_folder(
         if not parent:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Parent folder tidak ditemukan")
         parent_path = parent.path + " / "
+
+    # Permission check: admin OR can_upload on the dept
+    if profile.role != AppRole.admin:
+        # Build a synthetic folder ref for the dept check (only `department` is read)
+        check_folder = parent if parent else LibraryFolder(department=body.department, name="", path="")
+        if not await _can_upload_to(db, profile, check_folder):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail="Tidak memiliki izin membuat folder di departemen ini",
+            )
 
     folder = LibraryFolder(
         parent_id=uuid.UUID(body.parent_id) if body.parent_id else None,
@@ -1309,73 +1731,116 @@ async def create_folder(
 # GET /api/library/admin/temp   (admin only)
 # ---------------------------------------------------------------------------
 
-@router.get("/admin/temp", dependencies=[Depends(require_role(AppRole.admin))])
-async def get_admin_temp(
+@router.get("/admin/activity", dependencies=[Depends(require_role(AppRole.admin))])
+async def get_admin_activity(
     db: Annotated[AsyncSession, Depends(get_db)],
+    search: str | None = Query(None, description="Cari di nama file, uploader, atau username"),
+    action: str | None = Query(None, description="Filter berdasarkan jenis aksi"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
 ):
-    """Admin panel: in-progress / stuck files + recent activity log."""
-    # Files not yet resolved: uploading, in_audit, or failed (not deleted)
-    temp_result = await db.execute(
-        select(LibraryFile)
-        .where(
-            LibraryFile.upload_status.in_([
-                LibraryFileStatus.uploading,
-                LibraryFileStatus.in_audit,
-                LibraryFileStatus.failed,
-            ]),
-            LibraryFile.is_deleted.is_(False),
-        )
-        .order_by(LibraryFile.created_at.desc())
-        .limit(100)
-    )
-    temp_files = temp_result.scalars().all()
+    """Merged activity timeline — replaces /admin/temp.
 
-    # Audit jobs for those files
-    file_ids = [f.id for f in temp_files]
-    jobs_by_file: dict[uuid.UUID, list] = {}
+    Returns audit log entries enriched with actor name + current file status
+    (for entries that reference a file). The frontend renders this as a single
+    timeline with optional status dots for in-progress files.
+    """
+    offset = (page - 1) * page_size
+
+    base_q = (
+        select(LibraryAuditLog, Profile)
+        .outerjoin(Profile, LibraryAuditLog.actor_id == Profile.id)
+    )
+
+    where_clauses = []
+    if action:
+        where_clauses.append(LibraryAuditLog.action == action)
+    if search:
+        pattern = f"%{search.lower()}%"
+        where_clauses.append(
+            sa_text(
+                "lower(coalesce(library_audit_log.metadata->>'filename', '')) LIKE :pat "
+                "OR lower(coalesce(profiles.full_name, '')) LIKE :pat "
+                "OR lower(coalesce(profiles.username, '')) LIKE :pat"
+            ).bindparams(pat=pattern)
+        )
+    if where_clauses:
+        base_q = base_q.where(*where_clauses)
+
+    count_q = select(func.count()).select_from(base_q.subquery())
+    total = (await db.execute(count_q)).scalar() or 0
+
+    rows_result = await db.execute(
+        base_q.order_by(LibraryAuditLog.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+    )
+    raw = rows_result.all()
+
+    # Collect file targets to hydrate with current status + audit layers
+    file_ids = [log.target_id for log, _ in raw if log.target_type == "file" and log.target_id]
+    files_by_id: dict[uuid.UUID, LibraryFile] = {}
+    jobs_by_file: dict[uuid.UUID, list[dict]] = {}
     if file_ids:
+        files_result = await db.execute(
+            select(LibraryFile).where(LibraryFile.id.in_(file_ids))
+        )
+        files_by_id = {f.id: f for f in files_result.scalars().all()}
+
         jobs_result = await db.execute(
-            select(AuditJob)
-            .where(AuditJob.file_id.in_(file_ids))
-            .order_by(AuditJob.layer)
+            select(AuditJob).where(AuditJob.file_id.in_(file_ids)).order_by(AuditJob.layer)
         )
         for j in jobs_result.scalars().all():
             jobs_by_file.setdefault(j.file_id, []).append({
                 "layer": j.layer,
                 "layer_name": j.layer_name,
                 "status": j.status,
-                "result": j.result,
             })
 
-    # Recent activity log (100 most recent entries)
-    log_result = await db.execute(
-        select(LibraryAuditLog)
-        .order_by(LibraryAuditLog.created_at.desc())
-        .limit(100)
+    entries = []
+    for log, actor in raw:
+        meta = log.log_metadata or {}
+        file_for_log = files_by_id.get(log.target_id) if log.target_id else None
+        entries.append({
+            "id": log.id,
+            "action": log.action,
+            "actor_name": actor.full_name if actor else None,
+            "actor_username": actor.username if actor else None,
+            "actor_role": actor.role.value if actor else None,
+            "target_type": log.target_type,
+            "target_id": str(log.target_id) if log.target_id else None,
+            "file_name": (
+                file_for_log.file_name or file_for_log.original_name
+                if file_for_log else meta.get("filename")
+            ),
+            "file_status": file_for_log.upload_status.value if file_for_log else None,
+            "audit_layers": jobs_by_file.get(log.target_id, []) if log.target_id else [],
+            "meta": meta,
+            "created_at": log.created_at.isoformat(),
+        })
+
+    # Detect dead-letter: files stuck in uploading > 10 min (admin should reset)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+    stuck_result = await db.execute(
+        select(func.count(LibraryFile.id)).where(
+            LibraryFile.upload_status == LibraryFileStatus.uploading,
+            LibraryFile.is_deleted.is_(False),
+            LibraryFile.created_at < cutoff,
+        )
     )
-    log_entries = log_result.scalars().all()
+    stuck_count = stuck_result.scalar() or 0
 
     return {
-        "temp_files": [
-            {
-                **_file_meta(f),
-                "upload_status": f.upload_status.value,
-                "audit_layers": jobs_by_file.get(f.id, []),
-            }
-            for f in temp_files
-        ],
-        "activity_log": [
-            {
-                "id": str(e.id),
-                "action": e.action,
-                "actor_id": str(e.actor_id) if e.actor_id else None,
-                "target_type": e.target_type,
-                "target_id": str(e.target_id) if e.target_id else None,
-                "meta": e.log_metadata,
-                "created_at": e.created_at.isoformat(),
-            }
-            for e in log_entries
-        ],
+        "entries": entries,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "stuck_count": stuck_count,
+        "email_configured": bool(
+            (settings.librarian_emails or settings.smtp_from)
+            and settings.smtp_user
+            and settings.smtp_password
+        ),
     }
 
 
@@ -1386,22 +1851,79 @@ async def get_admin_temp(
 
 @router.post("/admin/reset-stuck", dependencies=[Depends(require_role(AppRole.admin))])
 async def reset_stuck_uploads(
+    profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    minutes: int = Query(10, ge=1, le=1440, description="Cutoff dalam menit (default 10)"),
 ):
-    """Mark stuck 'uploading' files (older than 15 min) as 'failed' so they can be retried."""
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+    """Mark stuck 'uploading' / 'in_audit' files older than `minutes` as 'failed'.
+
+    Surfaces both how many were reset and which files (so admin can decide
+    whether to fully delete the records via Hapus Permanen).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     result = await db.execute(
         select(LibraryFile).where(
-            LibraryFile.upload_status == LibraryFileStatus.uploading,
+            LibraryFile.upload_status.in_([
+                LibraryFileStatus.uploading,
+                LibraryFileStatus.in_audit,
+            ]),
             LibraryFile.is_deleted.is_(False),
             LibraryFile.created_at < cutoff,
         )
     )
     stuck = result.scalars().all()
+    affected = []
     for f in stuck:
+        affected.append({"id": str(f.id), "file_name": f.file_name or f.original_name})
         f.upload_status = LibraryFileStatus.failed
+
+    if stuck:
+        await _write_log(
+            db, profile, "reset_stuck", target_type=None, target_id=None,
+            metadata={"count": len(stuck), "cutoff_minutes": minutes},
+        )
     await db.commit()
-    return {"reset_count": len(stuck)}
+    return {"reset_count": len(stuck), "files": affected}
+
+
+@router.delete("/admin/temp/{file_id}", dependencies=[Depends(require_role(AppRole.admin))])
+async def purge_temp_file(
+    file_id: uuid.UUID,
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Hard-remove a failed/stuck record from DB (and trash any orphan Drive file).
+
+    Use this when reset-stuck flipped a record to failed but you want it gone
+    from the temp/activity list entirely.
+    """
+    result = await db.execute(select(LibraryFile).where(LibraryFile.id == file_id))
+    lib_file = result.scalar_one_or_none()
+    if not lib_file:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File tidak ditemukan")
+
+    if lib_file.upload_status not in (LibraryFileStatus.failed, LibraryFileStatus.uploading, LibraryFileStatus.in_audit):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Hanya record gagal / stuck yang dapat dihapus dari panel temp",
+        )
+
+    # Trash any orphan Drive file
+    if lib_file.gdrive_file_id:
+        from app.services import gdrive
+        try:
+            await gdrive.trash_file(lib_file.gdrive_file_id)
+        except Exception as exc:
+            logger.warning("Failed to trash orphan Drive file %s: %s", lib_file.gdrive_file_id, exc)
+
+    # Delete audit_jobs first to satisfy FK
+    await db.execute(sa_text("DELETE FROM audit_jobs WHERE file_id = :fid"), {"fid": file_id})
+    await db.delete(lib_file)
+
+    await _write_log(db, profile, "purge_temp_file", "file", file_id,
+                     metadata={"filename": lib_file.file_name})
+    await db.commit()
+    return {"id": str(file_id), "deleted": True}
 
 
 # ---------------------------------------------------------------------------
@@ -1500,6 +2022,9 @@ async def get_folder_permissions(
                 "can_view": p.can_view,
                 "can_upload": p.can_upload,
                 "can_download": p.can_download,
+                "can_rename": p.can_rename,
+                "can_delete": p.can_delete,
+                "can_move": p.can_move,
             }
             for p in perms
         ],
@@ -1512,6 +2037,9 @@ class FolderPermissionEntry(BaseModel):
     can_view: bool
     can_upload: bool
     can_download: bool
+    can_rename: bool = False
+    can_delete: bool = False
+    can_move: bool = False
 
 
 class SetFolderPermissionsRequest(BaseModel):
@@ -1545,6 +2073,9 @@ async def set_folder_permissions(
             existing.can_view = entry.can_view
             existing.can_upload = entry.can_upload
             existing.can_download = entry.can_download
+            existing.can_rename = entry.can_rename
+            existing.can_delete = entry.can_delete
+            existing.can_move = entry.can_move
         else:
             db.add(FolderPermission(
                 folder_id=folder_uuid,
@@ -1552,6 +2083,9 @@ async def set_folder_permissions(
                 can_view=entry.can_view,
                 can_upload=entry.can_upload,
                 can_download=entry.can_download,
+                can_rename=entry.can_rename,
+                can_delete=entry.can_delete,
+                can_move=entry.can_move,
             ))
 
     await db.commit()

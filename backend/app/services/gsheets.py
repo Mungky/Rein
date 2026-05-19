@@ -29,15 +29,18 @@ PRIVATE_HEADERS = [
     "Kapan",
 ]
 
-# Public index sheet
+# Public index sheet — column order mirrors frontend PublicIndex layout
+# (frontend = Nama File · Diunggah Oleh · Waktu, plus extras for spreadsheet users)
 PUBLIC_SHEET = "Index Publik"
 PUBLIC_HEADERS = [
-    "Jenis",
-    "Nomor Urut",
-    "Kode Klien",
-    "Projek",
+    "Tanggal",
+    "Tipe",
+    "Nomor",
     "Nama File",
-    "Note",
+    "Departemen",
+    "Folder",
+    "Diunggah Oleh",
+    "Link Drive",
 ]
 
 
@@ -125,16 +128,18 @@ async def add_document_row(data: dict) -> int:
         ]
         row_num = _append_row(svc, sid, sheet_name, private_row)
 
-        # Public index — separate spreadsheet, limited fields
+        # Public index — separate spreadsheet, format matches frontend PublicIndex
         if pub_sid:
             _ensure_headers(svc, pub_sid, PUBLIC_SHEET, PUBLIC_HEADERS)
             public_row = [
+                data.get("created_at", ""),
                 doc_type,
                 data.get("doc_sequence", ""),
-                data.get("client_code", ""),
-                data.get("project_name", ""),
                 data.get("file_name", ""),
-                data.get("note", ""),
+                data.get("dept_label", "") or data.get("department", ""),
+                data.get("folder_path", ""),
+                data.get("uploaded_by", ""),
+                data.get("gdrive_link", ""),
             ]
             _append_row(svc, pub_sid, PUBLIC_SHEET, public_row)
 

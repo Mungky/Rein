@@ -1,12 +1,10 @@
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type {
-  ActivityLogEntry,
   DocumentSequence,
   FolderNode,
   LibraryFileMeta,
   ProposeResult,
   PublicIndexDept,
-  TempFile,
   UploadFormValues,
   ViewRequestResponse,
 } from "@/features/library/types";
@@ -40,9 +38,11 @@ export async function getFolderTree(): Promise<{ tree: FolderNode[] }> {
 
 // ── File listing ─────────────────────────────────────────────────────────────
 
-export type FolderFilesResult =
-  | { restricted: false; files: LibraryFileMeta[]; total: number; folder: { name: string; path: string; department: string } }
-  | { restricted: true; folder: { id: string; name: string; department: string; dept_label: string }; file_count: number; last_updated: string | null };
+export type FolderFilesResult = {
+  files: LibraryFileMeta[];
+  total: number;
+  folder: { name: string; path: string; department: string };
+};
 
 export async function getFolderFiles(
   folderId: string,
@@ -54,9 +54,11 @@ export async function getFolderFiles(
     `${API}/api/library/folders/${folderId}/files?page=${page}&page_size=${pageSize}`,
     { headers },
   );
-  if (!res.ok) throw new Error("Gagal memuat daftar file");
-  const data = await res.json();
-  return data.restricted ? { restricted: true, ...data } : { restricted: false, ...data };
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Gagal memuat daftar file");
+  }
+  return res.json();
 }
 
 export async function getPublicIndex(): Promise<{ departments: PublicIndexDept[] }> {
@@ -76,13 +78,143 @@ export async function resetStuckUploads(): Promise<{ reset_count: number }> {
   return res.json();
 }
 
-export async function getAdminTemp(): Promise<{
-  temp_files: TempFile[];
-  activity_log: ActivityLogEntry[];
+export interface ActivityEntry {
+  id: number;
+  action: string;
+  actor_name: string | null;
+  actor_username: string | null;
+  actor_role: string | null;
+  target_type: string | null;
+  target_id: string | null;
+  file_name: string | null;
+  file_status: string | null;
+  audit_layers: { layer: number; layer_name: string; status: string }[];
+  meta: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ActivityResponse {
+  entries: ActivityEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+  stuck_count: number;
+  email_configured: boolean;
+}
+
+export async function getAdminActivity(params: {
+  search?: string;
+  action?: string;
+  page?: number;
+  pageSize?: number;
+} = {}): Promise<ActivityResponse> {
+  const headers = await authHeaders();
+  const q = new URLSearchParams();
+  if (params.search) q.set("search", params.search);
+  if (params.action) q.set("action", params.action);
+  q.set("page", String(params.page ?? 1));
+  q.set("page_size", String(params.pageSize ?? 50));
+  const res = await fetch(`${API}/api/library/admin/activity?${q}`, { headers });
+  if (!res.ok) throw new Error("Gagal memuat panel aktivitas");
+  return res.json();
+}
+
+export async function purgeTempFile(fileId: string): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/admin/temp/${fileId}`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Gagal menghapus record");
+  }
+}
+
+export interface EmailConfig {
+  smtp_configured: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_from: string | null;
+  librarian_emails_configured: boolean;
+  recipient_count: number;
+  recipients_redacted: string[];
+}
+
+export async function getEmailConfig(): Promise<EmailConfig> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/admin/email-config`, { headers });
+  if (!res.ok) throw new Error("Gagal memuat konfigurasi email");
+  return res.json();
+}
+
+export async function sendTestEmail(): Promise<{ sent: number; recipients: number; errors: string[] }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/admin/email-test`, { method: "POST", headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Gagal mengirim email tes");
+  }
+  return res.json();
+}
+
+export interface ViewRequestInboxItem {
+  id: string;
+  status: "pending" | "approved" | "denied" | "expired";
+  file_id: string;
+  file_name: string;
+  doc_type: string | null;
+  requester_name: string;
+  requester_username: string;
+  requester_role: string;
+  created_at: string;
+  expires_at: string | null;
+  approved_at: string | null;
+}
+
+export async function getViewRequestInbox(): Promise<{
+  pending: ViewRequestInboxItem[];
+  recent: ViewRequestInboxItem[];
 }> {
   const headers = await authHeaders();
-  const res = await fetch(`${API}/api/library/admin/temp`, { headers });
-  if (!res.ok) throw new Error("Gagal memuat panel sementara");
+  const res = await fetch(`${API}/api/library/view-requests/inbox`, { headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Gagal memuat inbox permintaan akses");
+  }
+  return res.json();
+}
+
+export async function decideViewRequest(
+  reqId: string,
+  action: "approve" | "deny",
+): Promise<{ status: string; id: string; link_expires_at?: string }> {
+  const headers = await authHeaders();
+  const res = await fetch(
+    `${API}/api/library/view-requests/${reqId}/decide?action=${action}`,
+    { method: "POST", headers },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Gagal memproses permintaan");
+  }
+  return res.json();
+}
+
+export async function moveFile(
+  fileId: string,
+  targetFolderId: string,
+): Promise<{ id: string; folder_id: string; moved: boolean; drive_moved?: boolean }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/files/${fileId}/move`, {
+    method: "PATCH",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ target_folder_id: targetFolderId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Gagal memindahkan file");
+  }
   return res.json();
 }
 
@@ -240,6 +372,9 @@ export interface FolderPermEntry {
   can_view: boolean;
   can_upload: boolean;
   can_download: boolean;
+  can_rename: boolean;
+  can_delete: boolean;
+  can_move: boolean;
 }
 
 export async function getFolderPermissions(): Promise<{ folders: FolderInfo[]; permissions: FolderPermEntry[] }> {
@@ -296,16 +431,20 @@ export async function renameFolder(
   return res.json();
 }
 
-export async function deleteFolder(folderId: string): Promise<void> {
+export async function deleteFolder(
+  folderId: string,
+  cascade = false,
+): Promise<{ files_trashed: number; drive_folder_trashed: boolean }> {
   const headers = await authHeaders();
-  const res = await fetch(`${API}/api/library/folders/${folderId}`, {
-    method: "DELETE",
-    headers,
-  });
+  const res = await fetch(
+    `${API}/api/library/folders/${folderId}?cascade=${cascade ? "true" : "false"}`,
+    { method: "DELETE", headers },
+  );
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || "Gagal menghapus folder");
   }
+  return res.json();
 }
 
 export async function linkFolderToDrive(

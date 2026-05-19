@@ -73,7 +73,7 @@ async function authHeaders(): Promise<Record<string, string>> {
   return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 }
 
-/* ── Permission groups ── */
+/* ── Permission groups ── (sidebar:* placeholders dihapus — tidak ada gate yang pakai) */
 const PERM_GROUPS: { label: string; perms: Permission[] }[] = [
   { label: "Dashboard", perms: ["dashboard:view"] },
   {
@@ -82,10 +82,6 @@ const PERM_GROUPS: { label: string; perms: Permission[] }[] = [
       "dcc:view", "dcc:upload", "dcc:search", "dcc:approve",
       "dcc:manage_access", "dcc:manage_clients", "dcc:delete", "dcc:chat",
     ],
-  },
-  {
-    label: "Sidebar & Modul",
-    perms: ["sidebar:crm", "sidebar:projects", "sidebar:finance", "sidebar:hr"],
   },
   { label: "Workspace", perms: ["workspace:view", "workspace:manage", "workspace:complete_task"] },
   { label: "Administrasi", perms: ["admin:manage_users"] },
@@ -604,7 +600,29 @@ function DocTypesTab() {
 /* ═══════════════════════════════════════════════════════════════
    Permissions tab — module + folder access per role
    ═══════════════════════════════════════════════════════════════ */
-type FolderDraft = Record<string, Record<string, { can_view: boolean; can_upload: boolean; can_download: boolean }>>;
+type FolderPerm = {
+  can_view: boolean;
+  can_upload: boolean;
+  can_download: boolean;
+  can_rename: boolean;
+  can_delete: boolean;
+  can_move: boolean;
+};
+type FolderDraft = Record<string, Record<string, FolderPerm>>;
+
+const FOLDER_PERM_FIELDS: { key: keyof FolderPerm; label: string; width: string }[] = [
+  { key: "can_view", label: "View", width: "w-[58px]" },
+  { key: "can_upload", label: "Upload", width: "w-[62px]" },
+  { key: "can_download", label: "Download", width: "w-[72px]" },
+  { key: "can_rename", label: "Rename", width: "w-[62px]" },
+  { key: "can_delete", label: "Hapus", width: "w-[58px]" },
+  { key: "can_move", label: "Pindah", width: "w-[62px]" },
+];
+
+const EMPTY_FOLDER_PERM: FolderPerm = {
+  can_view: false, can_upload: false, can_download: false,
+  can_rename: false, can_delete: false, can_move: false,
+};
 
 function PermissionsTab() {
   const { matrix, loaded, refresh } = usePermissions();
@@ -633,10 +651,7 @@ function PermissionsTab() {
         const fd: FolderDraft = {};
         for (const [role] of ALL_ROLES) {
           fd[role] = {};
-          for (const folder of f) {
-            // Default: no access
-            fd[role][folder.id] = { can_view: false, can_upload: false, can_download: false };
-          }
+          for (const folder of f) fd[role][folder.id] = { ...EMPTY_FOLDER_PERM };
         }
         for (const perm of p) {
           if (!fd[perm.role]) fd[perm.role] = {};
@@ -644,6 +659,9 @@ function PermissionsTab() {
             can_view: perm.can_view,
             can_upload: perm.can_upload,
             can_download: perm.can_download,
+            can_rename: perm.can_rename,
+            can_delete: perm.can_delete,
+            can_move: perm.can_move,
           };
         }
         setFolderDraft(fd);
@@ -665,14 +683,14 @@ function PermissionsTab() {
     });
   };
 
-  const toggleFolderPerm = (role: string, folderId: string, field: "can_view" | "can_upload" | "can_download") => {
+  const toggleFolderPerm = (role: string, folderId: string, field: keyof FolderPerm) => {
     if (role === "admin") return;
     setFolderDraft((prev) => ({
       ...prev,
       [role]: {
         ...prev[role],
         [folderId]: {
-          ...prev[role]?.[folderId],
+          ...(prev[role]?.[folderId] ?? EMPTY_FOLDER_PERM),
           [field]: !prev[role]?.[folderId]?.[field],
         },
       },
@@ -692,11 +710,14 @@ function PermissionsTab() {
         const fd: FolderDraft = {};
         for (const [role] of ALL_ROLES) {
           fd[role] = {};
-          for (const folder of f) fd[role][folder.id] = { can_view: false, can_upload: false, can_download: false };
+          for (const folder of f) fd[role][folder.id] = { ...EMPTY_FOLDER_PERM };
         }
         for (const perm of p) {
           if (!fd[perm.role]) fd[perm.role] = {};
-          fd[perm.role][perm.folder_id] = { can_view: perm.can_view, can_upload: perm.can_upload, can_download: perm.can_download };
+          fd[perm.role][perm.folder_id] = {
+            can_view: perm.can_view, can_upload: perm.can_upload, can_download: perm.can_download,
+            can_rename: perm.can_rename, can_delete: perm.can_delete, can_move: perm.can_move,
+          };
         }
         setFolderDraft(fd);
       })
@@ -830,31 +851,36 @@ function PermissionsTab() {
                     {folders.length === 0 ? (
                       <p className="text-[12px] text-text-muted">Tidak ada folder yang tersedia</p>
                     ) : (
-                      <div className="rounded-lg border border-border overflow-hidden">
+                      <div className="rounded-lg border border-border overflow-x-auto">
                         <table className="w-full">
                           <thead>
                             <tr className="bg-bg-ctrl border-b border-border">
                               <th className="px-3 py-2 text-left text-[10.5px] font-bold uppercase tracking-wider text-text-muted">Folder</th>
-                              <th className="px-3 py-2 text-center text-[10.5px] font-bold uppercase tracking-wider text-text-muted w-[64px]">View</th>
-                              <th className="px-3 py-2 text-center text-[10.5px] font-bold uppercase tracking-wider text-text-muted w-[64px]">Upload</th>
-                              <th className="px-3 py-2 text-center text-[10.5px] font-bold uppercase tracking-wider text-text-muted w-[80px]">Download</th>
+                              {FOLDER_PERM_FIELDS.map((f) => (
+                                <th
+                                  key={f.key}
+                                  className={cn("px-2 py-2 text-center text-[10.5px] font-bold uppercase tracking-wider text-text-muted", f.width)}
+                                >
+                                  {f.label}
+                                </th>
+                              ))}
                             </tr>
                           </thead>
                           <tbody>
                             {folders.map((folder) => {
-                              const fp = folderDraft[role]?.[folder.id] ?? { can_view: false, can_upload: false, can_download: false };
+                              const fp = folderDraft[role]?.[folder.id] ?? EMPTY_FOLDER_PERM;
                               return (
                                 <tr key={folder.id} className="border-b border-border-soft hover:bg-bg-hover transition-colors">
                                   <td className="px-3 py-2">
                                     <div className="text-[12.5px] font-semibold text-text">{folder.name}</div>
                                     <div className="text-[10.5px] text-text-muted">{folder.dept}</div>
                                   </td>
-                                  {(["can_view", "can_upload", "can_download"] as const).map((field) => (
-                                    <td key={field} className="px-3 py-2 text-center">
+                                  {FOLDER_PERM_FIELDS.map((field) => (
+                                    <td key={field.key} className="px-2 py-2 text-center">
                                       <input
                                         type="checkbox"
-                                        checked={fp[field]}
-                                        onChange={() => toggleFolderPerm(role, folder.id, field)}
+                                        checked={fp[field.key]}
+                                        onChange={() => toggleFolderPerm(role, folder.id, field.key)}
                                         className="w-3.5 h-3.5 cursor-pointer accent-primary"
                                       />
                                     </td>

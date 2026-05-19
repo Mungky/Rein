@@ -41,14 +41,56 @@ logger = logging.getLogger(__name__)
 CLEANUP_INTERVAL = 300  # 5 minutes
 
 
+STUCK_UPLOAD_TIMEOUT_MIN = 10  # files in 'uploading'/'in_audit' > this many minutes → 'failed'
+
+
+async def _flip_stuck_uploads() -> None:
+    """Auto-flip Library files stuck in upload/in_audit to 'failed' state.
+
+    Runs every CLEANUP_INTERVAL. The Drive upload itself has a 600s hard timeout
+    but if the request handler dies before flipping status (e.g. worker
+    restart), the file would otherwise stay 'uploading' forever. This catches
+    that case.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from db.session import async_session_factory
+    from db.models.library_file import LibraryFile, LibraryFileStatus
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=STUCK_UPLOAD_TIMEOUT_MIN)
+    try:
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(LibraryFile).where(
+                    LibraryFile.upload_status.in_([
+                        LibraryFileStatus.uploading,
+                        LibraryFileStatus.in_audit,
+                    ]),
+                    LibraryFile.is_deleted.is_(False),
+                    LibraryFile.created_at < cutoff,
+                )
+            )
+            stuck = result.scalars().all()
+            for f in stuck:
+                f.upload_status = LibraryFileStatus.failed
+            if stuck:
+                logger.info("Auto-flipped %d stuck library uploads to 'failed'", len(stuck))
+                await db.commit()
+    except Exception as e:
+        logger.error("Stuck-upload flip failed: %s", e)
+
+
 async def _periodic_cleanup() -> None:
-    """Periodically clean up expired proposals and access requests."""
+    """Periodically clean up expired proposals, access requests, and stuck uploads."""
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL)
         try:
             task_queue.enqueue(TaskType.CLEANUP_EXPIRED_PROPOSALS)
             task_queue.enqueue(TaskType.REVOKE_EXPIRED_ACCESS)
             task_queue.enqueue(TaskType.CLEANUP_EXPIRED_VIEW_REQUESTS)
+            await _flip_stuck_uploads()
         except Exception as e:
             logger.error("Cleanup task enqueue failed: %s", e)
 

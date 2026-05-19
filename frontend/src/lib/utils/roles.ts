@@ -27,10 +27,6 @@ export type Permission =
   | "dcc:manage_clients"
   | "dcc:delete"
   | "dcc:chat"
-  | "sidebar:crm"
-  | "sidebar:projects"
-  | "sidebar:finance"
-  | "sidebar:hr"
   | "admin:manage_users"
   | "workspace:view"
   | "workspace:manage"
@@ -46,10 +42,6 @@ export const ALL_PERMISSIONS: Permission[] = [
   "dcc:manage_clients",
   "dcc:delete",
   "dcc:chat",
-  "sidebar:crm",
-  "sidebar:projects",
-  "sidebar:finance",
-  "sidebar:hr",
   "admin:manage_users",
   "workspace:view",
   "workspace:manage",
@@ -66,10 +58,6 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "dcc:manage_clients": "Kelola Klien & Proyek",
   "dcc:delete": "Hapus Dokumen",
   "dcc:chat": "Gunakan AI Chat",
-  "sidebar:crm": "Akses Modul CRM",
-  "sidebar:projects": "Akses Modul Proyek",
-  "sidebar:finance": "Akses Modul Keuangan",
-  "sidebar:hr": "Akses Modul HR",
   "admin:manage_users": "Kelola Pengguna (Admin)",
   "workspace:view": "Lihat Workspace",
   "workspace:manage": "Kelola Proyek & Task",
@@ -100,27 +88,23 @@ export const ROLE_PERMISSIONS_FALLBACK: Record<AppRole, Permission[]> = {
   director: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
     "dcc:approve", "dcc:manage_access", "dcc:manage_clients", "dcc:chat",
-    "sidebar:crm", "sidebar:projects", "sidebar:finance", "sidebar:hr",
     "workspace:view", "workspace:manage",
   ],
   manager: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
     "dcc:approve", "dcc:manage_clients", "dcc:chat",
-    "sidebar:crm", "sidebar:projects",
     "workspace:view", "workspace:manage",
   ],
   finance: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
-    "dcc:approve", "dcc:chat",
-    "sidebar:finance", "workspace:view",
+    "dcc:approve", "dcc:chat", "workspace:view",
   ],
   accounting: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-    "sidebar:finance", "workspace:view",
+    "workspace:view",
   ],
   human_resources: [
-    "dashboard:view", "dcc:view", "dcc:search", "dcc:chat",
-    "sidebar:hr", "workspace:view",
+    "dashboard:view", "dcc:view", "dcc:search", "dcc:chat", "workspace:view",
   ],
   engineer_mechanical: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
@@ -140,11 +124,11 @@ export const ROLE_PERMISSIONS_FALLBACK: Record<AppRole, Permission[]> = {
   ],
   purchasing: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-    "sidebar:crm", "workspace:view",
+    "workspace:view",
   ],
   procurement: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-    "sidebar:crm", "workspace:view",
+    "workspace:view",
   ],
   safety_man: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
@@ -156,8 +140,7 @@ export const ROLE_PERMISSIONS_FALLBACK: Record<AppRole, Permission[]> = {
   ],
   operational_manager: [
     "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
-    "dcc:approve", "dcc:chat",
-    "sidebar:projects", "workspace:view", "workspace:manage",
+    "dcc:approve", "dcc:chat", "workspace:view", "workspace:manage",
   ],
 };
 

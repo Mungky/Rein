@@ -50,10 +50,6 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     "dcc:manage_clients",
     "dcc:delete",
     "dcc:chat",
-    "sidebar:crm",
-    "sidebar:projects",
-    "sidebar:finance",
-    "sidebar:hr",
     "admin:manage_users",
     # Workspace permissions
     "workspace:view",        # see projects & tasks
@@ -72,10 +68,6 @@ PERMISSION_LABELS: dict[str, str] = {
     "dcc:manage_clients": "Kelola Klien & Proyek",
     "dcc:delete": "Hapus Dokumen",
     "dcc:chat": "Gunakan AI Chat",
-    "sidebar:crm": "Akses Modul CRM",
-    "sidebar:projects": "Akses Modul Proyek",
-    "sidebar:finance": "Akses Modul Keuangan",
-    "sidebar:hr": "Akses Modul HR",
     "admin:manage_users": "Kelola Pengguna (Admin)",
     "workspace:view": "Lihat Workspace",
     "workspace:manage": "Kelola Proyek & Task",
@@ -89,30 +81,23 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
     AppRole.director: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:manage_access", "dcc:manage_clients", "dcc:chat",
-        "sidebar:crm", "sidebar:projects", "sidebar:finance", "sidebar:hr",
         "workspace:view", "workspace:manage",
     ),
     AppRole.manager: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:manage_clients", "dcc:chat",
-        "sidebar:crm", "sidebar:projects",
         "workspace:view", "workspace:manage",
     ),
     AppRole.finance: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
-        "dcc:approve", "dcc:chat",
-        "sidebar:finance",
-        "workspace:view",
+        "dcc:approve", "dcc:chat", "workspace:view",
     ),
     AppRole.accounting: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-        "sidebar:finance",
         "workspace:view",
     ),
     AppRole.human_resources: (
-        "dashboard:view", "dcc:view", "dcc:search", "dcc:chat",
-        "sidebar:hr",
-        "workspace:view",
+        "dashboard:view", "dcc:view", "dcc:search", "dcc:chat", "workspace:view",
     ),
     AppRole.engineer_mechanical: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
@@ -128,13 +113,10 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
     ),
     AppRole.purchasing: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-        "sidebar:crm",
         "workspace:view",
     ),
     AppRole.operational_manager: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
-        "dcc:approve", "dcc:chat",
-        "sidebar:projects",
-        "workspace:view", "workspace:manage",
+        "dcc:approve", "dcc:chat", "workspace:view", "workspace:manage",
     ),
 }

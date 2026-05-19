@@ -38,7 +38,27 @@
       "Bash(git commit -m 'fix: cloud credential error handling and disabled button UX *)",
       "Bash(git push *)",
       "Bash(git commit *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(alembic upgrade *)",
+      "Bash(ls Makefile docker-compose* *.sh *.ps1)",
+      "Bash(ls db/*.sh db/*.ps1)",
+      "Bash(Get-ChildItem -Path \"D:\\\\006 Restard\\\\Rein v1\\\\frontend\\\\src\" -Recurse -File)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(xxd README.md)",
+      "Bash(xxd)",
+      "Bash(pnpm typecheck *)",
+      "Bash(echo \"Test document content for audit\")",
+      "Read(//d//**)",
+      "Bash(netstat -ano)",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(Get-Process *)",
+      "Bash(kill -9 15524)",
+      "Bash(netstat -tlnp)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "Bash(xargs grep -l \"LibraryFolder\")",
+      "Bash(git *)",
+      "Bash(pnpm exec *)",
+      "Bash(grep -E \"features/library|app[\\\\\\\\\\\\\\\\/]\\\\\\(app\\\\\\)[\\\\\\\\\\\\\\\\/]dcc|app[\\\\\\\\\\\\\\\\/]\\\\\\(app\\\\\\)[\\\\\\\\\\\\\\\\/]admin|lib[\\\\\\\\\\\\\\\\/]api[\\\\\\\\\\\\\\\\/]library\")"
     ]
   }
 }

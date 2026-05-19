@@ -302,13 +302,62 @@ async def get_file(file_id: str) -> dict:
 
 
 async def delete_file(file_id: str) -> None:
-    """Delete a file from Google Drive."""
+    """Permanently delete a file from Google Drive (skips Trash)."""
     def _do():
         service = _get_drive_service()
         service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
 
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _do)
+
+
+async def trash_file(file_id: str) -> dict:
+    """Move a Drive file to Trash (recoverable for 30 days).
+
+    Prefer this over delete_file for user-initiated deletions. Drive's trash
+    keeps the file recoverable for ~30 days before automatic purge.
+    """
+    def _do():
+        service = _get_drive_service()
+        result = (
+            service.files()
+            .update(
+                fileId=file_id,
+                body={"trashed": True},
+                fields="id,name,trashed",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        return dict(result)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _do)
+
+
+async def trash_folder(folder_id: str) -> dict:
+    """Move a Drive folder (and all its contents) to Trash.
+
+    Same as trash_file — Drive treats folders as files of mimeType
+    application/vnd.google-apps.folder. Trashing the folder trashes everything
+    inside in a single operation.
+    """
+    def _do():
+        service = _get_drive_service()
+        result = (
+            service.files()
+            .update(
+                fileId=folder_id,
+                body={"trashed": True},
+                fields="id,name,trashed",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        return dict(result)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _do)
 
 
 async def move_file(file_id: str, new_folder_id: str) -> dict:
