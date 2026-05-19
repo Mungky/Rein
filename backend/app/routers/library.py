@@ -341,6 +341,32 @@ async def list_folder_files(
     )
     total = total_result.scalar() or 0
 
+    # Compute current user's perms on this folder's dept (admin = all true)
+    if profile.role == AppRole.admin:
+        my_perms = {
+            "can_view": True, "can_upload": True, "can_download": True,
+            "can_rename": True, "can_delete": True, "can_move": True,
+        }
+    else:
+        perm_result = await db.execute(
+            select(FolderPermission)
+            .join(LibraryFolder, FolderPermission.folder_id == LibraryFolder.id)
+            .where(
+                LibraryFolder.department == folder.department,
+                LibraryFolder.parent_id.is_(None),
+                FolderPermission.role == profile.role,
+            )
+        )
+        perm = perm_result.scalar_one_or_none()
+        my_perms = {
+            "can_view": bool(perm and perm.can_view),
+            "can_upload": bool(perm and perm.can_upload),
+            "can_download": bool(perm and perm.can_download),
+            "can_rename": bool(perm and perm.can_rename),
+            "can_delete": bool(perm and perm.can_delete),
+            "can_move": bool(perm and perm.can_move),
+        }
+
     return {
         "folder": {
             "id": str(folder.id),
@@ -352,6 +378,7 @@ async def list_folder_files(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "my_perms": my_perms,
     }
 
 
@@ -528,23 +555,7 @@ async def upload_file(
         ext=ext,
     )
 
-    # ── Upload to Drive synchronously ─────────────────────────────────────────
-    try:
-        drive_result = await gdrive.upload_file(
-            io.BytesIO(content),
-            file_name,
-            file.content_type or "application/octet-stream",
-            folder.gdrive_folder_id,
-            file_size=len(content),
-        )
-    except Exception as exc:
-        logger.error("Drive upload failed for '%s': %s", file_name, exc)
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Gagal mengunggah ke Google Drive: {exc}",
-        )
-
-    # ── Persist to DB (status = passed — Drive already has it) ────────────────
+    # ── Create LibraryFile FIRST (status=uploading) so failures are visible ──
     lib_file = LibraryFile(
         folder_id=uuid.UUID(folder_id),
         original_name=original_name,
@@ -555,10 +566,8 @@ async def upload_file(
         file_size=len(content),
         mime_type=file.content_type or "application/octet-stream",
         content_hash=content_hash,
-        gdrive_file_id=drive_result.get("id"),
-        gdrive_web_link=drive_result.get("webViewLink"),
         gdrive_folder_id=folder.gdrive_folder_id,
-        upload_status=LibraryFileStatus.passed,
+        upload_status=LibraryFileStatus.uploading,
         uploader_id=profile.id,
         proposal_metadata={
             "doc_type": doc_type,
@@ -570,6 +579,50 @@ async def upload_file(
     )
     db.add(lib_file)
     await db.flush()
+    file_db_id = lib_file.id
+    await db.commit()  # commit early so the row is visible even if Drive hangs
+
+    # ── Upload to Drive (with retry on SSL/5xx via gdrive._drive_call_with_retry) ──
+    try:
+        drive_result = await gdrive.upload_file(
+            io.BytesIO(content),
+            file_name,
+            file.content_type or "application/octet-stream",
+            folder.gdrive_folder_id,
+            file_size=len(content),
+        )
+    except Exception as exc:
+        logger.error("Drive upload failed for '%s': %s", file_name, exc)
+        # Update the row to 'failed' so it appears in the admin Temp panel
+        fail_result = await db.execute(
+            select(LibraryFile).where(LibraryFile.id == file_db_id)
+        )
+        fail_row = fail_result.scalar_one_or_none()
+        if fail_row:
+            fail_row.upload_status = LibraryFileStatus.failed
+            existing_meta = fail_row.proposal_metadata or {}
+            existing_meta["error"] = str(exc)
+            fail_row.proposal_metadata = existing_meta
+        await _write_log(
+            db, profile, LOG_UPLOAD,
+            target_type="file",
+            target_id=file_db_id,
+            metadata={"filename": file_name, "size": len(content), "folder_id": folder_id, "error": str(exc)},
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Gagal mengunggah ke Google Drive: {exc}",
+        )
+
+    # ── Drive success — update row to passed ──────────────────────────────────
+    success_result = await db.execute(
+        select(LibraryFile).where(LibraryFile.id == file_db_id)
+    )
+    lib_file = success_result.scalar_one()
+    lib_file.gdrive_file_id = drive_result.get("id")
+    lib_file.gdrive_web_link = drive_result.get("webViewLink")
+    lib_file.upload_status = LibraryFileStatus.passed
 
     await _write_log(
         db, profile, LOG_UPLOAD,
@@ -1287,8 +1340,9 @@ async def move_file(
     await _write_log(
         db, profile, "move_file", "file", file_id,
         metadata={
-            "from_folder_id": str(old_folder_id),
-            "to_folder_id": str(target_uuid),
+            "filename": lib_file.file_name,
+            "from_path": src_folder.path if src_folder else None,
+            "to_path": dst_folder.path,
             "drive_moved": drive_moved,
         },
     )
@@ -1353,9 +1407,17 @@ async def rename_file(
         except Exception as exc:
             logger.warning("Drive rename failed for file %s: %s", file_id, exc)
 
+    folder_for_log = await db.execute(
+        select(LibraryFolder.path).where(LibraryFolder.id == lib_file.folder_id)
+    )
+    folder_path_for_log = folder_for_log.scalar()
     await _write_log(
         db, profile, "rename_file", "file", file_id,
-        metadata={"old_name": old_name, "new_name": new_name},
+        metadata={
+            "old_name": old_name,
+            "new_name": new_name,
+            "folder_path": folder_path_for_log,
+        },
     )
     await db.commit()
     return {"id": str(lib_file.id), "file_name": lib_file.file_name}
@@ -1720,8 +1782,15 @@ async def create_folder(
         except Exception as exc:
             logger.warning("Failed to create GDrive folder for '%s': %s", body.name, exc)
 
-    await _write_log(db, profile, LOG_FOLDER_CREATE, "folder",
-                     metadata={"name": body.name, "department": body.department})
+    await _write_log(
+        db, profile, LOG_FOLDER_CREATE, "folder", folder.id,
+        metadata={
+            "name": body.name,
+            "department": body.department,
+            "path": folder.path,
+            "parent_path": parent.path if parent else None,
+        },
+    )
     await db.commit()
 
     return {"id": str(folder.id), "path": folder.path, "gdrive_folder_id": folder.gdrive_folder_id}

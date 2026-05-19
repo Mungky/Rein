@@ -3,6 +3,7 @@
 import { Check, ExternalLink, FileText, FolderInput, FolderOpen, Loader2, Lock, MoreVertical, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { deleteFile, moveFile, pollViewLink, renameFile, requestViewAccess } from "@/lib/api/library";
+import type { FolderMyPerms } from "@/lib/api/library";
 import type { FolderNode, LibraryFileMeta, ViewRequestResponse } from "./types";
 
 const DOC_TYPE_COLORS: Record<string, string> = {
@@ -40,13 +41,14 @@ interface FileListProps {
   isAdmin?: boolean;
   currentUserId?: string;
   tree?: FolderNode[];
+  perms?: FolderMyPerms | null;
   onDeleted?: (id: string) => void;
   onRenamed?: (id: string, newName: string) => void;
   onMoved?: (id: string) => void;
   processingFiles?: ProcessingFile[];
 }
 
-export function FileList({ files, isAdmin, currentUserId, tree, onDeleted, onRenamed, onMoved, processingFiles }: FileListProps) {
+export function FileList({ files, isAdmin, currentUserId, tree, perms, onDeleted, onRenamed, onMoved, processingFiles }: FileListProps) {
   const hasContent = files.length > 0 || (processingFiles && processingFiles.length > 0);
 
   if (!hasContent) {
@@ -68,6 +70,7 @@ export function FileList({ files, isAdmin, currentUserId, tree, onDeleted, onRen
           isAdmin={isAdmin}
           currentUserId={currentUserId}
           tree={tree}
+          perms={perms}
           onDeleted={onDeleted}
           onRenamed={onRenamed}
           onMoved={onMoved}
@@ -96,6 +99,7 @@ function FileRow({
   isAdmin,
   currentUserId,
   tree,
+  perms,
   onDeleted,
   onRenamed,
   onMoved,
@@ -104,6 +108,7 @@ function FileRow({
   isAdmin?: boolean;
   currentUserId?: string;
   tree?: FolderNode[];
+  perms?: FolderMyPerms | null;
   onDeleted?: (id: string) => void;
   onRenamed?: (id: string, newName: string) => void;
   onMoved?: (id: string) => void;
@@ -119,9 +124,10 @@ function FileRow({
   const renameInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const canEdit = isAdmin || file.uploader_id === currentUserId;
-  const canDelete = isAdmin || file.uploader_id === currentUserId;
-  const canMove = isAdmin && tree;
+  const isUploader = file.uploader_id === currentUserId;
+  const canEdit = isAdmin || isUploader || Boolean(perms?.can_rename);
+  const canDelete = isAdmin || isUploader || Boolean(perms?.can_delete);
+  const canMove = (isAdmin || Boolean(perms?.can_move)) && Boolean(tree);
 
   useEffect(() => {
     if (accessState?.status !== "pending") return;

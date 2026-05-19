@@ -62,31 +62,49 @@ async function walkEntry(entry: LibFSEntry, acc: File[]): Promise<void> {
 
 /**
  * Extract all files from a drop event, including from dropped folders.
- * Falls back to `event.dataTransfer.files` if the FileSystem API is unavailable.
+ *
+ * **Critical:** DataTransfer items are invalidated as soon as the drop handler
+ * returns — Promise.all-style async iteration loses them. So we do two phases:
+ *
+ *   1. Synchronous: snapshot every `webkitGetAsEntry()` result + any direct
+ *      `getAsFile()` blobs. Must complete before any `await`.
+ *   2. Async: walk the snapshotted entries recursively.
  */
 export async function extractFilesFromDrop(event: DragEvent): Promise<File[]> {
   const dt = event.dataTransfer;
   if (!dt) return [];
 
+  // ── Phase 1: SYNCHRONOUS snapshot ──────────────────────────────────────────
+  const entries: LibFSEntry[] = [];
+  const directFiles: File[] = [];
   const items = Array.from(dt.items);
-  const hasEntryApi = items.some((it) => typeof (it as unknown as { webkitGetAsEntry?: unknown }).webkitGetAsEntry === "function");
+  let hasEntryApi = false;
 
-  if (!hasEntryApi) {
+  for (const item of items) {
+    const getEntry = (item as unknown as { webkitGetAsEntry?: () => LibFSEntry | null }).webkitGetAsEntry;
+    if (typeof getEntry === "function") {
+      hasEntryApi = true;
+      const entry = getEntry();
+      if (entry) {
+        entries.push(entry);
+        continue;
+      }
+    }
+    if (item.kind === "file") {
+      const f = item.getAsFile();
+      if (f) directFiles.push(f);
+    }
+  }
+
+  // Fallback: no Entry API at all → use plain dataTransfer.files
+  if (!hasEntryApi && directFiles.length === 0) {
     return Array.from(dt.files);
   }
 
-  const result: File[] = [];
-  await Promise.all(
-    items.map(async (item) => {
-      const getEntry = (item as unknown as { webkitGetAsEntry?: () => LibFSEntry | null }).webkitGetAsEntry;
-      const entry = getEntry?.();
-      if (entry) {
-        await walkEntry(entry, result);
-      } else if (item.kind === "file") {
-        const f = item.getAsFile();
-        if (f) result.push(f);
-      }
-    }),
-  );
+  // ── Phase 2: ASYNC walk ────────────────────────────────────────────────────
+  const result: File[] = [...directFiles];
+  for (const entry of entries) {
+    await walkEntry(entry, result);
+  }
   return result;
 }

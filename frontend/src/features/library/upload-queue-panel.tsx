@@ -98,7 +98,7 @@ export function UploadQueuePanel({ queue, onUploadDone }: UploadQueuePanelProps)
             </span>
             {failed > 0 && (
               <button
-                onClick={() => items.filter((i) => i.status === "failed").forEach((i) => queue.retry(i.id))}
+                onClick={queue.retryAllFailed}
                 className="btn btn-default btn-sm gap-1 text-[11px]"
               >
                 <RotateCw className="w-3 h-3" /> Ulang Gagal

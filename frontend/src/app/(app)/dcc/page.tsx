@@ -1,8 +1,6 @@
 "use client";
 
 import {
-  ArrowLeft,
-  ArrowRight,
   ChevronRight,
   FolderOpen,
   Loader2,
@@ -15,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageGuard } from "@/components/guards/page-guard";
 import { useAuth } from "@/hooks/use-auth";
 import { getFolderFiles, getFolderTree } from "@/lib/api/library";
+import type { FolderMyPerms } from "@/lib/api/library";
 import { FileList } from "@/features/library/file-list";
 import { FolderTree, INDEX_FOLDER_ID, TEMP_FOLDER_ID } from "@/features/library/folder-tree";
 import { BatchUploadModal } from "@/features/library/batch-upload-modal";
@@ -48,15 +47,13 @@ export default function LibraryPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [treeKey, setTreeKey] = useState(0);
 
-  // Navigation history (back/forward stack)
-  const [history, setHistory] = useState<FolderNode[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-  const selectedFolder = historyIndex >= 0 ? history[historyIndex] : null;
+  const [selectedFolder, setSelectedFolderState] = useState<FolderNode | null>(null);
 
   const [files, setFiles] = useState<import("@/features/library/types").LibraryFileMeta[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesTotal, setFilesTotal] = useState(0);
   const [filesError, setFilesError] = useState<string | null>(null);
+  const [myPerms, setMyPerms] = useState<FolderMyPerms | null>(null);
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const queue = useUploadQueue();
@@ -73,32 +70,38 @@ export default function LibraryPage() {
 
   const refreshTree = useCallback(() => setTreeKey((k) => k + 1), []);
 
-  // ── Navigation helpers ─────────────────────────────────────────────────────
-  const navigateTo = useCallback((folder: FolderNode) => {
-    setHistory((prev) => {
-      const truncated = prev.slice(0, historyIndex + 1);
-      // Skip pushing if already current
-      if (truncated[truncated.length - 1]?.id === folder.id) return prev;
-      const next = [...truncated, folder];
-      // Cap history at 50 entries
-      if (next.length > 50) next.splice(0, next.length - 50);
-      return next;
-    });
-    setHistoryIndex((idx) => {
-      const truncated = history.slice(0, idx + 1);
-      if (truncated[truncated.length - 1]?.id === folder.id) return idx;
-      return Math.min(truncated.length, 49);
-    });
-  }, [history, historyIndex]);
+  // ── Browser history integration ────────────────────────────────────────────
+  // Each folder navigation pushes a History API entry. The browser back/forward
+  // buttons (or trackpad swipe) restore the matching folder via popstate.
+  const treeRef = useRef<FolderNode[]>([]);
+  treeRef.current = tree;
 
-  const canGoBack = historyIndex > 0;
-  const canGoForward = historyIndex < history.length - 1;
-  const goBack = useCallback(() => {
-    if (canGoBack) setHistoryIndex((i) => i - 1);
-  }, [canGoBack]);
-  const goForward = useCallback(() => {
-    if (canGoForward) setHistoryIndex((i) => i + 1);
-  }, [canGoForward]);
+  const navigateTo = useCallback((folder: FolderNode, replace = false) => {
+    setSelectedFolderState((prev) => {
+      if (prev?.id === folder.id) return prev;
+      const url = `?f=${encodeURIComponent(folder.id)}`;
+      if (replace) {
+        window.history.replaceState({ folderId: folder.id }, "", url);
+      } else {
+        window.history.pushState({ folderId: folder.id }, "", url);
+      }
+      return folder;
+    });
+  }, []);
+
+  // Listen for browser back/forward — restore folder from URL or state
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      const stateId = (e.state as { folderId?: string } | null)?.folderId;
+      const urlId = new URLSearchParams(window.location.search).get("f");
+      const id = stateId || urlId;
+      if (!id) return;
+      const folder = findNode(treeRef.current, id);
+      if (folder) setSelectedFolderState(folder);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   // Breadcrumb segments → click to navigate to that level
   const breadcrumbs = useMemo(() => {
@@ -123,10 +126,11 @@ export default function LibraryPage() {
     getFolderTree()
       .then(({ tree }) => {
         setTree(tree);
-        if (tree.length > 0 && historyIndex === -1) {
-          setHistory([tree[0]]);
-          setHistoryIndex(0);
-        }
+        if (tree.length === 0) return;
+        // Restore selection from URL on first load, else default to root[0]
+        const urlId = new URLSearchParams(window.location.search).get("f");
+        const initial = (urlId && findNode(tree, urlId)) || tree[0];
+        if (!selectedFolder) navigateTo(initial, true);
       })
       .catch(() => {})
       .finally(() => setTreeLoading(false));
@@ -138,10 +142,12 @@ export default function LibraryPage() {
     setFilesLoading(true);
     setFiles([]);
     setFilesError(null);
+    setMyPerms(null);
     getFolderFiles(folder.id)
       .then((result) => {
         setFiles(result.files);
         setFilesTotal(result.total);
+        setMyPerms(result.my_perms);
       })
       .catch((err) => {
         setFilesError(err instanceof Error ? err.message : "Gagal memuat file");
@@ -274,30 +280,13 @@ export default function LibraryPage() {
             </div>
           )}
 
-          {/* Topbar with back/forward + clickable breadcrumb */}
+          {/* Topbar — back/forward uses browser buttons (History API integrated) */}
           <div className="flex items-center gap-1 px-4 h-[46px] min-h-[46px] border-b border-border bg-bg shrink-0">
             {!sidebarOpen && (
               <button onClick={() => setSidebarOpen(true)} className="btn btn-ghost btn-icon btn-sm text-text-muted mr-1">
                 <PanelLeftOpen className="w-3.5 h-3.5" />
               </button>
             )}
-            <button
-              onClick={goBack}
-              disabled={!canGoBack}
-              className="btn btn-ghost btn-icon btn-sm text-text-muted disabled:opacity-30"
-              title="Kembali"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={goForward}
-              disabled={!canGoForward}
-              className="btn btn-ghost btn-icon btn-sm text-text-muted disabled:opacity-30"
-              title="Maju"
-            >
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-            <div className="w-px h-5 bg-border mx-1" />
 
             {selectedFolder ? (
               <div className="flex items-center gap-0.5 text-[12.5px] min-w-0 flex-1 overflow-x-auto scrollbar-none">
@@ -384,6 +373,7 @@ export default function LibraryPage() {
                   isAdmin={isAdmin}
                   currentUserId={profile?.id}
                   tree={tree}
+                  perms={myPerms}
                   onDeleted={handleFileDeleted}
                   onRenamed={handleFileRenamed}
                   onMoved={handleFileMoved}

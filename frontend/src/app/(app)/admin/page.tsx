@@ -728,16 +728,7 @@ function PermissionsTab() {
     if (!draft) return;
     setSaving(true); setError(null); setSuccess(null);
     try {
-      // Save module permissions
-      const modulePayload: Record<string, string[]> = {};
-      for (const [role, perms] of Object.entries(draft)) modulePayload[role] = Array.from(perms as Set<Permission>);
-      const headers = await authHeaders();
-      const modRes = await fetch(`${API_URL}/api/admin/permissions`, {
-        method: "PUT", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ permissions: modulePayload }),
-      });
-      if (!modRes.ok) { const e = await modRes.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal menyimpan modul permission"); }
-
-      // Save folder permissions
+      // Module permissions UI removed — folder access only
       const folderPerms: FolderPermEntry[] = [];
       for (const [role, folderMap] of Object.entries(folderDraft)) {
         if (role === "admin") continue;
@@ -803,47 +794,15 @@ function PermissionsTab() {
                   {initials}
                 </div>
                 <span className="text-[13px] font-semibold text-text flex-1">{label}</span>
-                <span className="badge badge-muted">{activeCount} modul</span>
                 <span className="badge badge-blue">{folderCount}/{folders.length} folder</span>
                 <ChevronDown className={cn("w-4 h-4 text-text-muted transition-transform duration-200 shrink-0", isExpanded && "rotate-180")} />
               </button>
 
               {isExpanded && (
                 <div className="border-t border-border px-4 py-4 space-y-5">
-                  {/* Section 1: Module permissions */}
-                  <div>
-                    <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-text-light mb-3">
-                      Izin Modul
-                    </div>
-                    {PERM_GROUPS.map((group) => (
-                      <div key={group.label} className="mb-3 last:mb-0">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.07em] text-text-light mb-1.5 px-1">
-                          {group.label}
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
-                          {group.perms.map((perm) => {
-                            const checked = draft[role].has(perm);
-                            return (
-                              <label
-                                key={perm}
-                                className="flex items-center gap-2.5 px-2.5 py-1.5 rounded hover:bg-bg-hover cursor-pointer transition-colors select-none"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => togglePerm(role, perm)}
-                                  className="w-3.5 h-3.5 cursor-pointer accent-primary shrink-0"
-                                />
-                                <span className="text-[12.5px] text-text leading-snug">{PERMISSION_LABELS[perm]}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Section 2: Folder access */}
+                  {/* Folder access — single source of truth for per-folder perms.
+                      Module-level perms (Izin Modul) di-manage via DEFAULT_ROLE_PERMISSIONS
+                      seed; UI editor untuk modul sengaja dihapus sesuai feedback user. */}
                   <div>
                     <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-text-light mb-3">
                       Akses Folder Dokumen

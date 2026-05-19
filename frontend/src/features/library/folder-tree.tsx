@@ -132,6 +132,7 @@ function FolderItem({
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [cascadeCount, setCascadeCount] = useState<number | null>(null);
 
   const isSelected = selectedId === node.id;
   const deptColor = DEPT_COLORS[node.department] ?? "text-text-muted";
@@ -185,15 +186,24 @@ function FolderItem({
     } catch { /* keep open */ } finally { setLinkSaving(false); }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = async (cascade = false) => {
     setDeleteLoading(true);
     setDeleteError(null);
     try {
-      await deleteFolder(node.id);
+      await deleteFolder(node.id, cascade);
       setDeleteConfirm(false);
+      setCascadeCount(null);
       onFolderCreated?.();
     } catch (e) {
-      setDeleteError(e instanceof Error ? e.message : "Gagal menghapus folder");
+      const msg = e instanceof Error ? e.message : "Gagal menghapus folder";
+      // Detect the "N file aktif" 409 response — switch to cascade prompt
+      const match = msg.match(/memiliki (\d+) file aktif/);
+      if (match) {
+        setCascadeCount(parseInt(match[1], 10));
+        setDeleteError(null);
+      } else {
+        setDeleteError(msg);
+      }
     } finally {
       setDeleteLoading(false);
     }
@@ -277,15 +287,27 @@ function FolderItem({
 
             {deleteConfirm && (
               <>
-                <span className="flex-1 text-[11px] text-red font-semibold truncate min-w-0">
-                  {deleteError ?? "Hapus folder ini?"}
+                <span className="flex-1 text-[11px] font-semibold truncate min-w-0 text-red">
+                  {deleteError
+                    ? deleteError
+                    : cascadeCount !== null
+                      ? `Folder berisi ${cascadeCount} file. Hapus semua ke Trash Drive?`
+                      : "Hapus folder ini?"}
                 </span>
                 {!deleteError && (
-                  <button onClick={handleDelete} disabled={deleteLoading} className="shrink-0 text-red hover:text-red ml-1">
+                  <button
+                    onClick={() => handleDelete(cascadeCount !== null)}
+                    disabled={deleteLoading}
+                    className="shrink-0 text-red hover:text-red ml-1"
+                    title={cascadeCount !== null ? "Hapus folder + semua isi" : "Hapus folder kosong"}
+                  >
                     {deleteLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
                   </button>
                 )}
-                <button onClick={() => { setDeleteConfirm(false); setDeleteError(null); }} className="shrink-0 text-text-light hover:text-text">
+                <button
+                  onClick={() => { setDeleteConfirm(false); setDeleteError(null); setCascadeCount(null); }}
+                  className="shrink-0 text-text-light hover:text-text"
+                >
                   <X className="w-3 h-3" />
                 </button>
               </>

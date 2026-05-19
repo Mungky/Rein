@@ -38,10 +38,20 @@ export async function getFolderTree(): Promise<{ tree: FolderNode[] }> {
 
 // ── File listing ─────────────────────────────────────────────────────────────
 
+export interface FolderMyPerms {
+  can_view: boolean;
+  can_upload: boolean;
+  can_download: boolean;
+  can_rename: boolean;
+  can_delete: boolean;
+  can_move: boolean;
+}
+
 export type FolderFilesResult = {
   files: LibraryFileMeta[];
   total: number;
   folder: { name: string; path: string; department: string };
+  my_perms: FolderMyPerms;
 };
 
 export async function getFolderFiles(

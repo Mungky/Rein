@@ -58,7 +58,11 @@
       "Bash(xargs grep -l \"LibraryFolder\")",
       "Bash(git *)",
       "Bash(pnpm exec *)",
-      "Bash(grep -E \"features/library|app[\\\\\\\\\\\\\\\\/]\\\\\\(app\\\\\\)[\\\\\\\\\\\\\\\\/]dcc|app[\\\\\\\\\\\\\\\\/]\\\\\\(app\\\\\\)[\\\\\\\\\\\\\\\\/]admin|lib[\\\\\\\\\\\\\\\\/]api[\\\\\\\\\\\\\\\\/]library\")"
+      "Bash(grep -E \"features/library|app[\\\\\\\\\\\\\\\\/]\\\\\\(app\\\\\\)[\\\\\\\\\\\\\\\\/]dcc|app[\\\\\\\\\\\\\\\\/]\\\\\\(app\\\\\\)[\\\\\\\\\\\\\\\\/]admin|lib[\\\\\\\\\\\\\\\\/]api[\\\\\\\\\\\\\\\\/]library\")",
+      "Bash(findstr /B /R \"script_location prepend_sys_path\")",
+      "Bash(findstr /N \"^\")",
+      "Bash(findstr /R \"^\\\\[1-3\"[0-9]\"\\\\]\\\\:\")",
+      "Bash(alembic history *)"
     ]
   }
 }

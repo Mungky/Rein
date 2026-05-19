@@ -3,6 +3,11 @@
 Uses OAuth 2.0 for authentication.
 The user authenticates via browser once, then tokens are stored and refreshed automatically.
 All Google API calls are synchronous — they are offloaded to a thread pool when called from async code.
+
+Thread-safety: the cached `_drive_service` is **not** safe for concurrent uploads
+because the underlying httplib2.Http object reuses a single socket. We build a
+fresh service per upload via `_build_drive_service()` to avoid SSL/connection
+collisions when multiple uploads run in parallel.
 """
 
 import asyncio
@@ -10,16 +15,64 @@ import io
 import json
 import os
 import logging
-from typing import Optional
+import ssl
+import time
+from typing import Callable, Optional, TypeVar
 
+import httplib2
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import Resource, build
 from googleapiclient.http import MediaIoBaseUpload
 from googleapiclient.errors import HttpError
 
 from app.config import settings
+
+T = TypeVar("T")
+
+# Retry on these transient errors during Drive calls
+_TRANSIENT_HTTP_CODES = {408, 429, 500, 502, 503, 504}
+
+
+def _drive_call_with_retry(
+    fn: Callable[[], T],
+    max_attempts: int = 4,
+    base_delay: float = 1.0,
+    label: str = "drive call",
+) -> T:
+    """Retry a Drive API call with exponential backoff on transient errors.
+
+    Handles SSL/socket errors and 5xx/429 responses. Permanent errors (4xx
+    except 408/429) raise immediately.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except HttpError as e:
+            last_exc = e
+            status = getattr(e.resp, "status", 0)
+            if status not in _TRANSIENT_HTTP_CODES or attempt >= max_attempts:
+                raise
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "%s: HTTP %d on attempt %d/%d — retry in %.1fs",
+                label, status, attempt, max_attempts, delay,
+            )
+            time.sleep(delay)
+        except (ssl.SSLError, OSError, BrokenPipeError, ConnectionError) as e:
+            last_exc = e
+            if attempt >= max_attempts:
+                raise
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "%s: %s on attempt %d/%d — retry in %.1fs",
+                label, type(e).__name__, attempt, max_attempts, delay,
+            )
+            time.sleep(delay)
+    raise last_exc or RuntimeError(f"{label} failed without exception")
 
 logger = logging.getLogger(__name__)
 
@@ -80,11 +133,23 @@ def _get_credentials() -> Credentials:
 
 
 def _get_drive_service() -> Resource:
-    """Get or create a cached Drive service."""
+    """Get or create a cached Drive service (safe for serial calls only)."""
     global _drive_service
     if _drive_service is None:
         _drive_service = build("drive", "v3", credentials=_get_credentials())
     return _drive_service
+
+
+def _build_drive_service() -> Resource:
+    """Build a fresh Drive service with its own HTTP client.
+
+    Use this for uploads — the cached service shares a single socket via
+    httplib2, which fails under concurrent use (SSL record layer errors,
+    BrokenPipe, etc.). A per-call service eliminates that contention.
+    """
+    creds = _get_credentials()
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=120))
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
 def _get_sheets_service() -> Resource:
@@ -118,54 +183,62 @@ async def upload_file(
     folder_id: str,
     file_size: int = 0,
 ) -> dict:
-    """Upload a file to Google Drive using streaming.
+    """Upload a file to Google Drive with retry on transient errors.
 
-    Args:
-        file_stream: A readable file-like object (e.g. SpooledTemporaryFile).
-        file_name: Name for the file in Drive.
-        mime_type: MIME type of the file.
-        folder_id: Drive folder ID to upload into.
-        file_size: Size in bytes (used for resumable upload chunking).
-
-    Returns:
-        dict with id, name, webViewLink.
+    Uses a fresh service per call (thread-safe under concurrent upload) and
+    `_drive_call_with_retry` for SSL/5xx/socket errors. For small files
+    (<5 MB) uses simple non-resumable upload to skip the extra round-trip.
     """
-    media = MediaIoBaseUpload(
-        file_stream,
-        mimetype=mime_type,
-        resumable=True,
-        chunksize=10 * 1024 * 1024,  # 10 MB chunks
-    )
+    SIMPLE_UPLOAD_LIMIT = 5 * 1024 * 1024  # 5 MB
 
-    file_metadata = {
-        "name": file_name,
-        "parents": [folder_id],
-    }
+    file_metadata = {"name": file_name, "parents": [folder_id]}
 
-    def _do_upload():
-        service = _get_drive_service()
+    # Read content into memory so retries restart from byte 0 cleanly
+    content = file_stream.read()
+
+    def _do_upload() -> dict:
+        service = _build_drive_service()
+        if len(content) <= SIMPLE_UPLOAD_LIMIT:
+            media = MediaIoBaseUpload(
+                io.BytesIO(content),
+                mimetype=mime_type,
+                resumable=False,
+            )
+            response = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id,name,webViewLink",
+                supportsAllDrives=True,
+            ).execute()
+            return dict(response)
+
+        media = MediaIoBaseUpload(
+            io.BytesIO(content),
+            mimetype=mime_type,
+            resumable=True,
+            chunksize=10 * 1024 * 1024,
+        )
         request = service.files().create(
             body=file_metadata,
             media_body=media,
             fields="id,name,webViewLink",
             supportsAllDrives=True,
         )
-
         response = None
         while response is None:
             status, response = request.next_chunk()
             if status:
-                logger.debug(
-                    "Upload %s: %.1f%%", file_name, status.progress() * 100
-                )
-
+                logger.debug("Upload %s: %.1f%%", file_name, status.progress() * 100)
         return dict(response)
 
     try:
         loop = asyncio.get_running_loop()
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, _do_upload),
-            timeout=600,  # 10 min hard limit — thread may still run but task moves on
+            loop.run_in_executor(
+                None,
+                lambda: _drive_call_with_retry(_do_upload, label=f"upload {file_name}"),
+            ),
+            timeout=600,
         )
         return result
     except asyncio.TimeoutError:

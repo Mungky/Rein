@@ -270,27 +270,28 @@ export function TempPanel() {
 
 function ActivityRow({ entry, onPurge }: { entry: ActivityEntry; onPurge: () => void }) {
   const meta = ACTION_META[entry.action] ?? { label: entry.action, icon: <FileText className="w-3.5 h-3.5" />, color: "text-text-muted bg-bg-hover" };
-  const isInProgress =
-    entry.action === "upload" &&
-    (entry.file_status === "uploading" || entry.file_status === "in_audit" || entry.file_status === "failed");
+  // Upload status dots only relevant for upload entries (or related lifecycle events on a file target).
+  const showDots = entry.target_type === "file" && entry.file_status !== null;
 
-  // Build status dots: Propose / Process (upload) / Audit
   const dots: Array<{ key: string; status: "pending" | "running" | "passed" | "failed" }> = [];
-  if (isInProgress) {
-    // Propose always done at this point
+  if (showDots) {
     dots.push({ key: "propose", status: "passed" });
-    // Process = upload to Drive
     if (entry.file_status === "uploading") dots.push({ key: "process", status: "running" });
     else if (entry.file_status === "failed") dots.push({ key: "process", status: "failed" });
     else dots.push({ key: "process", status: "passed" });
-    // Audit
     if (entry.file_status === "in_audit") dots.push({ key: "audit", status: "running" });
     else if (entry.file_status === "failed") dots.push({ key: "audit", status: "failed" });
     else if (entry.file_status === "passed") dots.push({ key: "audit", status: "passed" });
     else dots.push({ key: "audit", status: "pending" });
   }
 
-  const canPurge = isInProgress || entry.file_status === "failed";
+  const canPurge =
+    entry.target_type === "file" &&
+    (entry.file_status === "uploading" || entry.file_status === "in_audit" || entry.file_status === "failed");
+
+  const m = entry.meta ?? {};
+  const detail = renderMetaDetail(entry.action, m, entry.file_name);
+  const errorMessage = typeof m.error === "string" ? m.error : null;
 
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-bg-hover group">
@@ -299,18 +300,28 @@ function ActivityRow({ entry, onPurge }: { entry: ActivityEntry; onPurge: () => 
       </div>
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2 mb-0.5">
+        <div className="flex items-baseline gap-2 mb-0.5 flex-wrap">
           <span className="text-[11px] font-bold uppercase tracking-wider text-text-muted shrink-0">
             {meta.label}
           </span>
-          {entry.file_name && (
-            <span className="text-[12px] font-mono truncate text-text">{entry.file_name}</span>
+          {detail.title && (
+            <span className="text-[12px] font-mono truncate text-text">{detail.title}</span>
           )}
         </div>
+        {detail.subtitle && (
+          <div className="text-[10.5px] text-text-light font-mono truncate mb-0.5">
+            {detail.subtitle}
+          </div>
+        )}
         <div className="text-[10.5px] text-text-muted">
           {entry.actor_name ?? "—"}
           {entry.actor_role && <span className="ml-1 opacity-60">· {entry.actor_role}</span>}
         </div>
+        {errorMessage && (
+          <div className="text-[10.5px] text-red mt-0.5 truncate" title={errorMessage}>
+            {errorMessage}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col items-end gap-1 shrink-0">
@@ -333,6 +344,34 @@ function ActivityRow({ entry, onPurge }: { entry: ActivityEntry; onPurge: () => 
       )}
     </div>
   );
+}
+
+/** Build a human-readable title+subtitle for each action type from log metadata. */
+function renderMetaDetail(action: string, m: Record<string, unknown>, fileName: string | null): { title: string | null; subtitle: string | null } {
+  const s = (k: string) => (typeof m[k] === "string" ? (m[k] as string) : null);
+  switch (action) {
+    case "folder_create":
+      return { title: s("name") ?? s("path"), subtitle: s("parent_path") ? `di ${s("parent_path")}` : null };
+    case "delete_folder":
+      return { title: s("name") ?? s("path"), subtitle: s("path") };
+    case "rename_folder":
+      return { title: s("new_path") ?? s("new_name"), subtitle: s("old_path") ? `← ${s("old_path")}` : null };
+    case "rename_file":
+      return { title: s("new_name"), subtitle: s("old_name") ? `← ${s("old_name")}` : null };
+    case "move_file":
+      return { title: s("filename") ?? fileName, subtitle: s("to_path") ? `${s("from_path") ?? "?"} → ${s("to_path")}` : null };
+    case "upload":
+    case "file_delete":
+    case "view_request":
+    case "view_approved":
+    case "view_denied":
+    case "view_expired":
+      return { title: s("filename") ?? fileName, subtitle: null };
+    case "reset_stuck":
+      return { title: m.count ? `${m.count} file di-reset` : null, subtitle: null };
+    default:
+      return { title: fileName ?? s("filename") ?? s("name"), subtitle: null };
+  }
 }
 
 function EmailConfigPanel({ onClose }: { onClose: () => void }) {
