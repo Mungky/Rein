@@ -56,7 +56,7 @@ export default function LoginPage() {
         return;
       }
 
-      router.push("/dashboard");
+      router.push("/dcc");
       router.refresh();
     } catch {
       setError("Terjadi kesalahan jaringan. Silakan coba lagi.");

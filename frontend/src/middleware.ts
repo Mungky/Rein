@@ -24,9 +24,9 @@ export async function middleware(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
 
-  // If user is authenticated and visiting login, redirect to dashboard
+  // If user is authenticated and visiting login, redirect to DCC (default landing)
   if (session && pathname === "/login") {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+    return NextResponse.redirect(new URL("/dcc", request.url));
   }
 
   // If user is not authenticated and trying to access a protected route, redirect to login

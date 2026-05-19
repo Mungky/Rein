@@ -51,6 +51,7 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     "dcc:delete",
     "dcc:chat",
     "admin:manage_users",
+    "admin:manage_file_types",
     # Workspace permissions
     "workspace:view",        # see projects & tasks
     "workspace:manage",      # create/edit projects, phases, tasks (manager+)
@@ -69,6 +70,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "dcc:delete": "Hapus Dokumen",
     "dcc:chat": "Gunakan AI Chat",
     "admin:manage_users": "Kelola Pengguna (Admin)",
+    "admin:manage_file_types": "Kelola Jenis File (Admin)",
     "workspace:view": "Lihat Workspace",
     "workspace:manage": "Kelola Proyek & Task",
     "workspace:complete_task": "Submit Penyelesaian Task",

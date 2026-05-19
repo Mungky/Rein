@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.dependencies import require_role
+from app.services.metadata import invalidate_file_types_cache
+from db.models.file_type import FileType
 from db.models.profile import AppRole, Profile
 from db.models.role_permission import (
     ALL_PERMISSIONS,
@@ -396,3 +398,112 @@ async def set_permissions(
     db.add_all(rows)
     await db.flush()
     return {"updated": len(rows)}
+
+
+# ---------------------------------------------------------------------------
+# File types — admin-editable list of document type codes
+# ---------------------------------------------------------------------------
+
+FILE_TYPE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,7}$")
+
+
+class FileTypeCreateRequest(BaseModel):
+    code: str = Field(min_length=2, max_length=8)
+    label: str = Field(min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=500)
+    sort_order: int = 0
+
+    @field_validator("code")
+    @classmethod
+    def _validate_code(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not FILE_TYPE_CODE_RE.match(v):
+            raise ValueError(
+                "Kode hanya huruf besar dan angka (2-8 karakter), diawali huruf."
+            )
+        return v
+
+
+class FileTypeUpdateRequest(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=500)
+    is_active: bool | None = None
+    sort_order: int | None = None
+
+
+class FileTypeResponse(BaseModel):
+    code: str
+    label: str
+    description: str | None
+    is_active: bool
+    sort_order: int
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/file-types", response_model=list[FileTypeResponse])
+async def list_file_types(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _admin: AdminOnly,
+):
+    """List all file types (admin sees active + inactive)."""
+    result = await db.execute(
+        select(FileType).order_by(FileType.sort_order, FileType.code)
+    )
+    return list(result.scalars().all())
+
+
+@router.post(
+    "/file-types",
+    response_model=FileTypeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_file_type(
+    body: FileTypeCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _admin: AdminOnly,
+):
+    """Create a new file type. Code is immutable once created."""
+    if await db.get(FileType, body.code) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Kode '{body.code}' sudah dipakai.",
+        )
+    ft = FileType(
+        code=body.code,
+        label=body.label.strip(),
+        description=(body.description or "").strip() or None,
+        sort_order=body.sort_order,
+    )
+    db.add(ft)
+    await db.flush()
+    await db.refresh(ft)
+    invalidate_file_types_cache()
+    return ft
+
+
+@router.patch("/file-types/{code}", response_model=FileTypeResponse)
+async def update_file_type(
+    code: str,
+    body: FileTypeUpdateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _admin: AdminOnly,
+):
+    """Update label/description/is_active/sort_order. Code is immutable."""
+    ft = await db.get(FileType, code.upper())
+    if ft is None:
+        raise HTTPException(status_code=404, detail="Jenis file tidak ditemukan")
+
+    if body.label is not None:
+        ft.label = body.label.strip()
+    if body.description is not None:
+        ft.description = body.description.strip() or None
+    if body.is_active is not None:
+        ft.is_active = body.is_active
+    if body.sort_order is not None:
+        ft.sort_order = body.sort_order
+
+    await db.flush()
+    await db.refresh(ft)
+    invalidate_file_types_cache()
+    return ft

@@ -30,13 +30,15 @@ class Settings:
     )
 
     # FastAPI
-    api_secret_key: str = os.getenv("API_SECRET_KEY", "dev-secret-key")
+    api_secret_key: str = os.getenv("API_SECRET_KEY", "")
     api_port: int = int(os.getenv("API_PORT", "8000"))
 
-    # CORS
-    cors_origins: list[str] = os.getenv(
-        "CORS_ORIGINS", "http://localhost:3000"
-    ).split(",")
+    # CORS — strip whitespace and drop empty entries to avoid silent wildcard bugs
+    cors_origins: list[str] = [
+        o.strip()
+        for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+        if o.strip()
+    ]
 
     # Google Drive & Sheets (OAuth 2.0)
     google_client_id: str = os.getenv("GOOGLE_CLIENT_ID", "")

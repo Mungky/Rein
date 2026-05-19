@@ -28,6 +28,7 @@ export type Permission =
   | "dcc:delete"
   | "dcc:chat"
   | "admin:manage_users"
+  | "admin:manage_file_types"
   | "workspace:view"
   | "workspace:manage"
   | "workspace:complete_task";
@@ -43,6 +44,7 @@ export const ALL_PERMISSIONS: Permission[] = [
   "dcc:delete",
   "dcc:chat",
   "admin:manage_users",
+  "admin:manage_file_types",
   "workspace:view",
   "workspace:manage",
   "workspace:complete_task",
@@ -59,6 +61,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "dcc:delete": "Hapus Dokumen",
   "dcc:chat": "Gunakan AI Chat",
   "admin:manage_users": "Kelola Pengguna (Admin)",
+  "admin:manage_file_types": "Kelola Jenis File (Admin)",
   "workspace:view": "Lihat Workspace",
   "workspace:manage": "Kelola Proyek & Task",
   "workspace:complete_task": "Submit Penyelesaian Task",

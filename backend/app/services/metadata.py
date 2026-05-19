@@ -2,41 +2,75 @@
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.client import Client
+from db.models.file_type import FileType
 from db.models.project import Project
 
 logger = logging.getLogger(__name__)
 
-KNOWN_DOC_TYPES_SET = {"Q", "DRW", "INV", "PO", "SPK", "RFP", "RPT", "SPEC", "OTHER"}
-
-# Full: TYPE-CLIENT-NUMBER  (e.g.  DRW-PLB-0041,  Q-MBP-2514)
-_FULL_PATTERN = re.compile(
-    r"^(Q|DRW|INV|PO|SPK|RFP|RPT|SPEC|OTHER)-([A-Za-z]{2,5})-(\d[\d\-]*)",
-    re.IGNORECASE,
-)
-# Simple: TYPE-NUMBER  (e.g.  Q-2514,  INV-42)
-_TYPE_NUM_PATTERN = re.compile(
-    r"^(Q|DRW|INV|PO|SPK|RFP|RPT|SPEC|OTHER)-(\d[\d\-]*)",
-    re.IGNORECASE,
-)
-# Type-only prefix  (e.g.  "RPT Final..." or "SPEC_v2...")
-_TYPE_ONLY_PATTERN = re.compile(
-    r"^(Q|DRW|INV|PO|SPK|RFP|RPT|SPEC|OTHER)[-_\s]",
-    re.IGNORECASE,
-)
-
-# Extension hints — only for unambiguous types, low confidence
+# Extension hints — only for unambiguous types, low confidence.
+# Kept hardcoded because they map physical formats to a conventional code,
+# and changing them risks miscategorising historical uploads.
 EXT_TYPE_HINTS: dict[str, tuple[str, float]] = {
     ".dwg": ("DRW", 0.85),
     ".dxf": ("DRW", 0.85),
     ".step": ("DRW", 0.55),
     ".stp": ("DRW", 0.55),
 }
+
+# In-process cache for the active file_types list. 60s TTL keeps the upload
+# hot path from hitting the DB on every propose/upload while still picking
+# up admin changes within a minute.
+_CACHE_TTL_SECONDS = 60.0
+_cache: dict[str, object] = {
+    "expires_at": 0.0,
+    "codes": [],          # list[str] — active codes, upper-cased
+    "patterns": None,     # (full, type_num, type_only) regex tuple or None
+}
+
+
+def invalidate_file_types_cache() -> None:
+    """Called by admin write endpoints so newly added/deactivated types apply immediately."""
+    _cache["expires_at"] = 0.0
+
+
+async def _load_active_file_types(db: AsyncSession) -> list[str]:
+    """Return active file_type codes, refreshing the cache when the TTL expires."""
+    now = time.monotonic()
+    if now < _cache["expires_at"] and _cache["codes"]:
+        return _cache["codes"]  # type: ignore[return-value]
+
+    result = await db.execute(
+        select(FileType.code).where(FileType.is_active.is_(True))
+    )
+    codes = [row[0].upper() for row in result.all()]
+    if not codes:
+        # Empty table — fall back to OTHER so detection still produces a result.
+        codes = ["OTHER"]
+    _cache["codes"] = codes
+    _cache["patterns"] = _build_patterns(codes)
+    _cache["expires_at"] = now + _CACHE_TTL_SECONDS
+    return codes
+
+
+def _build_patterns(codes: list[str]) -> tuple[re.Pattern, re.Pattern, re.Pattern]:
+    """Compile filename regexes for the given set of codes."""
+    alt = "|".join(re.escape(c) for c in codes)
+    full = re.compile(rf"^({alt})-([A-Za-z]{{2,5}})-(\d[\d\-]*)", re.IGNORECASE)
+    type_num = re.compile(rf"^({alt})-(\d[\d\-]*)", re.IGNORECASE)
+    type_only = re.compile(rf"^({alt})[-_\s]", re.IGNORECASE)
+    return full, type_num, type_only
+
+
+async def _get_patterns(db: AsyncSession) -> tuple[re.Pattern, re.Pattern, re.Pattern]:
+    await _load_active_file_types(db)
+    return _cache["patterns"]  # type: ignore[return-value]
 
 
 @dataclass
@@ -69,8 +103,10 @@ async def detect_metadata_from_filename(
     base = _name_no_ext(filename)
     toks = _tokens(filename)
 
+    full_pat, type_num_pat, type_only_pat = await _get_patterns(db)
+
     # ── 1. Full pattern  TYPE-CLIENT-NUMBER ─────────────────────────────────
-    m = _FULL_PATTERN.match(base)
+    m = full_pat.match(base)
     if m:
         result.doc_type = m.group(1).upper()
         result.doc_type_confidence = 0.95
@@ -95,13 +131,13 @@ async def detect_metadata_from_filename(
         return result
 
     # ── 2. Simple pattern  TYPE-NUMBER ──────────────────────────────────────
-    m = _TYPE_NUM_PATTERN.match(base)
+    m = type_num_pat.match(base)
     if m:
         result.doc_type = m.group(1).upper()
         result.doc_type_confidence = 0.90
     else:
         # ── 3. Type-only prefix ──────────────────────────────────────────────
-        m = _TYPE_ONLY_PATTERN.match(base)
+        m = type_only_pat.match(base)
         if m:
             result.doc_type = m.group(1).upper()
             result.doc_type_confidence = 0.80

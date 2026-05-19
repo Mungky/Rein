@@ -1,23 +1,10 @@
 "use client";
 
 import { Check, FileText, Loader2, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { proposeFile } from "@/lib/api/library";
+import { getActiveFileTypes, formatFileTypeOption, type ActiveFileType } from "./file-types";
 import type { FolderNode, UploadFormValues } from "./types";
-
-const DOC_TYPES = [
-  { value: "Q", label: "Q — Quotation" },
-  { value: "DRW", label: "DRW — Gambar Teknik" },
-  { value: "INV", label: "INV — Invoice" },
-  { value: "PO", label: "PO — Purchase Order" },
-  { value: "SPK", label: "SPK — Surat Perintah Kerja" },
-  { value: "RFP", label: "RFP — Request for Proposal" },
-  { value: "RPT", label: "RPT — Report" },
-  { value: "SPEC", label: "SPEC — Spesifikasi" },
-  { value: "OTHER", label: "OTHER — Lainnya" },
-];
-
-const KNOWN_TYPES = new Set(["Q", "DRW", "INV", "PO", "SPK", "RFP", "RPT", "SPEC", "OTHER"]);
 
 function stripExt(name: string): string {
   return name.includes(".") ? name.replace(/\.[^.]+$/, "") : name;
@@ -35,12 +22,15 @@ function formatBytes(b: number): string {
  *   - "TYPE-anything"          (just type, no archive number)
  * Returns null if the leading token before the first dash isn't a known type.
  */
-function parseExistingNumber(filename: string): { docType: string; docNumber: string; titleRest: string } | null {
+function parseExistingNumber(
+  filename: string,
+  knownTypes: Set<string>,
+): { docType: string; docNumber: string; titleRest: string } | null {
   const base = stripExt(filename);
   const firstDash = base.indexOf("-");
   if (firstDash === -1) return null;
   const prefix = base.slice(0, firstDash).toUpperCase().trim();
-  if (!KNOWN_TYPES.has(prefix)) return null;
+  if (!knownTypes.has(prefix)) return null;
   const rest = base.slice(firstDash + 1).trim();
   // Looks like "12345-rest" — treat as number-then-title
   const numMatch = rest.match(/^(\d{2,}[\w]*)\s*-\s*(.+)$/);
@@ -93,24 +83,57 @@ interface BatchUploadModalProps {
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
 export function BatchUploadModal({ files, folder, onClose, onApproveAll }: BatchUploadModalProps) {
-  const [items, setItems] = useState<BatchItem[]>(() =>
-    files.map((file, i) => {
-      const parsed = parseExistingNumber(file.name);
-      return {
-        key: `${i}-${file.name}-${file.size}`,
-        file,
-        phase: "detecting" as const,
-        form: {
-          folder_id: folder.id,
-          doc_type: parsed?.docType ?? "",
-          doc_number: parsed?.docNumber ?? "",
-          title: parsed?.titleRest ?? stripExt(file.name),
-          note: "",
-        },
-        docTypeConfidence: parsed?.docType ? 0.9 : 0,
-      };
-    })
+  const [fileTypes, setFileTypes] = useState<ActiveFileType[]>([]);
+  const docTypeOptions = useMemo(
+    () => fileTypes.map((t) => ({ value: t.code, label: formatFileTypeOption(t) })),
+    [fileTypes],
   );
+
+  const [items, setItems] = useState<BatchItem[]>(() =>
+    files.map((file, i) => ({
+      key: `${i}-${file.name}-${file.size}`,
+      file,
+      phase: "detecting" as const,
+      form: {
+        folder_id: folder.id,
+        doc_type: "",
+        doc_number: "",
+        title: stripExt(file.name),
+        note: "",
+      },
+      docTypeConfidence: 0,
+    }))
+  );
+
+  // Load file types once on mount, then re-parse filenames against the dynamic set.
+  useEffect(() => {
+    let cancelled = false;
+    getActiveFileTypes()
+      .then((list) => {
+        if (cancelled) return;
+        setFileTypes(list);
+        const knownSet = new Set(list.map((t) => t.code));
+        setItems((prev) =>
+          prev.map((it, i) => {
+            const parsed = parseExistingNumber(files[i].name, knownSet);
+            if (!parsed) return it;
+            return {
+              ...it,
+              form: {
+                ...it.form,
+                doc_type: parsed.docType,
+                doc_number: parsed.docNumber,
+                title: parsed.titleRest || stripExt(files[i].name),
+              },
+              docTypeConfidence: 0.9,
+            };
+          })
+        );
+      })
+      .catch(() => { /* fall back to empty list — user can still type manually */ });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const detectStarted = useRef(false);
 
@@ -241,7 +264,7 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
               className="field-select text-[11.5px] w-[150px]"
             >
               <option value="">— Tipe Dokumen —</option>
-              {DOC_TYPES.map((t) => (
+              {docTypeOptions.map((t) => (
                 <option key={t.value} value={t.value}>{t.label}</option>
               ))}
             </select>
@@ -285,6 +308,7 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
                 key={item.key}
                 item={item}
                 index={index}
+                docTypeOptions={docTypeOptions}
                 onSetField={setField}
                 onRemove={removeItem}
               />
@@ -320,11 +344,13 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
 function FileCard({
   item,
   index,
+  docTypeOptions,
   onSetField,
   onRemove,
 }: {
   item: BatchItem;
   index: number;
+  docTypeOptions: { value: string; label: string }[];
   onSetField: (index: number, field: keyof UploadFormValues, value: string) => void;
   onRemove: (index: number) => void;
 }) {
@@ -383,7 +409,7 @@ function FileCard({
                 className="field-select text-[12px]"
               >
                 <option value="">— Pilih tipe —</option>
-                {DOC_TYPES.map((t) => (
+                {docTypeOptions.map((t) => (
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>

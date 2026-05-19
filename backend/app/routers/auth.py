@@ -2,9 +2,10 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.dependencies import get_current_profile
+from app.limiter import limiter
 from db.models.profile import Profile
 
 router = APIRouter()
@@ -29,7 +30,11 @@ async def get_me(profile: Annotated[Profile, Depends(get_current_profile)]):
 
 
 @router.post("/session")
-async def verify_session(profile: Annotated[Profile, Depends(get_current_profile)]):
+@limiter.limit("20/minute")
+async def verify_session(
+    request: Request,
+    profile: Annotated[Profile, Depends(get_current_profile)],
+):
     """Verify the current session and return user profile + role."""
     return {
         "user": _profile_payload(profile),

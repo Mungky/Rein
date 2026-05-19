@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select, text as sa_text
@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.dependencies import get_current_profile, require_role
+from app.limiter import limiter
 from app.services.email import send_email
 from db.models.audit_job import AuditJob, LAYER_NAMES
 from db.models.library_audit_log import (
@@ -32,6 +33,7 @@ from db.models.library_audit_log import (
     LOG_VIEW_EXPIRED,
     LOG_VIEW_REQUEST,
 )
+from db.models.file_type import FileType
 from db.models.library_file import LibraryFile, LibraryFileStatus
 from db.models.document_sequence import DocumentSequence, KNOWN_DOC_TYPES, DOC_TYPE_LABELS
 from db.models.folder_permission import FolderPermission
@@ -152,6 +154,29 @@ class FolderNode(BaseModel):
 
 
 FolderNode.model_rebuild()
+
+
+@router.get("/file-types")
+async def list_active_file_types(
+    _profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Return active file types — consumed by the upload form to populate the doc-type dropdown."""
+    result = await db.execute(
+        select(FileType)
+        .where(FileType.is_active.is_(True))
+        .order_by(FileType.sort_order, FileType.code)
+    )
+    return {
+        "file_types": [
+            {
+                "code": ft.code,
+                "label": ft.label,
+                "description": ft.description,
+            }
+            for ft in result.scalars().all()
+        ]
+    }
 
 
 @router.get("/tree")
@@ -426,7 +451,9 @@ class ProposeRequest(BaseModel):
 
 
 @router.post("/propose")
+@limiter.limit("60/minute")
 async def propose_file(
+    request: Request,
     body: ProposeRequest,
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -466,7 +493,9 @@ async def propose_file(
 # ---------------------------------------------------------------------------
 
 @router.post("/upload", status_code=201)
+@limiter.limit("30/minute")
 async def upload_file(
+    request: Request,
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
     file: UploadFile = File(...),
