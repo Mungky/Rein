@@ -1971,12 +1971,22 @@ async def get_admin_activity(
     )
     stuck_count = stuck_result.scalar() or 0
 
+    # Count failed rows the admin may want to bulk-purge
+    failed_result = await db.execute(
+        select(func.count(LibraryFile.id)).where(
+            LibraryFile.upload_status == LibraryFileStatus.failed,
+            LibraryFile.is_deleted.is_(False),
+        )
+    )
+    failed_count = failed_result.scalar() or 0
+
     return {
         "entries": entries,
         "total": total,
         "page": page,
         "page_size": page_size,
         "stuck_count": stuck_count,
+        "failed_count": failed_count,
         "email_configured": bool(
             (settings.librarian_emails or settings.smtp_from)
             and settings.smtp_user
@@ -2025,6 +2035,68 @@ async def reset_stuck_uploads(
         )
     await db.commit()
     return {"reset_count": len(stuck), "files": affected}
+
+
+@router.post("/admin/purge-failed", dependencies=[Depends(require_role(AppRole.admin))])
+async def purge_all_failed(
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Hard-remove ALL failed / stuck records from DB in one call.
+
+    Trashes any orphan Drive files attached to those rows (best-effort; a
+    Drive failure for one file does not abort the others). Use this when
+    a batch upload partially failed and left behind ghost rows that show
+    up in the activity log but never landed in Drive.
+    """
+    from app.services import gdrive
+
+    result = await db.execute(
+        select(LibraryFile).where(
+            LibraryFile.upload_status.in_([
+                LibraryFileStatus.failed,
+                LibraryFileStatus.uploading,
+                LibraryFileStatus.in_audit,
+            ]),
+            LibraryFile.is_deleted.is_(False),
+        )
+    )
+    rows = result.scalars().all()
+
+    purged = []
+    drive_trash_failed = 0
+    for f in rows:
+        if f.gdrive_file_id:
+            try:
+                await gdrive.trash_file(f.gdrive_file_id)
+            except Exception as exc:
+                drive_trash_failed += 1
+                logger.warning(
+                    "Bulk purge: failed to trash Drive file %s: %s",
+                    f.gdrive_file_id, exc,
+                )
+        await db.execute(
+            sa_text("DELETE FROM audit_jobs WHERE file_id = :fid"),
+            {"fid": f.id},
+        )
+        purged.append({
+            "id": str(f.id),
+            "file_name": f.file_name or f.original_name,
+            "status": f.upload_status.value,
+        })
+        await db.delete(f)
+
+    if purged:
+        await _write_log(
+            db, profile, "purge_temp_file", target_type=None, target_id=None,
+            metadata={"bulk": True, "count": len(purged), "drive_trash_failed": drive_trash_failed},
+        )
+    await db.commit()
+    return {
+        "purged_count": len(purged),
+        "drive_trash_failed": drive_trash_failed,
+        "files": purged,
+    }
 
 
 @router.delete("/admin/temp/{file_id}", dependencies=[Depends(require_role(AppRole.admin))])

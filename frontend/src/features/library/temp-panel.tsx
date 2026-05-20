@@ -24,6 +24,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   getAdminActivity,
   getEmailConfig,
+  purgeAllFailed,
   purgeTempFile,
   resetStuckUploads,
   sendTestEmail,
@@ -93,8 +94,10 @@ export function TempPanel() {
   const [actionFilter, setActionFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [stuckCount, setStuckCount] = useState(0);
+  const [failedCount, setFailedCount] = useState(0);
   const [emailConfigured, setEmailConfigured] = useState(true);
   const [resetting, setResetting] = useState(false);
+  const [purgingAll, setPurgingAll] = useState(false);
   const [showEmailPanel, setShowEmailPanel] = useState(false);
 
   const load = useCallback(() => {
@@ -104,6 +107,7 @@ export function TempPanel() {
         setEntries(r.entries);
         setTotal(r.total);
         setStuckCount(r.stuck_count);
+        setFailedCount(r.failed_count);
         setEmailConfigured(r.email_configured);
       })
       .catch(() => setEntries([]))
@@ -128,6 +132,27 @@ export function TempPanel() {
       load();
     } finally {
       setResetting(false);
+    }
+  };
+
+  const handlePurgeAllFailed = async () => {
+    if (!confirm(
+      `Hapus ${failedCount} record gagal/stuck secara permanen?\n\n` +
+      `Record akan dihapus dari DB. File orphan di Drive juga akan masuk Trash.\n` +
+      `Sequence number TIDAK ikut di-rewind (gap nomor itu normal).`
+    )) return;
+    setPurgingAll(true);
+    try {
+      const r = await purgeAllFailed();
+      alert(
+        `${r.purged_count} record dihapus.` +
+        (r.drive_trash_failed > 0 ? `\n${r.drive_trash_failed} file Drive tidak bisa di-trash (mungkin sudah tidak ada).` : "")
+      );
+      load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Gagal hapus massal");
+    } finally {
+      setPurgingAll(false);
     }
   };
 
@@ -162,6 +187,18 @@ export function TempPanel() {
           >
             {resetting ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />}
             {stuckCount} stuck
+          </button>
+        )}
+
+        {failedCount > 0 && (
+          <button
+            onClick={handlePurgeAllFailed}
+            disabled={purgingAll}
+            className="btn btn-default btn-sm gap-1.5 text-red border-red/40"
+            title={`Hapus permanen ${failedCount} record gagal`}
+          >
+            {purgingAll ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+            Bersihkan {failedCount} gagal
           </button>
         )}
 

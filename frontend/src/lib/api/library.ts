@@ -112,6 +112,7 @@ export interface ActivityResponse {
   page: number;
   page_size: number;
   stuck_count: number;
+  failed_count: number;
   email_configured: boolean;
 }
 
@@ -142,6 +143,22 @@ export async function purgeTempFile(fileId: string): Promise<void> {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || "Gagal menghapus record");
   }
+}
+
+export async function purgeAllFailed(): Promise<{
+  purged_count: number;
+  drive_trash_failed: number;
+}> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/admin/purge-failed`, {
+    method: "POST",
+    headers,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Gagal hapus massal");
+  }
+  return res.json();
 }
 
 export interface EmailConfig {
