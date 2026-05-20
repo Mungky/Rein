@@ -1,10 +1,18 @@
 "use client";
 
-import { Check, FileText, Loader2, X } from "lucide-react";
+import { AlertTriangle, Check, FileText, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { proposeFile } from "@/lib/api/library";
 import { getActiveFileTypes, formatFileTypeOption, type ActiveFileType } from "./file-types";
-import type { FolderNode, UploadFormValues } from "./types";
+import type { DuplicateMatch, FolderNode, UploadFormValues } from "./types";
+
+async function sha256Hex(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 function stripExt(name: string): string {
   return name.includes(".") ? name.replace(/\.[^.]+$/, "") : name;
@@ -71,6 +79,7 @@ interface BatchItem {
   phase: "detecting" | "ready";
   form: UploadFormValues;
   docTypeConfidence: number;
+  duplicate: DuplicateMatch | null;
 }
 
 interface BatchUploadModalProps {
@@ -102,6 +111,7 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
         note: "",
       },
       docTypeConfidence: 0,
+      duplicate: null,
     }))
   );
 
@@ -143,7 +153,11 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
     detectStarted.current = true;
 
     files.forEach((file, index) => {
-      proposeFile(file.name, file.size, folder.id)
+      // Hash + propose run in parallel; hash usually finishes first for small files,
+      // so we attach it to the propose call once ready.
+      sha256Hex(file)
+        .catch(() => undefined) // fail-open: hash error shouldn't block upload flow
+        .then((hash) => proposeFile(file.name, file.size, folder.id, hash))
         .then((prop) => {
           setItems((prev) =>
             prev.map((it, i) => {
@@ -159,6 +173,7 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
                   doc_type: it.form.doc_type || aiType,
                 },
                 docTypeConfidence: it.docTypeConfidence > 0 ? it.docTypeConfidence : aiConf,
+                duplicate: prop.duplicate ?? null,
               };
             })
           );
@@ -316,6 +331,19 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
           )}
         </div>
 
+        {/* Duplicate summary banner (above footer) */}
+        {items.some((it) => it.duplicate) && (
+          <div className="px-4 py-2 bg-amber-bg border-t border-amber/40 shrink-0 flex items-center gap-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber shrink-0" />
+            <div className="text-[11px] text-text leading-snug">
+              <span className="font-semibold">
+                {items.filter((it) => it.duplicate).length} file
+              </span>{" "}
+              terdeteksi sudah pernah diupload. Lihat detail di setiap kartu sebelum lanjut.
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
         <div className="flex items-center gap-2 px-4 py-3 border-t border-border shrink-0">
           <button onClick={onClose} className="btn btn-default">Batal</button>
@@ -364,6 +392,8 @@ function FileCard({
         <div className="w-6 h-6 rounded bg-bg-ctrl border border-border flex items-center justify-center shrink-0">
           {item.phase === "detecting" ? (
             <Loader2 className="w-3 h-3 animate-spin text-primary" />
+          ) : item.duplicate ? (
+            <AlertTriangle className="w-3 h-3 text-amber" />
           ) : (
             <Check className="w-3 h-3 text-green" />
           )}
@@ -386,6 +416,32 @@ function FileCard({
           <X className="w-3 h-3" />
         </button>
       </div>
+
+      {/* Duplicate notice — surfaced whether or not the card is expanded */}
+      {item.duplicate && (
+        <div className="ml-8 mb-2 px-2.5 py-1.5 rounded border border-amber/40 bg-amber-bg text-[11px] leading-relaxed">
+          <div className="flex items-start gap-1.5">
+            <AlertTriangle className="w-3 h-3 text-amber shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-text font-semibold">File ini sudah pernah diupload</div>
+              <div className="text-text-muted">
+                Sebagai{" "}
+                <span className="font-mono text-text">{item.duplicate.file_name}</span>
+                {item.duplicate.doc_number && (
+                  <> (nomor <span className="font-mono">{item.duplicate.doc_number}</span>)</>
+                )}{" "}
+                oleh {item.duplicate.uploader_name},{" "}
+                {new Date(item.duplicate.uploaded_at).toLocaleDateString("id-ID", {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                })}
+                . Anda tetap bisa lanjut upload kalau ini disengaja, atau hapus dari antrian.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {expanded && (
         <div className="pl-8 flex flex-col gap-2">

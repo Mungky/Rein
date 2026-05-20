@@ -36,16 +36,23 @@ T = TypeVar("T")
 _TRANSIENT_HTTP_CODES = {408, 429, 500, 502, 503, 504}
 
 
+_TRANSIENT_HTTPLIB2_ERRORS: tuple = (
+    httplib2.RedirectMissingLocation,
+    httplib2.ServerNotFoundError,
+    httplib2.HttpLib2Error,
+)
+
+
 def _drive_call_with_retry(
     fn: Callable[[], T],
-    max_attempts: int = 4,
+    max_attempts: int = 5,
     base_delay: float = 1.0,
     label: str = "drive call",
 ) -> T:
     """Retry a Drive API call with exponential backoff on transient errors.
 
-    Handles SSL/socket errors and 5xx/429 responses. Permanent errors (4xx
-    except 408/429) raise immediately.
+    Handles SSL/socket errors, httplib2 redirect/parse failures, and 5xx/429
+    responses. Permanent errors (4xx except 408/429) raise immediately.
     """
     last_exc: Exception | None = None
     for attempt in range(1, max_attempts + 1):
@@ -60,6 +67,16 @@ def _drive_call_with_retry(
             logger.warning(
                 "%s: HTTP %d on attempt %d/%d — retry in %.1fs",
                 label, status, attempt, max_attempts, delay,
+            )
+            time.sleep(delay)
+        except _TRANSIENT_HTTPLIB2_ERRORS as e:
+            last_exc = e
+            if attempt >= max_attempts:
+                raise
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "%s: %s on attempt %d/%d — retry in %.1fs",
+                label, type(e).__name__, attempt, max_attempts, delay,
             )
             time.sleep(delay)
         except (ssl.SSLError, OSError, BrokenPipeError, ConnectionError) as e:
@@ -216,7 +233,7 @@ async def upload_file(
             io.BytesIO(content),
             mimetype=mime_type,
             resumable=True,
-            chunksize=10 * 1024 * 1024,
+            chunksize=5 * 1024 * 1024,
         )
         request = service.files().create(
             body=file_metadata,

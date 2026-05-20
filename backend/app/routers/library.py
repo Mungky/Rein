@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -448,6 +449,11 @@ class ProposeRequest(BaseModel):
     filename: str
     file_size: int
     folder_id: str | None = None
+    content_hash: str | None = None  # SHA-256 hex (64 chars) — used for duplicate detection
+
+
+# Hex-only string of length 64 — guards against malformed input before DB lookup
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @router.post("/propose")
@@ -458,10 +464,36 @@ async def propose_file(
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Detect metadata from filename. No upload happens here."""
+    """Detect metadata from filename + optional duplicate check by SHA-256 hash."""
     from app.services.metadata import detect_metadata_from_filename
+    from db.models.profile import Profile as ProfileModel
 
     detected = await detect_metadata_from_filename(body.filename, db)
+
+    # Duplicate check (only if frontend supplied a hash and it matches the format)
+    duplicate = None
+    if body.content_hash and _SHA256_RE.match(body.content_hash):
+        dup_result = await db.execute(
+            select(LibraryFile, ProfileModel.full_name)
+            .join(ProfileModel, LibraryFile.uploader_id == ProfileModel.id)
+            .where(
+                LibraryFile.content_hash == body.content_hash,
+                LibraryFile.upload_status == LibraryFileStatus.passed,
+                LibraryFile.is_deleted.is_(False),
+            )
+            .order_by(LibraryFile.created_at.desc())
+            .limit(1)
+        )
+        dup_row = dup_result.first()
+        if dup_row:
+            existing_file, uploader_name = dup_row
+            duplicate = {
+                "id": str(existing_file.id),
+                "file_name": existing_file.file_name or existing_file.original_name,
+                "doc_number": existing_file.doc_number,
+                "uploader_name": uploader_name,
+                "uploaded_at": existing_file.created_at.isoformat(),
+            }
 
     await _write_log(
         db, profile, LOG_PROPOSE,
@@ -485,6 +517,7 @@ async def propose_file(
             },
             "folder": {"value": detected.folder_path, "confidence": detected.folder_confidence},
         },
+        "duplicate": duplicate,
     }
 
 

@@ -237,12 +237,18 @@ export async function proposeFile(
   filename: string,
   fileSize: number,
   folderId?: string,
+  contentHash?: string,
 ): Promise<ProposeResult> {
   const headers = await authHeaders();
   const res = await fetch(`${API}/api/library/propose`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ filename, file_size: fileSize, folder_id: folderId }),
+    body: JSON.stringify({
+      filename,
+      file_size: fileSize,
+      folder_id: folderId,
+      content_hash: contentHash,
+    }),
   });
   if (!res.ok) throw new Error("Gagal mendeteksi metadata");
   return res.json();

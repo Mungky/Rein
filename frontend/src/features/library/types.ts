@@ -83,6 +83,14 @@ export interface DetectedField {
   confidence: number;
 }
 
+export interface DuplicateMatch {
+  id: string;
+  file_name: string;
+  doc_number: string | null;
+  uploader_name: string;
+  uploaded_at: string;
+}
+
 export interface ProposeResult {
   filename: string;
   detected: {
@@ -91,6 +99,7 @@ export interface ProposeResult {
     project: DetectedField & { code: string | null };
     folder: DetectedField;
   };
+  duplicate: DuplicateMatch | null;
 }
 
 export interface UploadFormValues {
