@@ -537,6 +537,7 @@ async def upload_file(
     doc_number: str | None = Form(None),
     title: str | None = Form(None),
     note: str | None = Form(None),
+    use_original_name: bool = Form(False),
 ):
     """
     Receive confirmed file + metadata. Upload directly to the folder's Drive location.
@@ -590,42 +591,50 @@ async def upload_file(
     content_hash = hashlib.sha256(content).hexdigest()
     seq_number = 0
     archive_number = ""
-    if doc_number and doc_number.strip():
-        archive_number = doc_number.strip()
-    elif doc_type:
-        seq_result = await db.execute(
-            sa_text(
-                "UPDATE document_sequences SET current_number = current_number + 1, "
-                "updated_at = now() WHERE doc_type = :dt RETURNING current_number"
-            ),
-            {"dt": doc_type},
-        )
-        row = seq_result.fetchone()
-        if row:
-            seq_number = row[0]
-        else:
-            await db.execute(
+
+    if use_original_name:
+        # User opted out of REIN naming format — keep filename as-is, just sanitize
+        # path separators and characters Drive doesn't allow.
+        doc_type = None
+        doc_number = None
+        file_name = _sanitize_filename(original_name)
+    else:
+        if doc_number and doc_number.strip():
+            archive_number = doc_number.strip()
+        elif doc_type:
+            seq_result = await db.execute(
                 sa_text(
-                    "INSERT INTO document_sequences (doc_type, current_number) "
-                    "VALUES (:dt, 1) ON CONFLICT (doc_type) DO UPDATE "
-                    "SET current_number = document_sequences.current_number + 1, updated_at = now() "
-                    "RETURNING current_number"
+                    "UPDATE document_sequences SET current_number = current_number + 1, "
+                    "updated_at = now() WHERE doc_type = :dt RETURNING current_number"
                 ),
                 {"dt": doc_type},
             )
-            seq_number = 1
-        archive_number = str(seq_number)
+            row = seq_result.fetchone()
+            if row:
+                seq_number = row[0]
+            else:
+                await db.execute(
+                    sa_text(
+                        "INSERT INTO document_sequences (doc_type, current_number) "
+                        "VALUES (:dt, 1) ON CONFLICT (doc_type) DO UPDATE "
+                        "SET current_number = document_sequences.current_number + 1, updated_at = now() "
+                        "RETURNING current_number"
+                    ),
+                    {"dt": doc_type},
+                )
+                seq_number = 1
+            archive_number = str(seq_number)
 
-    # Commit sequence increment now to release the row lock before the Drive upload
+        file_name = _build_filename(
+            doc_type=doc_type,
+            archive_number=archive_number,
+            title=title or _strip_ext(original_name),
+            note=note,
+            ext=ext,
+        )
+
+    # Commit sequence increment (or no-op if use_original_name) before slow Drive call
     await db.commit()
-
-    file_name = _build_filename(
-        doc_type=doc_type,
-        archive_number=archive_number,
-        title=title or _strip_ext(original_name),
-        note=note,
-        ext=ext,
-    )
 
     # ── Create LibraryFile FIRST (status=uploading) so failures are visible ──
     lib_file = LibraryFile(
@@ -647,6 +656,7 @@ async def upload_file(
             "seq_number": seq_number,
             "title": title,
             "note": note,
+            "use_original_name": use_original_name,
         },
     )
     db.add(lib_file)
@@ -2324,6 +2334,15 @@ def _build_filename(
     if doc_type:
         return f"{doc_type.upper()}-{archive_number}-{middle}{suffix}{ext}"
     return f"{middle}{suffix}{ext}"
+
+
+def _sanitize_filename(name: str) -> str:
+    """Strip path separators and Windows-illegal chars; collapse runs of spaces."""
+    bad = '\\/:*?"<>|'
+    cleaned = "".join("-" if c in bad else c for c in name).strip()
+    while "  " in cleaned:
+        cleaned = cleaned.replace("  ", " ")
+    return cleaned or "Untitled"
 
 
 def _strip_ext(filename: str) -> str:

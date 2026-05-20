@@ -109,6 +109,8 @@ export interface UploadFormValues {
   doc_number: string;
   title: string;
   note: string;
+  /** Skip REIN naming format and upload with the original filename */
+  use_original_name: boolean;
 }
 
 export interface DocumentSequence {

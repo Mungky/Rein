@@ -49,6 +49,9 @@ function parseExistingNumber(
 }
 
 function buildFilename(form: UploadFormValues, originalName: string): string {
+  if (form.use_original_name) {
+    return originalName.replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim();
+  }
   const ext = originalName.includes(".") ? "." + originalName.split(".").pop()!.toLowerCase() : "";
   const clean = (s: string) => s.replace(/[\\/:*?"<>|]/g, "").trim();
   const title = form.title ? clean(form.title) : stripExt(originalName);
@@ -109,6 +112,7 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
         doc_number: "",
         title: stripExt(file.name),
         note: "",
+        use_original_name: false,
       },
       docTypeConfidence: 0,
       duplicate: null,
@@ -189,7 +193,11 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
   }, []);
 
   const setField = useCallback(
-    (index: number, field: keyof UploadFormValues, value: string) => {
+    <K extends keyof UploadFormValues>(
+      index: number,
+      field: K,
+      value: UploadFormValues[K],
+    ) => {
       setItems((prev) =>
         prev.map((it, i) =>
           i !== index ? it : { ...it, form: { ...it.form, [field]: value } }
@@ -245,21 +253,21 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
   const detectingCount = items.filter((it) => it.phase === "detecting").length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4">
       <div
-        className="bg-bg border border-border rounded-xl shadow-2xl w-full max-w-[640px] flex flex-col overflow-hidden"
-        style={{ maxHeight: "90vh" }}
+        className="bg-bg border border-border rounded-t-xl sm:rounded-xl shadow-2xl w-full max-w-[640px] flex flex-col overflow-hidden"
+        style={{ maxHeight: "95vh" }}
       >
         {/* Header */}
-        <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border bg-bg-ctrl shrink-0">
+        <div className="flex items-center gap-2.5 px-3 sm:px-4 py-3 border-b border-border bg-bg-ctrl shrink-0">
           <FileText className="w-4 h-4 text-primary shrink-0" />
           <div className="flex-1 min-w-0">
             <div className="text-[13px] font-semibold truncate">
               Upload ke {folder.path}
             </div>
-            <div className="text-[10.5px] text-text-muted">
+            <div className="text-[10.5px] text-text-muted truncate">
               {items.length} file dipilih
-              {detectingCount > 0 && ` · mendeteksi metadata ${detectingCount} file…`}
+              {detectingCount > 0 && ` · mendeteksi ${detectingCount}…`}
             </div>
           </div>
           <button onClick={onClose} className="btn btn-ghost btn-icon btn-sm text-text-muted shrink-0">
@@ -269,14 +277,14 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
 
         {/* Bulk doc_type toolbar */}
         {items.length > 1 && (
-          <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-bg-ctrl border-b border-border shrink-0">
-            <span className="text-[10.5px] font-bold uppercase tracking-wider text-text-light shrink-0">
+          <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 bg-bg-ctrl border-b border-border shrink-0">
+            <span className="text-[10.5px] font-bold uppercase tracking-wider text-text-light shrink-0 w-full sm:w-auto">
               Atur sekaligus
             </span>
             <select
               value={bulkType}
               onChange={(e) => setBulkType(e.target.value)}
-              className="field-select text-[11.5px] w-[150px]"
+              className="field-select text-[11.5px] flex-1 min-w-0 sm:flex-none sm:w-[150px]"
             >
               <option value="">— Tipe Dokumen —</option>
               {docTypeOptions.map((t) => (
@@ -289,7 +297,7 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
               className="btn btn-default btn-sm text-[11px]"
               title="Set tipe ini untuk semua file"
             >
-              Terapkan ke semua
+              Semua
             </button>
             <button
               onClick={applyBulkToEmpty}
@@ -297,7 +305,7 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
               className="btn btn-default btn-sm text-[11px]"
               title={`Hanya untuk ${emptyTypeCount} file tanpa tipe`}
             >
-              Yang kosong saja ({emptyTypeCount})
+              Kosong ({emptyTypeCount})
             </button>
             {emptyTypeCount > 0 && (
               <button
@@ -305,7 +313,7 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
                 className="btn btn-default btn-sm text-[11px] text-text-muted"
                 title="Tandai semua tanpa tipe sebagai OTHER"
               >
-                Kosong → OTHER
+                → OTHER
               </button>
             )}
           </div>
@@ -333,33 +341,29 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
 
         {/* Duplicate summary banner (above footer) */}
         {items.some((it) => it.duplicate) && (
-          <div className="px-4 py-2 bg-amber-bg border-t border-amber/40 shrink-0 flex items-center gap-2">
-            <AlertTriangle className="w-3.5 h-3.5 text-amber shrink-0" />
+          <div className="px-3 sm:px-4 py-2 bg-amber-bg border-t border-amber/40 shrink-0 flex items-start gap-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber shrink-0 mt-0.5" />
             <div className="text-[11px] text-text leading-snug">
               <span className="font-semibold">
                 {items.filter((it) => it.duplicate).length} file
               </span>{" "}
-              terdeteksi sudah pernah diupload. Lihat detail di setiap kartu sebelum lanjut.
+              terdeteksi sudah pernah diupload. Lihat detail di tiap kartu sebelum lanjut.
             </div>
           </div>
         )}
 
         {/* Footer */}
-        <div className="flex items-center gap-2 px-4 py-3 border-t border-border shrink-0">
-          <button onClick={onClose} className="btn btn-default">Batal</button>
+        <div className="flex items-center gap-2 px-3 sm:px-4 py-3 border-t border-border shrink-0">
+          <button onClick={onClose} className="btn btn-default shrink-0">Batal</button>
           <div className="flex-1" />
-          {detectingCount > 0 && (
-            <span className="text-[11px] text-text-muted">
-              {detectingCount} file masih terdeteksi…
-            </span>
-          )}
           <button
             onClick={handleStart}
             disabled={items.length === 0}
-            className="btn btn-primary gap-1.5"
+            className="btn btn-primary gap-1.5 shrink-0"
           >
             {detectingCount > 0 && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            Mulai Upload {items.length} File →
+            <span className="hidden sm:inline">Mulai Upload {items.length} File →</span>
+            <span className="sm:hidden">Upload {items.length} →</span>
           </button>
         </div>
       </div>
@@ -379,14 +383,19 @@ function FileCard({
   item: BatchItem;
   index: number;
   docTypeOptions: { value: string; label: string }[];
-  onSetField: (index: number, field: keyof UploadFormValues, value: string) => void;
+  onSetField: <K extends keyof UploadFormValues>(
+    index: number,
+    field: K,
+    value: UploadFormValues[K],
+  ) => void;
   onRemove: (index: number) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const preview = buildFilename(item.form, item.file.name);
+  const rawMode = item.form.use_original_name;
 
   return (
-    <div className="px-4 py-3">
+    <div className="px-3 py-3 sm:px-4">
       {/* File header row */}
       <div className="flex items-center gap-2 mb-2">
         <div className="w-6 h-6 rounded bg-bg-ctrl border border-border flex items-center justify-center shrink-0">
@@ -419,14 +428,14 @@ function FileCard({
 
       {/* Duplicate notice — surfaced whether or not the card is expanded */}
       {item.duplicate && (
-        <div className="ml-8 mb-2 px-2.5 py-1.5 rounded border border-amber/40 bg-amber-bg text-[11px] leading-relaxed">
+        <div className="ml-0 sm:ml-8 mb-2 px-2.5 py-1.5 rounded border border-amber/40 bg-amber-bg text-[11px] leading-relaxed">
           <div className="flex items-start gap-1.5">
             <AlertTriangle className="w-3 h-3 text-amber shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <div className="text-text font-semibold">File ini sudah pernah diupload</div>
-              <div className="text-text-muted">
+              <div className="text-text-muted break-words">
                 Sebagai{" "}
-                <span className="font-mono text-text">{item.duplicate.file_name}</span>
+                <span className="font-mono text-text break-all">{item.duplicate.file_name}</span>
                 {item.duplicate.doc_number && (
                   <> (nomor <span className="font-mono">{item.duplicate.doc_number}</span>)</>
                 )}{" "}
@@ -444,81 +453,109 @@ function FileCard({
       )}
 
       {expanded && (
-        <div className="pl-8 flex flex-col gap-2">
-          {/* Tipe + Nomor */}
-          <div className="flex gap-2">
-            <div className="flex-1">
-              <div className="flex items-baseline justify-between mb-0.5">
-                <span className="text-[10.5px] text-text-muted">Tipe Dokumen</span>
-                {item.docTypeConfidence > 0 && (
-                  <span
-                    className="text-[10px] font-bold tabular-nums"
-                    style={{ color: confidenceColor(item.docTypeConfidence) }}
-                  >
-                    {Math.round(item.docTypeConfidence * 100)}%
-                  </span>
-                )}
+        <div className="pl-0 sm:pl-8 flex flex-col gap-2">
+          {/* Toggle: skip REIN naming format */}
+          <label className="flex items-start gap-2 cursor-pointer select-none px-2.5 py-1.5 rounded border border-border bg-bg-ctrl/50 hover:bg-bg-ctrl">
+            <input
+              type="checkbox"
+              checked={rawMode}
+              onChange={(e) => onSetField(index, "use_original_name", e.target.checked)}
+              className="mt-0.5 w-3.5 h-3.5 accent-primary shrink-0"
+            />
+            <div className="flex-1 min-w-0">
+              <div className="text-[11.5px] font-semibold text-text">
+                Pakai nama file asli (lewati format REIN)
               </div>
-              <select
-                value={item.form.doc_type}
-                onChange={(e) => onSetField(index, "doc_type", e.target.value)}
-                className="field-select text-[12px]"
-              >
-                <option value="">— Pilih tipe —</option>
-                {docTypeOptions.map((t) => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
+              <div className="text-[10px] text-text-muted leading-snug mt-0.5">
+                Upload tanpa tipe, nomor arsip, atau penataan nama otomatis. Cocok untuk lampiran cepat.
+              </div>
             </div>
-            <div className="w-[96px] shrink-0">
-              <span className="text-[10.5px] text-text-muted block mb-0.5">Nomor Arsip</span>
-              <input
-                type="text"
-                value={item.form.doc_number}
-                onChange={(e) => onSetField(index, "doc_number", e.target.value)}
-                placeholder="auto"
-                className="field-input font-mono text-[12px]"
-              />
-            </div>
-          </div>
+          </label>
 
-          {/* Judul */}
-          <div>
-            <span className="text-[10.5px] text-text-muted block mb-0.5">Judul / Nama Dokumen</span>
-            <input
-              type="text"
-              value={item.form.title}
-              onChange={(e) => onSetField(index, "title", e.target.value)}
-              className="field-input text-[12px]"
-            />
-          </div>
+          {!rawMode && (
+            <>
+              {/* Tipe + Nomor — stack on phones, row on sm+ */}
+              <div className="flex flex-col sm:flex-row gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline justify-between mb-0.5">
+                    <span className="text-[10.5px] text-text-muted">Tipe Dokumen</span>
+                    {item.docTypeConfidence > 0 && (
+                      <span
+                        className="text-[10px] font-bold tabular-nums"
+                        style={{ color: confidenceColor(item.docTypeConfidence) }}
+                      >
+                        {Math.round(item.docTypeConfidence * 100)}%
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value={item.form.doc_type}
+                    onChange={(e) => onSetField(index, "doc_type", e.target.value)}
+                    className="field-select text-[12px] w-full"
+                  >
+                    <option value="">— Pilih tipe —</option>
+                    {docTypeOptions.map((t) => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-full sm:w-[120px] shrink-0">
+                  <span className="text-[10.5px] text-text-muted block mb-0.5">Nomor Arsip</span>
+                  <input
+                    type="text"
+                    value={item.form.doc_number}
+                    onChange={(e) => onSetField(index, "doc_number", e.target.value)}
+                    placeholder="auto"
+                    className="field-input font-mono text-[12px] w-full"
+                  />
+                </div>
+              </div>
 
-          {/* Catatan */}
-          <div>
-            <span className="text-[10.5px] text-text-muted block mb-0.5">Catatan / Revisi</span>
-            <input
-              type="text"
-              value={item.form.note}
-              onChange={(e) => onSetField(index, "note", e.target.value)}
-              placeholder="rev3, draft, final…"
-              className="field-input text-[12px]"
-            />
-          </div>
+              {/* Judul */}
+              <div>
+                <span className="text-[10.5px] text-text-muted block mb-0.5">Judul / Nama Dokumen</span>
+                <input
+                  type="text"
+                  value={item.form.title}
+                  onChange={(e) => onSetField(index, "title", e.target.value)}
+                  className="field-input text-[12px] w-full"
+                />
+              </div>
 
-          {/* Preview nama file */}
-          <div className={`border rounded px-2.5 py-1.5 ${!item.form.doc_type ? "bg-amber-bg border-amber/40" : "bg-bg-ctrl border-border"}`}>
+              {/* Catatan */}
+              <div>
+                <span className="text-[10.5px] text-text-muted block mb-0.5">Catatan / Revisi</span>
+                <input
+                  type="text"
+                  value={item.form.note}
+                  onChange={(e) => onSetField(index, "note", e.target.value)}
+                  placeholder="rev3, draft, final…"
+                  className="field-input text-[12px] w-full"
+                />
+              </div>
+            </>
+          )}
+
+          {/* Preview nama file (always visible — even in raw mode so user sees what lands) */}
+          <div
+            className={`border rounded px-2.5 py-1.5 ${
+              !rawMode && !item.form.doc_type
+                ? "bg-amber-bg border-amber/40"
+                : "bg-bg-ctrl border-border"
+            }`}
+          >
             <div className="text-[9.5px] font-bold uppercase tracking-widest text-text-light mb-0.5">
-              Preview nama file
+              {rawMode ? "Nama file di Drive (apa adanya)" : "Preview nama file"}
             </div>
             <div className="text-[11px] font-mono break-all text-text leading-relaxed">
               {preview}
             </div>
-            {!item.form.doc_type && (
+            {!rawMode && !item.form.doc_type && (
               <div className="text-[9.5px] text-amber font-semibold mt-0.5">
-                Pilih tipe dokumen — file tanpa tipe akan ditolak saat audit
+                Pilih tipe dokumen atau centang &ldquo;Pakai nama file asli&rdquo;
               </div>
             )}
-            {!item.form.doc_number && item.form.doc_type && (
+            {!rawMode && !item.form.doc_number && item.form.doc_type && (
               <div className="text-[9.5px] text-text-light mt-0.5">
                 Nomor urutan ditentukan otomatis saat upload
               </div>

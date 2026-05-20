@@ -4,6 +4,7 @@
 
 **Remula Inti Rekayasa** — Internal ERP & Document Control System
 
+[![Version](https://img.shields.io/badge/version-1.0.0-714B67)](https://github.com/Mungky/Rein/releases/tag/v1.0.0)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111+-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
 [![Supabase](https://img.shields.io/badge/Supabase-Auth+%2B+PostgreSQL-3ECF8E?logo=supabase)](https://supabase.com/)
@@ -16,9 +17,30 @@
 
 ---
 
+## What's new — v1.0.0
+
+Rilis perdana untuk public-test internal. Fokus utama: **Document Manager** (Perpustakaan Digital) yang siap dipakai karyawan, plus pondasi modul lain.
+
+- **Admin-managed Jenis File** — tipe dokumen (DRW, INV, PO, dst) sekarang DB-backed; admin bisa tambah/edit/nonaktifkan lewat dashboard tanpa deploy ulang. Kode tipe immutable setelah dibuat (melindungi nomor arsip existing); label/deskripsi bebas diedit.
+- **Skip naming format** — checkbox "Pakai nama file asli" di kartu upload untuk lampiran cepat yang tidak butuh format `TYPE-NUM-TITLE`.
+- **Duplicate detection** — SHA-256 hash dihitung di browser saat propose, backend cek terhadap arsip existing; warning kuning muncul kalau byte file sudah pernah diupload.
+- **Granular folder permissions** — view / upload / download / rename / delete / move per role × department.
+- **Bulk file ops** — pilih banyak file di folder view untuk delete/move sekaligus.
+- **Pustakawan inbox** — request akses file lewat email link, 5 menit TTL approval, 30 menit temp link.
+- **Drive upload reliability** — semua upload pakai multipart (bukan resumable+httplib2 yang bermasalah), retry catch `RedirectMissingLocation` + `HttpLib2Error`.
+- **Admin Temp panel** — aktivitas perpustakaan dengan bulk-purge tombol untuk bersihkan record gagal dalam satu klik.
+- **Pre-release security** — rate limit di auth/propose/upload, CORS tightening, empty `API_SECRET_KEY` default.
+- **Mobile-responsive upload modal** — kartu metadata stack rapi di layar HP.
+
+[→ Full changelog & technical detail](docs/REIN-Technical-Documentation.md)
+
+---
+
 ## Overview
 
-REIN adalah sistem ERP internal untuk perusahaan engineering Indonesia. Mengelola dokumen kontrol (DCC), workspace proyek, approval workflow, akses dokumen, dan asisten AI (NimBus) dalam satu platform.
+REIN adalah sistem ERP internal untuk perusahaan engineering Indonesia. Mengelola dokumen kontrol (DCC/Perpustakaan Digital), workspace proyek, approval workflow, akses dokumen, dan asisten AI (NimBus) dalam satu platform.
+
+Landing page default: `/dcc` (Document Manager — modul utama yang diuji di v1.0.0).
 
 ```
 ┌──────────┐     ┌──────────────┐     ┌─────────────────────┐
@@ -160,17 +182,31 @@ db/
 | Method | Path | Permission | Deskripsi |
 |--------|------|------------|-----------|
 | GET | `/api/library/tree` | dcc:view | Folder tree per departemen + file count |
-| GET | `/api/library/folders/{id}/files` | dcc:view | Etalase metadata file (semua role) |
-| POST | `/api/library/propose` | dcc:upload | Deteksi metadata dari nama file (no upload) |
-| POST | `/api/library/upload` | dcc:upload | Upload multipart → 202, audit berjalan di background |
+| GET | `/api/library/file-types` | dcc:view | List Jenis File aktif (untuk form upload) |
+| GET | `/api/library/folders/{id}/files` | dcc:view | Etalase metadata file (search + pagination) |
+| POST | `/api/library/propose` | dcc:upload | Deteksi metadata + cek duplikat by SHA-256 |
+| POST | `/api/library/upload` | dcc:upload | Upload multipart (mendukung `use_original_name=true`) |
 | GET | `/api/library/files/{id}/status` | dcc:upload | Poll status audit (4 layer) |
 | POST | `/api/library/files/{id}/view-request` | dcc:view | Minta akses lihat isi file |
 | GET | `/api/library/view-requests/{token}/approve` | — | One-click approval via email link |
 | GET | `/api/library/view-requests/{token}/deny` | — | One-click deny via email link |
 | GET | `/api/library/files/{id}/link` | dcc:view | Poll temp link setelah diapprove |
-| DELETE | `/api/library/files/{id}` | admin | Soft delete file |
+| DELETE | `/api/library/files/{id}` | uploader/admin | Soft delete file |
+| PATCH | `/api/library/files/{id}/rename` | uploader/admin | Rename file |
+| PATCH | `/api/library/files/{id}/move` | admin/perm | Pindah ke folder lain |
+| POST | `/api/library/folders` | dept upload perm | Buat subfolder |
+| GET | `/api/library/admin/activity` | admin | Aktivitas perpustakaan + dead-letter counts |
+| POST | `/api/library/admin/reset-stuck` | admin | Reset row stuck `uploading` ke `failed` |
+| POST | `/api/library/admin/purge-failed` | admin | Bulk-purge semua row failed/stuck |
+| DELETE | `/api/library/admin/temp/{file_id}` | admin | Hard-purge satu row gagal |
 | GET | `/api/library/log` | admin | Audit trail lengkap |
-| POST | `/api/library/folders` | admin | Buat subfolder |
+
+### Admin — Jenis File (`/api/admin/file-types/`)
+| Method | Path | Deskripsi |
+|--------|------|-----------|
+| GET | `/api/admin/file-types` | List semua tipe (termasuk nonaktif) |
+| POST | `/api/admin/file-types` | Tambah tipe baru (code immutable) |
+| PATCH | `/api/admin/file-types/{code}` | Edit label/deskripsi/sort_order/is_active |
 
 ### DCC — Approvals & Access (Legacy)
 | Method | Path | Permission | Deskripsi |
