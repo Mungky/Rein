@@ -203,10 +203,15 @@ async def upload_file(
     """Upload a file to Google Drive with retry on transient errors.
 
     Uses a fresh service per call (thread-safe under concurrent upload) and
-    `_drive_call_with_retry` for SSL/5xx/socket errors. For small files
-    (<5 MB) uses simple non-resumable upload to skip the extra round-trip.
+    `_drive_call_with_retry` for SSL/5xx/socket errors. Files up to 50 MB
+    (the app-level MAX_FILE_SIZE) use simple non-resumable multipart upload
+    — resumable+httplib2 has a long-standing bug where the first chunk PUT
+    receives a 308 "Resume Incomplete" without a Location header and
+    httplib2 raises RedirectMissingLocation. Multipart sidesteps that
+    entirely. Resumable branch is kept as a safety net for files larger
+    than the threshold.
     """
-    SIMPLE_UPLOAD_LIMIT = 5 * 1024 * 1024  # 5 MB
+    SIMPLE_UPLOAD_LIMIT = 50 * 1024 * 1024  # 50 MB — matches library MAX_FILE_SIZE
 
     file_metadata = {"name": file_name, "parents": [folder_id]}
 
