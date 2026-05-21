@@ -13,6 +13,8 @@
 
 [Overview](#overview) · [Arsitektur](#arsitektur) · [Fitur](#fitur) · [Setup](#setup) · [API](#api-endpoints) · [Database](#database-schema) · [Docs Lengkap](docs/REIN-Technical-Documentation.md)
 
+**📖 Bukan developer?** Baca [**Panduan untuk Orang Awam**](PANDUAN-AWAM.md) — penjelasan arsitektur dalam bahasa Indonesia simpel, pakai analogi sehari-hari.
+
 </div>
 
 ---
