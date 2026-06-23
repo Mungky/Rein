@@ -33,12 +33,13 @@ Endpoints:
 
 import uuid
 import logging
+from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_
+from sqlalchemy import case, select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_profile, require_permission, _load_permissions
@@ -128,6 +129,7 @@ class TemplateCreate(BaseModel):
 class ProjectOut(BaseModel):
     id: str
     name: str
+    rpo_number: str | None
     client_name: str | None
     status: str
     start_date: str | None
@@ -138,6 +140,7 @@ class ProjectOut(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str
+    rpo_number: str | None = None  # manual input, e.g. "RPO-26-0007"
     client_name: str | None = None
     template_id: str | None = None
     start_date: str | None = None
@@ -147,6 +150,7 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     name: str | None = None
+    rpo_number: str | None = None
     client_name: str | None = None
     status: str | None = None
     start_date: str | None = None
@@ -164,6 +168,22 @@ class PhaseOut(BaseModel):
     deadline: str | None
     progress: float
 
+
+class TimelinePhaseOut(BaseModel):
+    """Compact phase row for the bulk /timeline endpoint."""
+    id: str
+    name: str
+    order: int
+    status: str
+    start_date: str | None
+    deadline: str | None
+    progress: float
+
+
+class TimelineProjectOut(ProjectOut):
+    """Project + its phases — used by the Timeline view to avoid N+1."""
+    phases: list[TimelinePhaseOut]
+
 class PhaseCreate(BaseModel):
     name: str
     order: int = 1
@@ -174,15 +194,25 @@ class TaskOut(BaseModel):
     id: str
     phase_id: str
     name: str
+    description: str | None
+    location: str | None
+    estimated_days: int | None
     assigned_to: str | None
     assigned_name: str | None
     deadline: str | None
     status: str
     notes: str | None
+    review_notes: str | None
+    reviewed_by: str | None
+    reviewed_at: str | None
+    started_at: str | None
     order: int
 
 class TaskCreate(BaseModel):
     name: str
+    description: str | None = None
+    location: str | None = None
+    estimated_days: int | None = None
     assigned_to: str | None = None
     deadline: str | None = None
     notes: str | None = None
@@ -190,12 +220,27 @@ class TaskCreate(BaseModel):
 
 class TaskUpdate(BaseModel):
     name: str | None = None
+    description: str | None = None
+    location: str | None = None
+    estimated_days: int | None = None
     assigned_to: str | None = None
     deadline: str | None = None
     status: str | None = None
     notes: str | None = None
 
+class TaskReportSubmit(BaseModel):
+    """Field worker submits report when finishing a WO."""
+    photos_before: list[str] = []
+    photos_after: list[str] = []
+    notes: str | None = None
+
+class TaskReviewDecision(BaseModel):
+    """Engineer approves or asks for revision."""
+    decision: str  # "approve" | "request_revision"
+    review_notes: str | None = None
+
 class CompletionCreate(BaseModel):
+    """Legacy single-photo completion — kept for backwards compat."""
     photo_url: str | None = None
     notes: str | None = None
 
@@ -205,6 +250,8 @@ class CompletionOut(BaseModel):
     submitted_by: str
     submitted_name: str | None
     photo_url: str | None
+    photos_before: list[str]
+    photos_after: list[str]
     notes: str | None
     completed_at: str
 
@@ -256,12 +303,33 @@ async def _enrich_task(db: AsyncSession, t: WorkspaceTask) -> TaskOut:
     return TaskOut(
         id=str(t.id), phase_id=str(t.phase_id),
         name=t.name,
+        description=t.description,
+        location=t.location,
+        estimated_days=t.estimated_days,
         assigned_to=str(t.assigned_to) if t.assigned_to else None,
         assigned_name=assigned_name,
         deadline=_date_str(t.deadline),
         status=t.status.value,
         notes=t.notes,
+        review_notes=t.review_notes,
+        reviewed_by=str(t.reviewed_by) if t.reviewed_by else None,
+        reviewed_at=t.reviewed_at.isoformat() if t.reviewed_at else None,
+        started_at=t.started_at.isoformat() if t.started_at else None,
         order=t.order,
+    )
+
+
+def _project_to_out(proj: WorkspaceProject, progress: float) -> ProjectOut:
+    return ProjectOut(
+        id=str(proj.id), name=proj.name,
+        rpo_number=proj.rpo_number,
+        client_name=proj.client_name,
+        status=proj.status.value,
+        start_date=_date_str(proj.start_date),
+        deadline=_date_str(proj.deadline),
+        manager_id=str(proj.manager_id) if proj.manager_id else None,
+        description=proj.description,
+        progress=progress,
     )
 
 
@@ -360,14 +428,94 @@ async def list_projects(
     rows = (await db.execute(q)).scalars().all()
     out = []
     for r in rows:
-        out.append(ProjectOut(
-            id=str(r.id), name=r.name, client_name=r.client_name,
-            status=r.status.value,
-            start_date=_date_str(r.start_date),
-            deadline=_date_str(r.deadline),
-            manager_id=str(r.manager_id) if r.manager_id else None,
-            description=r.description,
-            progress=await _project_progress(db, r.id),
+        out.append(_project_to_out(r, await _project_progress(db, r.id)))
+    return out
+
+
+@router.get("/timeline", response_model=list[TimelineProjectOut])
+async def timeline(
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
+):
+    """Bulk endpoint for the Timeline view — returns all visible projects with
+    their phases in 3 queries instead of N+1.
+
+    Used by the frontend `CalendarView` global mode. Phases are ordered by
+    their `order` column; tasks are NOT included (the WO-level detail view
+    loads those per project).
+    """
+    visible_ids = await _visible_project_ids(db, profile)
+
+    q = select(WorkspaceProject).order_by(WorkspaceProject.created_at.desc())
+    if visible_ids is not None:
+        if not visible_ids:
+            return []
+        q = q.where(WorkspaceProject.id.in_(visible_ids))
+
+    projects = (await db.execute(q)).scalars().all()
+    if not projects:
+        return []
+
+    project_ids = [p.id for p in projects]
+
+    # All phases for these projects in one query
+    phases = (await db.execute(
+        select(WorkspacePhase)
+        .where(WorkspacePhase.project_id.in_(project_ids))
+        .order_by(WorkspacePhase.project_id, WorkspacePhase.order)
+    )).scalars().all()
+
+    # Task counts per phase (total + done) in one aggregate query — used for
+    # both phase-level and project-level progress.
+    phase_ids = [ph.id for ph in phases]
+    task_counts: dict[uuid.UUID, tuple[int, int]] = {}
+    if phase_ids:
+        rows = (await db.execute(
+            select(
+                WorkspaceTask.phase_id,
+                func.count().label("total"),
+                func.sum(case((WorkspaceTask.status == TaskStatus.done, 1), else_=0)).label("done"),
+            )
+            .where(WorkspaceTask.phase_id.in_(phase_ids))
+            .group_by(WorkspaceTask.phase_id)
+        )).all()
+        for r in rows:
+            task_counts[r.phase_id] = (r.total or 0, int(r.done or 0))
+
+    # Group phases by project_id
+    phases_by_project: dict[uuid.UUID, list[TimelinePhaseOut]] = defaultdict(list)
+    for ph in phases:
+        total, done = task_counts.get(ph.id, (0, 0))
+        progress = round(done / total * 100, 1) if total > 0 else 0.0
+        phases_by_project[ph.project_id].append(TimelinePhaseOut(
+            id=str(ph.id),
+            name=ph.name,
+            order=ph.order,
+            status=ph.status.value,
+            start_date=_date_str(ph.start_date),
+            deadline=_date_str(ph.deadline),
+            progress=progress,
+        ))
+
+    # Assemble output with per-project progress aggregated from task counts
+    out: list[TimelineProjectOut] = []
+    for p in projects:
+        proj_phase_ids = [ph.id for ph in phases if ph.project_id == p.id]
+        proj_total = sum(task_counts.get(phid, (0, 0))[0] for phid in proj_phase_ids)
+        proj_done = sum(task_counts.get(phid, (0, 0))[1] for phid in proj_phase_ids)
+        proj_progress = round(proj_done / proj_total * 100, 1) if proj_total > 0 else 0.0
+        out.append(TimelineProjectOut(
+            id=str(p.id),
+            name=p.name,
+            rpo_number=p.rpo_number,
+            client_name=p.client_name,
+            status=p.status.value,
+            start_date=_date_str(p.start_date),
+            deadline=_date_str(p.deadline),
+            manager_id=str(p.manager_id) if p.manager_id else None,
+            description=p.description,
+            progress=proj_progress,
+            phases=phases_by_project[p.id],
         ))
     return out
 
@@ -381,8 +529,11 @@ async def create_project(
     template_id = uuid.UUID(body.template_id) if body.template_id else None
     manager_id = uuid.UUID(body.manager_id) if body.manager_id else profile.id
 
+    # RPO number is user-input free text. Strip whitespace, treat empty as None.
+    rpo_clean = (body.rpo_number or "").strip() or None
     proj = WorkspaceProject(
         name=body.name,
+        rpo_number=rpo_clean,
         client_name=body.client_name,
         template_id=template_id,
         start_date=date.fromisoformat(body.start_date) if body.start_date else None,
@@ -415,15 +566,7 @@ async def create_project(
                     phase_id=phase.id, name=t_tmpl.name, status=TaskStatus.todo, order=t_tmpl.order,
                 ))
 
-    return ProjectOut(
-        id=str(proj.id), name=proj.name, client_name=proj.client_name,
-        status=proj.status.value,
-        start_date=_date_str(proj.start_date),
-        deadline=_date_str(proj.deadline),
-        manager_id=str(proj.manager_id) if proj.manager_id else None,
-        description=proj.description,
-        progress=0.0,
-    )
+    return _project_to_out(proj, 0.0)
 
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)
@@ -439,15 +582,7 @@ async def get_project(
     visible_ids = await _visible_project_ids(db, profile)
     if visible_ids is not None and project_id not in visible_ids:
         raise HTTPException(403, "Tidak diotorisasi untuk proyek ini")
-    return ProjectOut(
-        id=str(proj.id), name=proj.name, client_name=proj.client_name,
-        status=proj.status.value,
-        start_date=_date_str(proj.start_date),
-        deadline=_date_str(proj.deadline),
-        manager_id=str(proj.manager_id) if proj.manager_id else None,
-        description=proj.description,
-        progress=await _project_progress(db, proj.id),
-    )
+    return _project_to_out(proj, await _project_progress(db, proj.id))
 
 
 @router.put("/projects/{project_id}", response_model=ProjectOut)
@@ -461,6 +596,9 @@ async def update_project(
     if not proj:
         raise HTTPException(404, "Proyek tidak ditemukan")
     if body.name is not None: proj.name = body.name
+    if body.rpo_number is not None:
+        rpo_clean = body.rpo_number.strip()
+        proj.rpo_number = rpo_clean or None
     if body.client_name is not None: proj.client_name = body.client_name
     if body.status is not None: proj.status = ProjectStatus(body.status)
     if body.start_date is not None: proj.start_date = date.fromisoformat(body.start_date)
@@ -468,15 +606,7 @@ async def update_project(
     if body.manager_id is not None: proj.manager_id = uuid.UUID(body.manager_id)
     if body.description is not None: proj.description = body.description
     await db.flush()
-    return ProjectOut(
-        id=str(proj.id), name=proj.name, client_name=proj.client_name,
-        status=proj.status.value,
-        start_date=_date_str(proj.start_date),
-        deadline=_date_str(proj.deadline),
-        manager_id=str(proj.manager_id) if proj.manager_id else None,
-        description=proj.description,
-        progress=await _project_progress(db, proj.id),
-    )
+    return _project_to_out(proj, await _project_progress(db, proj.id))
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +729,9 @@ async def create_task(
     t = WorkspaceTask(
         phase_id=phase_id,
         name=body.name,
+        description=body.description,
+        location=body.location,
+        estimated_days=body.estimated_days,
         assigned_to=uuid.UUID(body.assigned_to) if body.assigned_to else None,
         deadline=date.fromisoformat(body.deadline) if body.deadline else None,
         notes=body.notes,
@@ -631,6 +764,12 @@ async def update_task(
 
     if body.name is not None and can_manage:
         t.name = body.name
+    if body.description is not None and can_manage:
+        t.description = body.description
+    if body.location is not None and can_manage:
+        t.location = body.location
+    if body.estimated_days is not None and can_manage:
+        t.estimated_days = body.estimated_days
     if body.assigned_to is not None and can_manage:
         t.assigned_to = uuid.UUID(body.assigned_to) if body.assigned_to else None
     if body.deadline is not None and can_manage:
@@ -639,6 +778,132 @@ async def update_task(
         t.status = TaskStatus(body.status)
     if body.notes is not None:
         t.notes = body.notes
+    await db.flush()
+    return await _enrich_task(db, t)
+
+
+# ---------------------------------------------------------------------------
+# Work Order lifecycle: start → submit-report → review (approve | revision)
+# ---------------------------------------------------------------------------
+
+@router.post("/tasks/{task_id}/start", response_model=TaskOut)
+async def start_task(
+    task_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
+):
+    """Field worker taps 'Mulai' — transitions todo → in_progress."""
+    t = await db.get(WorkspaceTask, task_id)
+    if not t:
+        raise HTTPException(404, "Task tidak ditemukan")
+    # Either the assignee or someone with execute_wo / manage permission
+    can_execute = (
+        t.assigned_to == profile.id
+        or await _can(db, profile, "workspace:execute_wo")
+        or await _can(db, profile, "workspace:manage")
+    )
+    if not can_execute:
+        raise HTTPException(403, "Tidak diotorisasi untuk memulai WO ini")
+    if t.status not in (TaskStatus.todo, TaskStatus.in_progress):
+        raise HTTPException(400, f"WO tidak bisa dimulai dari status '{t.status.value}'")
+    t.status = TaskStatus.in_progress
+    if t.started_at is None:
+        t.started_at = datetime.now(timezone.utc)
+    await db.flush()
+    return await _enrich_task(db, t)
+
+
+@router.post("/tasks/{task_id}/submit-report", response_model=CompletionOut)
+async def submit_report(
+    task_id: uuid.UUID,
+    body: TaskReportSubmit,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
+):
+    """Field worker submits report with before/after photos.
+
+    Transitions in_progress → pending_review.
+    Creates a TaskCompletion row holding photos + notes.
+    """
+    t = await db.get(WorkspaceTask, task_id)
+    if not t:
+        raise HTTPException(404, "Task tidak ditemukan")
+    can_execute = (
+        t.assigned_to == profile.id
+        or await _can(db, profile, "workspace:execute_wo")
+        or await _can(db, profile, "workspace:manage")
+    )
+    if not can_execute:
+        raise HTTPException(403, "Tidak diotorisasi untuk submit laporan WO ini")
+    if t.status not in (TaskStatus.in_progress, TaskStatus.todo):
+        raise HTTPException(400, f"WO tidak bisa disubmit dari status '{t.status.value}'")
+
+    completion = TaskCompletion(
+        task_id=task_id,
+        submitted_by=profile.id,
+        photos_before=body.photos_before or [],
+        photos_after=body.photos_after or [],
+        notes=body.notes,
+        completed_at=datetime.now(timezone.utc),
+    )
+    db.add(completion)
+    t.status = TaskStatus.pending_review
+    await db.flush()
+    await db.refresh(completion)
+
+    return CompletionOut(
+        id=str(completion.id),
+        task_id=str(completion.task_id),
+        submitted_by=str(completion.submitted_by),
+        submitted_name=profile.full_name,
+        photo_url=completion.photo_url,
+        photos_before=completion.photos_before or [],
+        photos_after=completion.photos_after or [],
+        notes=completion.notes,
+        completed_at=completion.completed_at.isoformat(),
+    )
+
+
+@router.post("/tasks/{task_id}/review", response_model=TaskOut)
+async def review_task(
+    task_id: uuid.UUID,
+    body: TaskReviewDecision,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
+):
+    """Engineer/manager approves or asks for revision.
+
+    decision = 'approve'           → status = done, reviewed_at/by recorded
+    decision = 'request_revision'  → status = in_progress, review_notes set
+    """
+    t = await db.get(WorkspaceTask, task_id)
+    if not t:
+        raise HTTPException(404, "Task tidak ditemukan")
+    can_review = (
+        await _can(db, profile, "workspace:review_wo")
+        or await _can(db, profile, "workspace:manage")
+    )
+    if not can_review:
+        raise HTTPException(403, "Tidak diotorisasi untuk review WO")
+    if t.status != TaskStatus.pending_review:
+        raise HTTPException(400, "WO belum menunggu review")
+
+    if body.decision == "approve":
+        t.status = TaskStatus.done
+        t.reviewed_at = datetime.now(timezone.utc)
+        t.reviewed_by = profile.id
+        # Clear any prior revision note since it's now approved
+        t.review_notes = None
+    elif body.decision == "request_revision":
+        if not (body.review_notes and body.review_notes.strip()):
+            raise HTTPException(400, "Catatan revisi wajib diisi")
+        t.status = TaskStatus.in_progress
+        t.reviewed_at = datetime.now(timezone.utc)
+        t.reviewed_by = profile.id
+        t.review_notes = body.review_notes.strip()
+    else:
+        raise HTTPException(400, "decision harus 'approve' atau 'request_revision'")
+
     await db.flush()
     return await _enrich_task(db, t)
 
@@ -662,6 +927,8 @@ async def complete_task(
         task_id=task_id,
         submitted_by=profile.id,
         photo_url=body.photo_url,
+        photos_before=[],
+        photos_after=[],
         notes=body.notes,
         completed_at=datetime.now(timezone.utc),
     )
@@ -676,6 +943,8 @@ async def complete_task(
         submitted_by=str(completion.submitted_by),
         submitted_name=profile.full_name,
         photo_url=completion.photo_url,
+        photos_before=completion.photos_before or [],
+        photos_after=completion.photos_after or [],
         notes=completion.notes,
         completed_at=completion.completed_at.isoformat(),
     )
@@ -697,7 +966,10 @@ async def list_completions(
             id=str(c.id), task_id=str(c.task_id),
             submitted_by=str(c.submitted_by),
             submitted_name=p.full_name if p else None,
-            photo_url=c.photo_url, notes=c.notes,
+            photo_url=c.photo_url,
+            photos_before=c.photos_before or [],
+            photos_after=c.photos_after or [],
+            notes=c.notes,
             completed_at=c.completed_at.isoformat(),
         ))
     return out

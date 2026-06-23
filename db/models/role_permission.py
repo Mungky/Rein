@@ -42,6 +42,7 @@ class RolePermission(TimestampMixin, Base):
 # frontend `Permission` union in `frontend/src/lib/utils/roles.ts`.
 ALL_PERMISSIONS: tuple[str, ...] = (
     "dashboard:view",
+    # Document Control
     "dcc:view",
     "dcc:upload",
     "dcc:search",
@@ -50,12 +51,18 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     "dcc:manage_clients",
     "dcc:delete",
     "dcc:chat",
+    # Administrasi
     "admin:manage_users",
     "admin:manage_file_types",
-    # Workspace permissions
-    "workspace:view",        # see projects & tasks
-    "workspace:manage",      # create/edit projects, phases, tasks (manager+)
-    "workspace:complete_task",  # submit task completion (engineer)
+    # Workspace — base
+    "workspace:view",            # see projects & tasks
+    "workspace:manage",          # create/edit projects, phases (manager+)
+    "workspace:complete_task",   # legacy single-photo completion (engineer)
+    # Workspace — Work Order lifecycle (added 2026-05-26)
+    "workspace:create_wo",       # engineer: breakdown phase into WOs
+    "workspace:execute_wo",      # field worker: start + submit-report
+    "workspace:review_wo",       # engineer/manager: approve / request revision
+    "workspace:close_project",   # close completed project
 )
 
 
@@ -72,8 +79,12 @@ PERMISSION_LABELS: dict[str, str] = {
     "admin:manage_users": "Kelola Pengguna (Admin)",
     "admin:manage_file_types": "Kelola Jenis File (Admin)",
     "workspace:view": "Lihat Workspace",
-    "workspace:manage": "Kelola Proyek & Task",
-    "workspace:complete_task": "Submit Penyelesaian Task",
+    "workspace:manage": "Kelola Proyek & Phase",
+    "workspace:complete_task": "Submit Penyelesaian Task (legacy)",
+    "workspace:create_wo": "Buat Work Order",
+    "workspace:execute_wo": "Eksekusi WO (mulai & submit laporan)",
+    "workspace:review_wo": "Review WO (approve / minta revisi)",
+    "workspace:close_project": "Tutup Proyek",
 }
 
 

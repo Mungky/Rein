@@ -31,7 +31,11 @@ export type Permission =
   | "admin:manage_file_types"
   | "workspace:view"
   | "workspace:manage"
-  | "workspace:complete_task";
+  | "workspace:complete_task"
+  | "workspace:create_wo"
+  | "workspace:execute_wo"
+  | "workspace:review_wo"
+  | "workspace:close_project";
 
 export const ALL_PERMISSIONS: Permission[] = [
   "dashboard:view",
@@ -48,6 +52,10 @@ export const ALL_PERMISSIONS: Permission[] = [
   "workspace:view",
   "workspace:manage",
   "workspace:complete_task",
+  "workspace:create_wo",
+  "workspace:execute_wo",
+  "workspace:review_wo",
+  "workspace:close_project",
 ];
 
 export const PERMISSION_LABELS: Record<Permission, string> = {
@@ -63,8 +71,12 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "admin:manage_users": "Kelola Pengguna (Admin)",
   "admin:manage_file_types": "Kelola Jenis File (Admin)",
   "workspace:view": "Lihat Workspace",
-  "workspace:manage": "Kelola Proyek & Task",
-  "workspace:complete_task": "Submit Penyelesaian Task",
+  "workspace:manage": "Kelola Proyek & Phase",
+  "workspace:complete_task": "Submit Penyelesaian Task (legacy)",
+  "workspace:create_wo": "Buat Work Order",
+  "workspace:execute_wo": "Eksekusi WO (mulai & submit laporan)",
+  "workspace:review_wo": "Review WO (approve / minta revisi)",
+  "workspace:close_project": "Tutup Proyek",
 };
 
 export const ROLE_LABELS: Record<AppRole, string> = {

@@ -1,5 +1,7 @@
+"use client";
+
 import { useState } from "react";
-import { Loader2, X, Plus } from "lucide-react";
+import { Loader2, X, Plus, FolderKanban, Sparkles } from "lucide-react";
 import { workspaceApi } from "@/lib/api/workspace";
 import type { ProjectTemplate } from "@/lib/api/workspace";
 
@@ -9,10 +11,12 @@ export function CreateProjectModal({ templates, onClose, onCreated }: {
   onCreated: () => void;
 }) {
   const [name, setName] = useState("");
+  const [rpoNumber, setRpoNumber] = useState("");
   const [clientName, setClientName] = useState("");
   const [templateId, setTemplateId] = useState("");
   const [startDate, setStartDate] = useState("");
   const [deadline, setDeadline] = useState("");
+  const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,88 +28,162 @@ export function CreateProjectModal({ templates, onClose, onCreated }: {
     try {
       await workspaceApi.createProject({
         name: name.trim(),
+        rpo_number: rpoNumber.trim() || undefined,
         client_name: clientName.trim() || undefined,
         template_id: templateId || undefined,
         start_date: startDate || undefined,
         deadline: deadline || undefined,
+        description: description.trim() || undefined,
       });
       onCreated();
-    } catch {
-      setError("Gagal membuat proyek.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Gagal membuat proyek.";
+      // Likely cause: duplicate RPO
+      if (msg.toLowerCase().includes("unique") || msg.toLowerCase().includes("duplicate")) {
+        setError("Nomor RPO sudah dipakai proyek lain. Gunakan nomor yang berbeda.");
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
-      <form onSubmit={submit} className="bg-bg border border-border rounded-xl w-full max-w-sm shadow-xl">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <span className="text-[13px] font-bold">Proyek Baru</span>
-          <button type="button" onClick={onClose} className="p-1 rounded hover:bg-bg-hover">
-            <X className="w-4 h-4 text-text-muted" />
+    <div className="modal-backdrop" onClick={onClose}>
+      <form
+        onSubmit={submit}
+        className="modal-panel max-w-lg flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-6 pt-6 pb-4 border-b border-border-soft flex items-start gap-3 shrink-0">
+          <div className="size-10 rounded-[var(--r-lg)] bg-gradient-to-br from-primary to-primary-hover text-white flex items-center justify-center shrink-0 shadow-[0_2px_8px_rgba(37,99,235,0.25)]">
+            <FolderKanban className="size-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-[16px] font-bold text-text leading-tight">Proyek Baru</h2>
+            <p className="text-[12px] text-text-muted mt-0.5">Mulai proyek dengan nomor RPO + template opsional</p>
+          </div>
+          <button type="button" onClick={onClose} className="btn btn-ghost btn-icon btn-sm -mr-1 -mt-1">
+            <X className="size-4" />
           </button>
         </div>
-        <div className="p-4 flex flex-col gap-3">
-          <div>
-            <label className="text-[11px] font-bold text-text-muted uppercase tracking-wider block mb-1">Nama Proyek *</label>
-            <input
-              required
-              className="w-full border border-border rounded-lg px-3 py-2 text-[12.5px] bg-bg text-text focus:outline-none focus:ring-1 focus:ring-primary"
-              placeholder="Nama proyek..."
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
+
+        {/* Body */}
+        <div className="px-6 py-5 flex flex-col gap-4 overflow-y-auto">
+          {/* RPO + Name on same row */}
+          <div className="grid grid-cols-[180px_1fr] gap-3">
+            <div>
+              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">No. RPO</label>
+              <input
+                className="field-input font-mono"
+                placeholder="RPO-26-0007"
+                value={rpoNumber}
+                onChange={(e) => setRpoNumber(e.target.value)}
+                maxLength={64}
+              />
+            </div>
+            <div>
+              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                Nama Proyek <span className="text-red">*</span>
+              </label>
+              <input
+                required
+                className="field-input"
+                placeholder="Mis. Penggantian Pipa Cooling Tower"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </div>
           </div>
+
           <div>
-            <label className="text-[11px] font-bold text-text-muted uppercase tracking-wider block mb-1">Nama Klien</label>
+            <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">Klien</label>
             <input
-              className="w-full border border-border rounded-lg px-3 py-2 text-[12.5px] bg-bg text-text focus:outline-none focus:ring-1 focus:ring-primary"
-              placeholder="Nama klien (opsional)..."
+              className="field-input"
+              placeholder="Nama klien (opsional)"
               value={clientName}
               onChange={(e) => setClientName(e.target.value)}
             />
           </div>
+
           {templates.length > 0 && (
             <div>
-              <label className="text-[11px] font-bold text-text-muted uppercase tracking-wider block mb-1">Template</label>
+              <label className="text-[12px] font-semibold text-text-muted mb-1.5 flex items-center gap-1.5">
+                <Sparkles className="size-3 text-primary" />
+                Template
+              </label>
               <select
-                className="w-full border border-border rounded-lg px-3 py-2 text-[12.5px] bg-bg text-text focus:outline-none focus:ring-1 focus:ring-primary"
+                className="field-select cursor-pointer"
                 value={templateId}
                 onChange={(e) => setTemplateId(e.target.value)}
               >
-                <option value="">-- Tanpa template --</option>
+                <option value="">— Tanpa template, mulai dari kosong —</option>
                 {templates.map((t) => (
                   <option key={t.id} value={t.id}>{t.name}</option>
                 ))}
               </select>
               {templateId && (
-                <div className="text-[10.5px] text-text-muted mt-1">
-                  Phase & task akan dibuat otomatis dari template.
+                <div className="text-[11px] text-primary mt-1.5 flex items-start gap-1">
+                  <Sparkles className="size-3 mt-0.5 shrink-0" />
+                  Phase &amp; task akan dibuat otomatis dari template.
                 </div>
               )}
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2">
+
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[11px] font-bold text-text-muted uppercase tracking-wider block mb-1">Mulai</label>
-              <input type="date" className="w-full border border-border rounded-lg px-3 py-2 text-[12.5px] bg-bg text-text focus:outline-none focus:ring-1 focus:ring-primary"
-                value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">Mulai</label>
+              <input
+                type="date"
+                className="field-input"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
             </div>
             <div>
-              <label className="text-[11px] font-bold text-text-muted uppercase tracking-wider block mb-1">Deadline</label>
-              <input type="date" className="w-full border border-border rounded-lg px-3 py-2 text-[12.5px] bg-bg text-text focus:outline-none focus:ring-1 focus:ring-primary"
-                value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">Deadline</label>
+              <input
+                type="date"
+                className="field-input"
+                value={deadline}
+                onChange={(e) => setDeadline(e.target.value)}
+              />
             </div>
           </div>
-          {error && <div className="text-[11.5px] text-red-500">{error}</div>}
+
+          <div>
+            <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">Deskripsi</label>
+            <textarea
+              className="field-input min-h-[64px] py-2 resize-y"
+              placeholder="Ringkasan singkat proyek (opsional)"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              maxLength={500}
+            />
+          </div>
+
+          {error && (
+            <div className="px-3 py-2 rounded-[var(--r)] bg-red-bg text-red text-[12.5px] border border-red/20">
+              {error}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-border-soft bg-bg-ctrl flex gap-2 justify-end shrink-0">
+          <button type="button" onClick={onClose} className="btn btn-default" disabled={loading}>
+            Batal
+          </button>
           <button
             type="submit"
             disabled={loading || !name.trim()}
-            className="btn btn-primary w-full flex items-center justify-center gap-2 mt-1"
+            className="btn btn-primary gap-1.5"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            {loading ? "Membuat..." : "Buat Proyek"}
+            {loading ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+            {loading ? "Membuat…" : "Buat Proyek"}
           </button>
         </div>
       </form>

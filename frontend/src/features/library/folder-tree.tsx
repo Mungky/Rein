@@ -1,8 +1,10 @@
 "use client";
 
-import { BookOpen, Check, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, HardDrive, Link2, Link2Off, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { BookOpen, Check, ChevronDown, ChevronRight, Clock, Folder, FolderInput, FolderOpen, FolderPlus, Loader2, MoreVertical, Pencil, Trash2, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { createFolder, deleteFolder, linkFolderToDrive, renameFolder } from "@/lib/api/library";
+import { createFolder, deleteFolder, moveFolder, renameFolder } from "@/lib/api/library";
+import { MoveModal, ROOT_TARGET } from "./move-modal";
+import { DropdownMenu, DropdownItem } from "./dropdown-menu";
 import type { FolderNode } from "./types";
 
 export const TEMP_FOLDER_ID = "__temp__";
@@ -34,24 +36,46 @@ export const INDEX_FOLDER_NODE: FolderNode = {
   children: [],
 };
 
+/** Collect the id of a node and all of its descendants (for move-target disabling). */
+export function collectDescendantIds(node: FolderNode): Set<string> {
+  const ids = new Set<string>([node.id]);
+  for (const child of node.children) {
+    for (const id of collectDescendantIds(child)) ids.add(id);
+  }
+  return ids;
+}
+
 interface FolderTreeProps {
   tree: FolderNode[];
   selectedId: string | null;
   onSelect: (folder: FolderNode) => void;
   isAdmin?: boolean;
   canCreateFolder?: boolean;
+  canRenameFolder?: boolean;
+  canDeleteFolder?: boolean;
   onFolderCreated?: () => void;
 }
 
+// Per-department folder-icon color. Keyed by the canonical department slugs
+// (see db/scripts/seed_library_folders_v2.py). Curated hues that read well on
+// both light and dark sidebars. Sub-folders stay neutral — only dept roots get color.
 const DEPT_COLORS: Record<string, string> = {
-  finance: "text-green",
-  engineering: "text-blue",
-  hr: "text-amber",
-  purchasing: "text-amber",
-  management: "text-primary",
+  accounting:              "text-[#14b8a6]", // teal
+  directorate:             "text-[#8b5cf6]", // violet
+  engineering:             "text-[#3b82f6]", // blue
+  field_operational:       "text-[#f97316]", // orange
+  finance:                 "text-[#22c55e]", // green
+  hse:                     "text-[#ef4444]", // red
+  human_resources:         "text-[#f59e0b]", // amber
+  management:              "text-[#6366f1]", // indigo
+  purchasing_procurement:  "text-[#ec4899]", // pink
+  warehouse:               "text-[#06b6d4]", // cyan
+  // Legacy slugs (pre-v2) — kept so any lingering old folders still show color.
+  hr:         "text-[#f59e0b]",
+  purchasing: "text-[#ec4899]",
 };
 
-export function FolderTree({ tree, selectedId, onSelect, isAdmin, canCreateFolder, onFolderCreated }: FolderTreeProps) {
+export function FolderTree({ tree, selectedId, onSelect, isAdmin, canCreateFolder, canRenameFolder, canDeleteFolder, onFolderCreated }: FolderTreeProps) {
   const isTemp = selectedId === TEMP_FOLDER_ID;
   const isIndex = selectedId === INDEX_FOLDER_ID;
 
@@ -61,11 +85,14 @@ export function FolderTree({ tree, selectedId, onSelect, isAdmin, canCreateFolde
         <FolderItem
           key={node.id}
           node={node}
+          tree={tree}
           selectedId={selectedId}
           onSelect={onSelect}
           depth={0}
           isAdmin={isAdmin}
           canCreateFolder={canCreateFolder}
+          canRenameFolder={canRenameFolder}
+          canDeleteFolder={canDeleteFolder}
           onFolderCreated={onFolderCreated}
         />
       ))}
@@ -98,19 +125,25 @@ export function FolderTree({ tree, selectedId, onSelect, isAdmin, canCreateFolde
 
 function FolderItem({
   node,
+  tree,
   selectedId,
   onSelect,
   depth,
   isAdmin,
   canCreateFolder,
+  canRenameFolder,
+  canDeleteFolder,
   onFolderCreated,
 }: {
   node: FolderNode;
+  tree: FolderNode[];
   selectedId: string | null;
   onSelect: (folder: FolderNode) => void;
   depth: number;
   isAdmin?: boolean;
   canCreateFolder?: boolean;
+  canRenameFolder?: boolean;
+  canDeleteFolder?: boolean;
   onFolderCreated?: () => void;
 }) {
   const [open, setOpen] = useState(depth === 0);
@@ -124,10 +157,7 @@ function FolderItem({
   const [renameSaving, setRenameSaving] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  const [linking, setLinking] = useState(false);
-  const [linkValue, setLinkValue] = useState(node.gdrive_folder_id ?? "");
-  const [linkSaving, setLinkSaving] = useState(false);
-  const linkInputRef = useRef<HTMLInputElement>(null);
+  const [showMove, setShowMove] = useState(false);
 
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -137,14 +167,19 @@ function FolderItem({
   const isSelected = selectedId === node.id;
   const deptColor = DEPT_COLORS[node.department] ?? "text-text-muted";
   const isDept = node.folder_type === "department";
-  const isEditing = renaming || linking || deleteConfirm;
+  const isEditing = renaming || deleteConfirm;
+
+  const showCreate = Boolean(canCreateFolder);
+  const showRename = Boolean(isAdmin || canRenameFolder);
+  const showDelete = Boolean((isAdmin || canDeleteFolder) && !isDept);
+  const showMoveAction = Boolean((isAdmin || canRenameFolder) && !isDept);
+  const hasMenu = showCreate || showRename || showDelete || showMoveAction;
 
   const pl = `${8 + depth * 16}px`;
 
   // ── handlers ────────────────────────────────────────────────────────────────
 
-  const startCreating = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const startCreating = () => {
     setOpen(true);
     setCreating(true);
     setNewName("");
@@ -163,6 +198,12 @@ function FolderItem({
     } catch { /* keep open */ } finally { setSaving(false); }
   };
 
+  const startRename = () => {
+    setRenameValue(node.name);
+    setRenaming(true);
+    setTimeout(() => renameInputRef.current?.focus(), 30);
+  };
+
   const handleRename = async () => {
     const name = renameValue.trim();
     if (!name || name === node.name) { setRenaming(false); return; }
@@ -174,16 +215,14 @@ function FolderItem({
     } catch { /* keep open */ } finally { setRenameSaving(false); }
   };
 
-  const handleLink = async () => {
-    const raw = linkValue.trim();
-    const match = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/);
-    const driveId = match ? match[1] : raw;
-    setLinkSaving(true);
+  const handleMove = async (target: string) => {
+    setShowMove(false);
     try {
-      await linkFolderToDrive(node.id, driveId || null);
-      setLinking(false);
+      await moveFolder(node.id, target === ROOT_TARGET ? null : target);
       onFolderCreated?.();
-    } catch { /* keep open */ } finally { setLinkSaving(false); }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Gagal memindahkan folder");
+    }
   };
 
   const handleDelete = async (cascade = false) => {
@@ -196,7 +235,6 @@ function FolderItem({
       onFolderCreated?.();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Gagal menghapus folder";
-      // Detect the "N file aktif" 409 response — switch to cascade prompt
       const match = msg.match(/memiliki (\d+) file aktif/);
       if (match) {
         setCascadeCount(parseInt(match[1], 10));
@@ -261,30 +299,6 @@ function FolderItem({
               </>
             )}
 
-            {linking && (
-              <>
-                <input
-                  ref={linkInputRef}
-                  value={linkValue}
-                  onChange={(e) => setLinkValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleLink();
-                    if (e.key === "Escape") { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }
-                  }}
-                  placeholder="ID atau URL folder Drive…"
-                  className="flex-1 text-[11px] bg-transparent border-b border-primary outline-none text-text min-w-0 py-px"
-                  disabled={linkSaving}
-                  autoFocus
-                />
-                <button onClick={handleLink} disabled={linkSaving} className="shrink-0 text-green hover:text-green ml-1">
-                  {linkSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-                </button>
-                <button onClick={() => { setLinking(false); setLinkValue(node.gdrive_folder_id ?? ""); }} className="shrink-0 text-text-light hover:text-text">
-                  <X className="w-3 h-3" />
-                </button>
-              </>
-            )}
-
             {deleteConfirm && (
               <>
                 <span className="flex-1 text-[11px] font-semibold truncate min-w-0 text-red">
@@ -319,7 +333,7 @@ function FolderItem({
             className={`w-full flex items-center gap-1.5 px-2 py-[5px] rounded text-left transition-colors duration-100
               ${isSelected ? "bg-primary-bg text-primary" : "hover:bg-bg-hover text-text"}
               ${isDept ? "font-semibold" : "font-normal"}`}
-            style={{ paddingLeft: pl }}
+            style={{ paddingLeft: pl, paddingRight: hasMenu ? "28px" : "8px" }}
             onClick={() => {
               onSelect(node);
               if (node.children.length > 0) setOpen((o) => !o);
@@ -327,62 +341,51 @@ function FolderItem({
           >
             {chevron}
             {folderIcon}
-            <span className="flex-1 text-[12.5px] truncate min-w-0 flex items-center gap-1">
-              {node.name}
-              {isAdmin && (
-                <span title={node.gdrive_folder_id ? `Drive: ${node.gdrive_folder_id}` : "Belum terhubung ke Drive"}>
-                  <HardDrive className={`w-2.5 h-2.5 shrink-0 ${node.gdrive_folder_id ? "text-green opacity-70" : "text-text-light opacity-30"}`} />
-                </span>
-              )}
-            </span>
-            {node.file_count > 0 && (
-              <span className="text-[10px] text-text-light shrink-0 tabular-nums">{node.file_count}</span>
-            )}
+            <span className="flex-1 text-[12.5px] truncate min-w-0">{node.name}</span>
           </button>
         )}
 
-        {/* ── Hover action buttons (only in normal mode) ── */}
-        {!isEditing && (
-          <>
-            {isAdmin && !isDept && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setDeleteError(null); setDeleteConfirm(true); }}
-                title="Hapus folder"
-                className="absolute right-[56px] top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-red/20 text-text-light hover:text-red"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            )}
-            {isAdmin && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setLinkValue(node.gdrive_folder_id ?? ""); setLinking(true); setTimeout(() => linkInputRef.current?.focus(), 30); }}
-                title={node.gdrive_folder_id ? "Ubah link Drive" : "Hubungkan ke Drive"}
-                className="absolute right-10 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
-              >
-                {node.gdrive_folder_id ? <Link2 className="w-3 h-3" /> : <Link2Off className="w-3 h-3" />}
-              </button>
-            )}
-            {isAdmin && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setRenameValue(node.name); setRenaming(true); setTimeout(() => renameInputRef.current?.focus(), 30); }}
-                title="Ganti nama folder"
-                className="absolute right-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
-              >
-                <Pencil className="w-3 h-3" />
-              </button>
-            )}
-            {canCreateFolder && (
-              <button
-                onClick={startCreating}
-                title="Tambah sub-folder"
-                className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-primary/20 text-text-light hover:text-primary"
-              >
-                <Plus className="w-3 h-3" />
-              </button>
-            )}
-          </>
+        {/* ── 3-dot actions menu (normal mode only) ── */}
+        {!isEditing && hasMenu && (
+          <div className="absolute right-1 top-1/2 -translate-y-1/2">
+            <DropdownMenu
+              button={<MoreVertical className="w-3.5 h-3.5" />}
+              buttonClassName="w-5 h-5 flex items-center justify-center rounded transition-colors text-text-light hover:text-text hover:bg-bg-hover opacity-0 group-hover:opacity-100 aria-expanded:opacity-100"
+              buttonTitle="Aksi folder"
+              menuWidthClass="min-w-[168px]"
+            >
+              {(close) => (
+                <>
+                  {showCreate && (
+                    <DropdownItem icon={<FolderPlus className="w-3.5 h-3.5 text-text-muted" />} label="Tambah sub-folder" onClick={() => { close(); startCreating(); }} />
+                  )}
+                  {showRename && (
+                    <DropdownItem icon={<Pencil className="w-3.5 h-3.5 text-text-muted" />} label="Ganti nama" onClick={() => { close(); startRename(); }} />
+                  )}
+                  {showMoveAction && (
+                    <DropdownItem icon={<FolderInput className="w-3.5 h-3.5 text-text-muted" />} label="Pindahkan" onClick={() => { close(); setShowMove(true); }} />
+                  )}
+                  {showDelete && (
+                    <DropdownItem icon={<Trash2 className="w-3.5 h-3.5" />} label="Hapus" danger onClick={() => { close(); setDeleteError(null); setDeleteConfirm(true); }} />
+                  )}
+                </>
+              )}
+            </DropdownMenu>
+          </div>
         )}
       </div>
+
+      {showMove && (
+        <MoveModal
+          tree={tree}
+          currentFolderId={node.id}
+          disabledIds={collectDescendantIds(node)}
+          onClose={() => setShowMove(false)}
+          onMove={handleMove}
+          title="Pindahkan Folder"
+          subtitle={`Pilih folder tujuan untuk "${node.name}"`}
+        />
+      )}
 
       {open && (
         <div>
@@ -390,11 +393,14 @@ function FolderItem({
             <FolderItem
               key={child.id}
               node={child}
+              tree={tree}
               selectedId={selectedId}
               onSelect={onSelect}
               depth={depth + 1}
               isAdmin={isAdmin}
               canCreateFolder={canCreateFolder}
+              canRenameFolder={canRenameFolder}
+              canDeleteFolder={canDeleteFolder}
               onFolderCreated={onFolderCreated}
             />
           ))}

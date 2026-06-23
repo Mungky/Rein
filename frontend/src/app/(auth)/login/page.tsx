@@ -1,19 +1,11 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { usernameToEmail } from "@/lib/auth/username";
-
-function ReinDiamondLogo() {
-  return (
-    <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
-      <path d="M24 4L44 24L24 44L4 24Z" fill="white" opacity="0.95" />
-      <path d="M24 14L34 24L24 34L14 24Z" fill="white" opacity="0.22" />
-    </svg>
-  );
-}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -66,30 +58,42 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bg-sidebar px-4 py-10">
-      <div className="w-full max-w-[390px]">
-        {/* Card */}
-        <div className="bg-bg rounded-xl overflow-hidden border border-border shadow-[0_8px_32px_rgba(0,0,0,0.10)]">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-bg-sidebar via-bg to-primary-soft px-4 py-10 relative overflow-hidden">
+      {/* Soft decorative blobs */}
+      <div className="pointer-events-none absolute -top-24 -left-24 size-64 rounded-full bg-primary/10 blur-3xl" aria-hidden="true" />
+      <div className="pointer-events-none absolute -bottom-32 -right-24 size-72 rounded-full bg-red/10 blur-3xl" aria-hidden="true" />
 
-          {/* Purple gradient header */}
-          <div
-            className="px-8 pt-8 pb-7 flex flex-col items-center text-center select-none"
-            style={{ background: "linear-gradient(145deg, var(--rein-primary) 0%, var(--rein-primary-hover) 100%)" }}
-          >
-            <ReinDiamondLogo />
-            <h1 className="mt-3 text-[22px] font-black tracking-[0.07em] text-white leading-none">
-              REIN
-            </h1>
-            <p className="mt-1.5 text-[11.5px] text-white/60 tracking-[0.02em]">
-              Remula Inti Rekayasa
-            </p>
+      <div className="relative w-full max-w-[400px]">
+        {/* Brand head — logo on its own (transparent bg shows brand colors) */}
+        <div className="flex flex-col items-center text-center select-none mb-6">
+          <div className="relative size-[72px]">
+            <Image
+              src="/rein-logo.png"
+              alt="REIN"
+              fill
+              sizes="72px"
+              priority
+              className="object-contain drop-shadow-[0_4px_12px_rgba(15,23,42,0.12)]"
+            />
           </div>
+          <h1 className="mt-3 text-[24px] font-extrabold tracking-[0.04em] text-text leading-none">
+            REIN
+          </h1>
+          <p className="mt-1.5 text-[12px] text-text-muted tracking-tight">
+            Remula Inti Rekayasa
+          </p>
+        </div>
 
+        {/* Card */}
+        <div className="bg-bg rounded-[var(--r-2xl)] overflow-hidden border border-border shadow-[var(--shadow)]">
           {/* Form section */}
-          <div className="px-7 py-6">
-            <h2 className="text-[14.5px] font-bold text-text text-center mb-5">
+          <div className="px-7 py-7">
+            <h2 className="text-[15px] font-bold text-text text-center mb-1">
               Masuk ke akun Anda
             </h2>
+            <p className="text-[12px] text-text-muted text-center mb-5">
+              Gunakan username yang diberikan administrator
+            </p>
 
             {error && (
               <div className="flex items-start gap-2 bg-red-bg text-red text-[12.5px] font-medium px-3 py-2.5 rounded-[var(--r)] mb-4 border border-red/15">
@@ -118,7 +122,7 @@ export default function LoginPage() {
                   onChange={(e) => { setUsername(e.target.value); if (error) setError(null); }}
                   placeholder="contoh: budi"
                   disabled={loading}
-                  className="h-[38px] w-full rounded-[var(--r)] border border-border bg-bg px-3 text-[13.5px] text-text outline-none transition-colors duration-140 focus:border-primary placeholder:text-text-light disabled:opacity-55 disabled:cursor-not-allowed"
+                  className="h-[40px] w-full rounded-[var(--r)] border border-border bg-bg px-3.5 text-[13.5px] text-text outline-none transition-all duration-140 focus:border-primary focus:shadow-[0_0_0_3px_var(--rein-primary-bg)] placeholder:text-text-light disabled:opacity-55 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -136,7 +140,7 @@ export default function LoginPage() {
                     onChange={(e) => { setPassword(e.target.value); if (error) setError(null); }}
                     placeholder="Masukkan kata sandi"
                     disabled={loading}
-                    className="h-[38px] w-full rounded-[var(--r)] border border-border bg-bg px-3 pr-10 text-[13.5px] text-text outline-none transition-colors duration-140 focus:border-primary placeholder:text-text-light disabled:opacity-55 disabled:cursor-not-allowed"
+                    className="h-[40px] w-full rounded-[var(--r)] border border-border bg-bg px-3.5 pr-10 text-[13.5px] text-text outline-none transition-all duration-140 focus:border-primary focus:shadow-[0_0_0_3px_var(--rein-primary-bg)] placeholder:text-text-light disabled:opacity-55 disabled:cursor-not-allowed"
                   />
                   <button
                     type="button"
@@ -156,7 +160,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="btn btn-primary mt-1 w-full h-[38px] text-[13.5px] font-semibold justify-center disabled:opacity-60 disabled:cursor-not-allowed"
+                className="btn btn-primary mt-2 w-full h-[42px] text-[13.5px] font-semibold justify-center disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {loading ? (
                   <span className="flex items-center gap-2">

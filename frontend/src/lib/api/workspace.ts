@@ -23,6 +23,7 @@ export interface TemplateDetail extends ProjectTemplate {
 export interface Project {
   id: string;
   name: string;
+  rpo_number: string | null;
   client_name: string | null;
   status: "planning" | "active" | "on_hold" | "completed";
   start_date: string | null;
@@ -30,6 +31,21 @@ export interface Project {
   manager_id: string | null;
   description: string | null;
   progress: number;
+}
+
+/** Compact phase shape returned by the bulk /timeline endpoint. */
+export interface TimelinePhase {
+  id: string;
+  name: string;
+  order: number;
+  status: "pending" | "active" | "completed";
+  start_date: string | null;
+  deadline: string | null;
+  progress: number;
+}
+
+export interface TimelineProject extends Project {
+  phases: TimelinePhase[];
 }
 
 export interface Phase {
@@ -43,15 +59,24 @@ export interface Phase {
   progress: number;
 }
 
+export type TaskStatus = "todo" | "in_progress" | "pending_review" | "done" | "overdue";
+
 export interface Task {
   id: string;
   phase_id: string;
   name: string;
+  description: string | null;
+  location: string | null;
+  estimated_days: number | null;
   assigned_to: string | null;
   assigned_name: string | null;
   deadline: string | null;
-  status: "todo" | "in_progress" | "done" | "overdue";
+  status: TaskStatus;
   notes: string | null;
+  review_notes: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  started_at: string | null;
   order: number;
 }
 
@@ -61,6 +86,8 @@ export interface Completion {
   submitted_by: string;
   submitted_name: string | null;
   photo_url: string | null;
+  photos_before: string[];
+  photos_after: string[];
   notes: string | null;
   completed_at: string;
 }
@@ -107,9 +134,12 @@ export const workspaceApi = {
 
   // Projects
   listProjects: () => apiClient.get<Project[]>("/api/workspace/projects"),
+  /** Bulk endpoint — returns projects + phases in 3 queries (no N+1). */
+  timeline: () => apiClient.get<TimelineProject[]>("/api/workspace/timeline"),
   getProject: (id: string) => apiClient.get<Project>(`/api/workspace/projects/${id}`),
   createProject: (data: {
     name: string;
+    rpo_number?: string;
     client_name?: string;
     template_id?: string;
     start_date?: string;
@@ -127,15 +157,32 @@ export const workspaceApi = {
   updatePhase: (phaseId: string, data: Partial<Phase>) =>
     apiClient.put<Phase>(`/api/workspace/phases/${phaseId}`, data),
 
-  // Tasks
+  // Tasks / Work Orders
   listTasks: (phaseId: string) => apiClient.get<Task[]>(`/api/workspace/phases/${phaseId}/tasks`),
   myTasks: () => apiClient.get<Task[]>("/api/workspace/my-tasks"),
-  createTask: (phaseId: string, data: { name: string; assigned_to?: string; deadline?: string; notes?: string; order?: number }) =>
+  createTask: (phaseId: string, data: {
+    name: string;
+    description?: string;
+    location?: string;
+    estimated_days?: number;
+    assigned_to?: string;
+    deadline?: string;
+    notes?: string;
+    order?: number;
+  }) =>
     apiClient.post<Task>(`/api/workspace/phases/${phaseId}/tasks`, data),
   updateTask: (taskId: string, data: Partial<Task>) =>
     apiClient.put<Task>(`/api/workspace/tasks/${taskId}`, data),
 
-  // Completions
+  // WO lifecycle
+  startTask: (taskId: string) =>
+    apiClient.post<Task>(`/api/workspace/tasks/${taskId}/start`, {}),
+  submitReport: (taskId: string, data: { photos_before?: string[]; photos_after?: string[]; notes?: string }) =>
+    apiClient.post<Completion>(`/api/workspace/tasks/${taskId}/submit-report`, data),
+  reviewTask: (taskId: string, data: { decision: "approve" | "request_revision"; review_notes?: string }) =>
+    apiClient.post<Task>(`/api/workspace/tasks/${taskId}/review`, data),
+
+  // Completions (legacy single-photo path, kept for backwards compat)
   completeTask: (taskId: string, data: { photo_url?: string; notes?: string }) =>
     apiClient.post<Completion>(`/api/workspace/tasks/${taskId}/complete`, data),
   listCompletions: (taskId: string) =>

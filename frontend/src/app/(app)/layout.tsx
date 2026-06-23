@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "@/components/providers/theme-provider";
 import { useSidebar } from "@/hooks/use-sidebar";
@@ -16,7 +17,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { theme, toggleTheme } = useTheme();
-  const { mobileOpen, setMobileOpen } = useSidebar();
+  const { mobileOpen, setMobileOpen, desktopOpen, toggleDesktopOpen } = useSidebar();
   const isMobile = useIsMobile();
   const { loading: authLoading, logout } = useAuth();
   const { userName, userInitials, role: userRole } = useAuthDisplay();
@@ -66,35 +67,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   // Show loading state while auth is being checked
   if (authLoading) {
     return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100vh",
-          background: "var(--rein-bg-sidebar)",
-        }}
-      >
-        <div style={{ textAlign: "center" }}>
-          {/* REIN diamond spinner */}
-          <svg
-            width="36"
-            height="36"
-            viewBox="0 0 48 48"
-            fill="none"
-            style={{ animation: "pulse 1.5s ease-in-out infinite", margin: "0 auto" }}
-          >
-            <path d="M24 4L44 24L24 44L4 24Z" fill="var(--rein-primary)" opacity="0.5" />
-          </svg>
-          <p
-            style={{
-              marginTop: 12,
-              fontSize: 13,
-              color: "var(--rein-text-muted)",
-            }}
-          >
-            Memuat...
-          </p>
+      <div className="flex h-screen items-center justify-center bg-bg-sidebar">
+        <div className="text-center">
+          <div className="relative mx-auto size-14 animate-pulse">
+            <Image
+              src="/rein-logo.png"
+              alt="REIN"
+              fill
+              sizes="56px"
+              priority
+              className="object-contain"
+            />
+          </div>
+          <p className="mt-4 text-[13px] font-medium text-text-muted">Memuat…</p>
         </div>
       </div>
     );
@@ -110,13 +95,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         userName={userName}
         userRole={userRole as AppRole}
         userInitials={userInitials}
-        onMenuClick={() => setMobileOpen(!mobileOpen)}
+        sidebarOpen={desktopOpen}
+        onMenuClick={() => {
+          if (isMobile) setMobileOpen(!mobileOpen);
+          else toggleDesktopOpen();
+        }}
         onLogout={handleLogout}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* Desktop sidebar */}
-        {!isMobile && <Sidebar {...sidebarProps} />}
+        {/* Desktop sidebar — honors desktopOpen */}
+        {!isMobile && desktopOpen && <Sidebar {...sidebarProps} />}
 
         {/* Mobile sidebar drawer */}
         {isMobile && (

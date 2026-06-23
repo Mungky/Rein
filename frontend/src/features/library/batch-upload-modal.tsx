@@ -253,25 +253,27 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
   const detectingCount = items.filter((it) => it.phase === "detecting").length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[4px] p-0 sm:p-4 animate-[fadeIn_180ms_ease]">
       <div
-        className="bg-bg border border-border rounded-t-xl sm:rounded-xl shadow-2xl w-full max-w-[640px] flex flex-col overflow-hidden"
+        className="bg-bg border border-border rounded-t-[var(--r-2xl)] sm:rounded-[var(--r-2xl)] shadow-[var(--shadow-lg)] w-full max-w-[680px] flex flex-col overflow-hidden animate-[scaleIn_200ms_cubic-bezier(0.22,1,0.36,1)]"
         style={{ maxHeight: "95vh" }}
       >
         {/* Header */}
-        <div className="flex items-center gap-2.5 px-3 sm:px-4 py-3 border-b border-border bg-bg-ctrl shrink-0">
-          <FileText className="w-4 h-4 text-primary shrink-0" />
+        <div className="flex items-center gap-3 px-4 sm:px-5 py-4 border-b border-border-soft shrink-0">
+          <div className="size-10 rounded-[var(--r-lg)] bg-gradient-to-br from-primary to-primary-hover text-white flex items-center justify-center shrink-0 shadow-[0_2px_8px_rgba(37,99,235,0.25)]">
+            <FileText className="w-5 h-5" />
+          </div>
           <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-semibold truncate">
-              Upload ke {folder.path}
+            <div className="text-[14px] font-bold text-text truncate leading-tight">
+              Upload Dokumen
             </div>
-            <div className="text-[10.5px] text-text-muted truncate">
-              {items.length} file dipilih
+            <div className="text-[11.5px] text-text-muted truncate mt-0.5">
+              {items.length} file ke <span className="font-mono">{folder.path}</span>
               {detectingCount > 0 && ` · mendeteksi ${detectingCount}…`}
             </div>
           </div>
           <button onClick={onClose} className="btn btn-ghost btn-icon btn-sm text-text-muted shrink-0">
-            <X className="w-3.5 h-3.5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
@@ -353,7 +355,7 @@ export function BatchUploadModal({ files, folder, onClose, onApproveAll }: Batch
         )}
 
         {/* Footer */}
-        <div className="flex items-center gap-2 px-3 sm:px-4 py-3 border-t border-border shrink-0">
+        <div className="flex items-center gap-2 px-4 sm:px-5 py-3.5 border-t border-border-soft bg-bg-ctrl shrink-0">
           <button onClick={onClose} className="btn btn-default shrink-0">Batal</button>
           <div className="flex-1" />
           <button

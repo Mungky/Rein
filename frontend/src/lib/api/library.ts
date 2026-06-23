@@ -45,6 +45,9 @@ export interface FolderMyPerms {
   can_rename: boolean;
   can_delete: boolean;
   can_move: boolean;
+  can_create_folder: boolean;
+  can_rename_folder: boolean;
+  can_delete_folder: boolean;
 }
 
 export type FolderFilesResult = {
@@ -415,6 +418,9 @@ export interface FolderPermEntry {
   can_rename: boolean;
   can_delete: boolean;
   can_move: boolean;
+  can_create_folder: boolean;
+  can_rename_folder: boolean;
+  can_delete_folder: boolean;
 }
 
 export async function getFolderPermissions(): Promise<{ folders: FolderInfo[]; permissions: FolderPermEntry[] }> {
@@ -483,6 +489,23 @@ export async function deleteFolder(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || "Gagal menghapus folder");
+  }
+  return res.json();
+}
+
+export async function moveFolder(
+  folderId: string,
+  targetParentId: string | null,
+): Promise<{ id: string; path: string; drive_moved: boolean }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/api/library/folders/${folderId}/move`, {
+    method: "PATCH",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ target_parent_id: targetParentId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "Gagal memindahkan folder");
   }
   return res.json();
 }

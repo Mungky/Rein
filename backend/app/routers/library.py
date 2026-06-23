@@ -113,6 +113,18 @@ async def _can_move_in(db, profile, folder) -> bool:
     return await _has_folder_perm(db, profile, folder, "can_move")
 
 
+async def _can_create_folder_in(db, profile, folder) -> bool:
+    return await _has_folder_perm(db, profile, folder, "can_create_folder")
+
+
+async def _can_rename_folder_in(db, profile, folder) -> bool:
+    return await _has_folder_perm(db, profile, folder, "can_rename_folder")
+
+
+async def _can_delete_folder_in(db, profile, folder) -> bool:
+    return await _has_folder_perm(db, profile, folder, "can_delete_folder")
+
+
 def _is_librarian(profile: Profile) -> bool:
     """Pustakawan = anyone in LIBRARIAN_ROLES (director, manager) + admin.
 
@@ -382,6 +394,7 @@ async def list_folder_files(
         my_perms = {
             "can_view": True, "can_upload": True, "can_download": True,
             "can_rename": True, "can_delete": True, "can_move": True,
+            "can_create_folder": True, "can_rename_folder": True, "can_delete_folder": True,
         }
     else:
         perm_result = await db.execute(
@@ -401,6 +414,9 @@ async def list_folder_files(
             "can_rename": bool(perm and perm.can_rename),
             "can_delete": bool(perm and perm.can_delete),
             "can_move": bool(perm and perm.can_move),
+            "can_create_folder": bool(perm and perm.can_create_folder),
+            "can_rename_folder": bool(perm and perm.can_rename_folder),
+            "can_delete_folder": bool(perm and perm.can_delete_folder),
         }
 
     return {
@@ -1520,7 +1536,7 @@ async def rename_folder(
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Rename a folder. Allowed: admin OR user with can_rename on the dept."""
+    """Rename a folder. Allowed: admin OR user with can_rename_folder on the dept."""
     folder_result = await db.execute(
         select(LibraryFolder).where(
             LibraryFolder.id == folder_id,
@@ -1531,7 +1547,7 @@ async def rename_folder(
     if not folder:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
 
-    if profile.role != AppRole.admin and not await _can_rename_in(db, profile, folder):
+    if profile.role != AppRole.admin and not await _can_rename_folder_in(db, profile, folder):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Tidak memiliki izin rename folder ini")
 
     # Department root folders should not be renamed (they map to fixed dept slugs)
@@ -1565,6 +1581,130 @@ async def rename_folder(
     )
     await db.commit()
     return {"id": str(folder.id), "name": folder.name, "path": folder.path}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/library/folders/{folder_id}/move
+# ---------------------------------------------------------------------------
+
+class MoveFolderRequest(BaseModel):
+    # None = move to the department root level (no parent).
+    target_parent_id: str | None = None
+
+
+@router.patch("/folders/{folder_id}/move")
+async def move_folder(
+    folder_id: uuid.UUID,
+    body: MoveFolderRequest,
+    profile: Annotated[Profile, Depends(get_current_profile)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Re-parent a folder within the same department.
+
+    Allowed: admin OR (can_rename_folder on source AND can_create_folder on target).
+    Department root folders cannot be moved. A folder cannot be moved into itself
+    or any of its descendants (cycle guard). Drive is synced when both folders are
+    linked.
+    """
+    result = await db.execute(
+        select(LibraryFolder).where(
+            LibraryFolder.id == folder_id,
+            LibraryFolder.is_active.is_(True),
+        )
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tidak ditemukan")
+
+    if folder.folder_type == FolderType.department and folder.parent_id is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Folder departemen induk tidak dapat dipindahkan")
+
+    # Resolve target parent (None = department root)
+    target: LibraryFolder | None = None
+    if body.target_parent_id:
+        target_result = await db.execute(
+            select(LibraryFolder).where(
+                LibraryFolder.id == uuid.UUID(body.target_parent_id),
+                LibraryFolder.is_active.is_(True),
+            )
+        )
+        target = target_result.scalar_one_or_none()
+        if not target:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Folder tujuan tidak ditemukan")
+        if target.department != folder.department:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Folder hanya bisa dipindah dalam departemen yang sama",
+            )
+
+    # No-op guard
+    target_parent_uuid = target.id if target else None
+    if folder.parent_id == target_parent_uuid:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Folder sudah berada di lokasi tujuan")
+
+    # Permission: admin OR (can_rename_folder source AND can_create_folder target)
+    if profile.role != AppRole.admin:
+        check_target = target if target else LibraryFolder(department=folder.department, name="", path="")
+        if not (await _can_rename_folder_in(db, profile, folder)
+                and await _can_create_folder_in(db, profile, check_target)):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail="Tidak memiliki izin memindahkan folder ini",
+            )
+
+    # Collect descendant ids (cycle guard: target must not be self or descendant)
+    async def _collect_descendant_ids(fid: uuid.UUID) -> list[uuid.UUID]:
+        ids: list[uuid.UUID] = [fid]
+        children_result = await db.execute(
+            select(LibraryFolder.id).where(
+                LibraryFolder.parent_id == fid,
+                LibraryFolder.is_active.is_(True),
+            )
+        )
+        for (child_id,) in children_result.all():
+            ids.extend(await _collect_descendant_ids(child_id))
+        return ids
+
+    descendant_ids = await _collect_descendant_ids(folder_id)
+    if target_parent_uuid and target_parent_uuid in descendant_ids:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Folder tidak bisa dipindah ke dalam dirinya sendiri",
+        )
+
+    old_path = folder.path
+    new_base = (target.path + " / ") if target else ""
+    new_path = new_base + folder.name
+
+    # Update this folder
+    folder.parent_id = target_parent_uuid
+    folder.path = new_path
+
+    # Rewrite descendant paths (replace old prefix with new prefix)
+    if descendant_ids[1:]:
+        desc_result = await db.execute(
+            select(LibraryFolder).where(LibraryFolder.id.in_(descendant_ids[1:]))
+        )
+        for desc in desc_result.scalars().all():
+            if desc.path.startswith(old_path):
+                desc.path = new_path + desc.path[len(old_path):]
+
+    # Sync Drive (best-effort)
+    drive_moved = False
+    if folder.gdrive_folder_id and target and target.gdrive_folder_id:
+        from app.services import gdrive as gdrive_svc
+        try:
+            await gdrive_svc.move_folder(folder.gdrive_folder_id, target.gdrive_folder_id)
+            drive_moved = True
+        except Exception as exc:
+            logger.warning("Drive move failed for folder %s: %s", folder_id, exc)
+
+    await _write_log(
+        db, profile, "move_folder", "folder", folder_id,
+        metadata={"old_path": old_path, "new_path": new_path, "drive_moved": drive_moved},
+    )
+    await db.commit()
+    return {"id": str(folder.id), "path": folder.path, "drive_moved": drive_moved}
 
 
 # ---------------------------------------------------------------------------
@@ -1608,7 +1748,7 @@ async def delete_folder(
 ):
     """Soft-delete a non-department folder + move to Drive Trash.
 
-    Allowed: admin OR user with can_delete on the dept.
+    Allowed: admin OR user with can_delete_folder on the dept.
     If cascade=true, all active files inside are also trashed (recoverable via Drive Trash).
     Department root folders cannot be deleted.
     """
@@ -1624,7 +1764,7 @@ async def delete_folder(
     if folder.folder_type == FolderType.department and folder.parent_id is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Folder departemen induk tidak dapat dihapus")
 
-    if profile.role != AppRole.admin and not await _can_delete_in(db, profile, folder):
+    if profile.role != AppRole.admin and not await _can_delete_folder_in(db, profile, folder):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Tidak memiliki izin menghapus folder ini")
 
     # Count active files across folder + all descendants
@@ -1822,7 +1962,7 @@ async def create_folder(
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Create a sub-folder. Allowed: admin OR user with can_upload on the dept."""
+    """Create a sub-folder. Allowed: admin OR user with can_create_folder on the dept."""
     parent = None
     parent_path = ""
     if body.parent_id:
@@ -1834,11 +1974,10 @@ async def create_folder(
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Parent folder tidak ditemukan")
         parent_path = parent.path + " / "
 
-    # Permission check: admin OR can_upload on the dept
+    # Permission check: admin OR can_create_folder on the dept
     if profile.role != AppRole.admin:
-        # Build a synthetic folder ref for the dept check (only `department` is read)
         check_folder = parent if parent else LibraryFolder(department=body.department, name="", path="")
-        if not await _can_upload_to(db, profile, check_folder):
+        if not await _can_create_folder_in(db, profile, check_folder):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
                 detail="Tidak memiliki izin membuat folder di departemen ini",
@@ -2248,6 +2387,9 @@ async def get_folder_permissions(
                 "can_rename": p.can_rename,
                 "can_delete": p.can_delete,
                 "can_move": p.can_move,
+                "can_create_folder": p.can_create_folder,
+                "can_rename_folder": p.can_rename_folder,
+                "can_delete_folder": p.can_delete_folder,
             }
             for p in perms
         ],
@@ -2263,6 +2405,9 @@ class FolderPermissionEntry(BaseModel):
     can_rename: bool = False
     can_delete: bool = False
     can_move: bool = False
+    can_create_folder: bool = False
+    can_rename_folder: bool = False
+    can_delete_folder: bool = False
 
 
 class SetFolderPermissionsRequest(BaseModel):
@@ -2299,6 +2444,9 @@ async def set_folder_permissions(
             existing.can_rename = entry.can_rename
             existing.can_delete = entry.can_delete
             existing.can_move = entry.can_move
+            existing.can_create_folder = entry.can_create_folder
+            existing.can_rename_folder = entry.can_rename_folder
+            existing.can_delete_folder = entry.can_delete_folder
         else:
             db.add(FolderPermission(
                 folder_id=folder_uuid,
@@ -2309,6 +2457,9 @@ async def set_folder_permissions(
                 can_rename=entry.can_rename,
                 can_delete=entry.can_delete,
                 can_move=entry.can_move,
+                can_create_folder=entry.can_create_folder,
+                can_rename_folder=entry.can_rename_folder,
+                can_delete_folder=entry.can_delete_folder,
             ))
 
     await db.commit()

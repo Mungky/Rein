@@ -1,4 +1,4 @@
-export type WorkspaceView = "list" | "gantt" | "kanban";
+export type WorkspaceView = "list" | "kanban" | "calendar";
 
 export type {
   Project, Phase, Task, ProjectTemplate, Completion,

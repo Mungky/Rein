@@ -27,10 +27,18 @@ interface WorkspaceState {
 
 const savedView = (): WorkspaceView => {
   if (typeof window === "undefined") return "list";
-  return (sessionStorage.getItem("ws-view") as WorkspaceView) ?? "list";
+  const v = sessionStorage.getItem("ws-view");
+  // Migrate legacy "gantt" → "calendar" (Gantt + Calendar merged into Timeline).
+  // Persist the new value immediately so we don't re-migrate every session.
+  if (v === "gantt") {
+    sessionStorage.setItem("ws-view", "calendar");
+    return "calendar";
+  }
+  if (v === "list" || v === "kanban" || v === "calendar") return v;
+  return "list";
 };
 
-export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
+export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   projects: [],
   templates: [],
   loading: true,
@@ -46,14 +54,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       const projects = await workspaceApi.listProjects();
       set({ projects });
+    } catch (err) {
+      // Auth not ready or network error — will retry after auth resolves.
+      // Log so dev-time bugs (e.g. 404 from a renamed endpoint, RLS denial)
+      // aren't silently swallowed.
+      console.warn("loadProjects failed:", err);
     } finally {
       set({ loading: false });
     }
   },
 
   loadTemplates: async () => {
-    const templates = await workspaceApi.listTemplates();
-    set({ templates });
+    try {
+      const templates = await workspaceApi.listTemplates();
+      set({ templates });
+    } catch (err) {
+      console.warn("loadTemplates failed:", err);
+    }
   },
 
   selectProject: (id) => set({ selectedProjectId: id }),
@@ -64,13 +81,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   loadPhases: async (projectId) => {
-    const phases = await workspaceApi.listPhases(projectId);
-    set((s) => ({ phasesByProject: { ...s.phasesByProject, [projectId]: phases } }));
+    try {
+      const phases = await workspaceApi.listPhases(projectId);
+      set((s) => ({ phasesByProject: { ...s.phasesByProject, [projectId]: phases } }));
+    } catch (err) {
+      console.warn("loadPhases failed:", err);
+    }
   },
 
   loadTasks: async (phaseId) => {
-    const tasks = await workspaceApi.listTasks(phaseId);
-    set((s) => ({ tasksByPhase: { ...s.tasksByPhase, [phaseId]: tasks } }));
+    try {
+      const tasks = await workspaceApi.listTasks(phaseId);
+      set((s) => ({ tasksByPhase: { ...s.tasksByPhase, [phaseId]: tasks } }));
+    } catch (err) {
+      console.warn("loadTasks failed:", err);
+    }
   },
 
   updateProjectStatus: async (projectId, status) => {

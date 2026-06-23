@@ -2,34 +2,32 @@
 
 import {
   ChevronRight,
+  FolderInput,
   FolderOpen,
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
   Search,
-  Upload,
+  Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageGuard } from "@/components/guards/page-guard";
 import { useAuth } from "@/hooks/use-auth";
-import { getFolderFiles, getFolderTree } from "@/lib/api/library";
+import { deleteFile, getFolderFiles, getFolderTree, moveFile } from "@/lib/api/library";
 import type { FolderMyPerms } from "@/lib/api/library";
 import { FileList } from "@/features/library/file-list";
 import { FolderTree, INDEX_FOLDER_ID, TEMP_FOLDER_ID } from "@/features/library/folder-tree";
+import { NewMenu, FolderActionsMenu } from "@/features/library/folder-actions";
 import { BatchUploadModal } from "@/features/library/batch-upload-modal";
 import type { ApprovedItem } from "@/features/library/batch-upload-modal";
 import { PublicIndex } from "@/features/library/public-index";
 import { TempPanel } from "@/features/library/temp-panel";
-import { UploadZone } from "@/features/library/upload-zone";
 import { useUploadQueue } from "@/features/library/use-upload-queue";
 import { UploadQueuePanel } from "@/features/library/upload-queue-panel";
-import { extractFilesFromDrop } from "@/features/library/file-system-utils";
 import { MoveModal } from "@/features/library/move-modal";
-import { deleteFile, moveFile } from "@/lib/api/library";
 import type { FolderNode } from "@/features/library/types";
-import { FolderInput, Trash2 } from "lucide-react";
 
 const ALLOWED_EXTS = new Set([".docx", ".xlsx", ".pptx", ".pdf", ".zip", ".rar", ".dwg", ".step", ".stp"]);
 const MAX_SIZE = 50 * 1024 * 1024;
@@ -45,12 +43,22 @@ function filterValidFiles(files: File[]): File[] {
 export default function LibraryPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
-  const canCreateFolder = isAdmin || profile?.role === "director" || profile?.role === "manager" || profile?.role === "operational_manager";
 
   const [tree, setTree] = useState<FolderNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(220);
+  // Start closed on mobile (sidebar becomes an overlay drawer), open on desktop.
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window === "undefined" ? true : window.innerWidth >= 768,
+  );
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches,
+  );
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    if (typeof window === "undefined") return 220;
+    const saved = window.localStorage.getItem("library:sidebarWidth");
+    const w = saved ? parseInt(saved, 10) : NaN;
+    return w >= 160 && w <= 600 ? w : 220;
+  });
   const [resizing, setResizing] = useState(false);
   const [treeKey, setTreeKey] = useState(0);
   const [searchDraft, setSearchDraft] = useState("");
@@ -64,6 +72,11 @@ export default function LibraryPage() {
   const [filesError, setFilesError] = useState<string | null>(null);
   const [myPerms, setMyPerms] = useState<FolderMyPerms | null>(null);
 
+  const canUpload = isAdmin || Boolean(myPerms?.can_upload);
+  const canCreateFolder = isAdmin || Boolean(myPerms?.can_create_folder);
+  const canRenameFolder = isAdmin || Boolean(myPerms?.can_rename_folder);
+  const canDeleteFolder = isAdmin || Boolean(myPerms?.can_delete_folder);
+
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const queue = useUploadQueue();
 
@@ -72,10 +85,8 @@ export default function LibraryPage() {
   const [showBulkMove, setShowBulkMove] = useState(false);
   const [bulkBusy, setBulkBusy] = useState<{ action: string; done: number; total: number } | null>(null);
 
-  const [dragOver, setDragOver] = useState(false);
-  const mainAreaRef = useRef<HTMLDivElement>(null);
-
   const isSpecialFolder = selectedFolder?.id === TEMP_FOLDER_ID || selectedFolder?.id === INDEX_FOLDER_ID;
+  const isRealFolder = Boolean(selectedFolder) && !isSpecialFolder;
 
   const subFolders = useMemo(() => {
     if (!selectedFolder) return [];
@@ -84,15 +95,18 @@ export default function LibraryPage() {
 
   const refreshTree = useCallback(() => setTreeKey((k) => k + 1), []);
 
-  // ── Resizable sidebar (drag the divider) ──────────────────────────────────
+  // ── Track viewport size — mobile gets an overlay drawer ────────────────────
   useEffect(() => {
-    const saved = window.localStorage.getItem("library:sidebarWidth");
-    if (saved) {
-      const w = parseInt(saved, 10);
-      if (w >= 160 && w <= 600) setSidebarWidth(w);
-    }
+    const mq = window.matchMedia("(max-width: 767px)");
+    const onChange = (e: MediaQueryListEvent) => {
+      setIsMobile(e.matches);
+      setSidebarOpen(!e.matches);  // auto-close on shrink, auto-open on grow
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
   }, []);
 
+  // ── Resizable sidebar (drag the divider) ──────────────────────────────────
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setResizing(true);
@@ -127,23 +141,31 @@ export default function LibraryPage() {
   }, [searchDraft]);
 
   // ── Browser history integration ────────────────────────────────────────────
-  // Each folder navigation pushes a History API entry. The browser back/forward
-  // buttons (or trackpad swipe) restore the matching folder via popstate.
+  // Refs mirror latest tree / selection for use inside stable callbacks
+  // (popstate handler, tree-loading effect) without re-subscribing.
   const treeRef = useRef<FolderNode[]>([]);
-  treeRef.current = tree;
+  const selectedIdRef = useRef<string | null>(null);
+  useEffect(() => { treeRef.current = tree; }, [tree]);
+  useEffect(() => { selectedIdRef.current = selectedFolder?.id ?? null; }, [selectedFolder?.id]);
 
   const navigateTo = useCallback((folder: FolderNode, replace = false) => {
-    setSelectedFolderState((prev) => {
-      if (prev?.id === folder.id) return prev;
+    const changed = selectedFolder?.id !== folder.id;
+    setSelectedFolderState(folder);
+    if (changed) {
       const url = `?f=${encodeURIComponent(folder.id)}`;
       if (replace) {
         window.history.replaceState({ folderId: folder.id }, "", url);
       } else {
         window.history.pushState({ folderId: folder.id }, "", url);
       }
-      return folder;
-    });
-  }, []);
+    }
+  }, [selectedFolder?.id]);
+
+  // Selecting a folder on mobile closes the overlay drawer.
+  const handleSelectFolder = useCallback((folder: FolderNode) => {
+    navigateTo(folder);
+    if (isMobile) setSidebarOpen(false);
+  }, [navigateTo, isMobile]);
 
   // Listen for browser back/forward — restore folder from URL or state
   useEffect(() => {
@@ -163,12 +185,9 @@ export default function LibraryPage() {
   const breadcrumbs = useMemo(() => {
     if (!selectedFolder) return [];
     const parts = selectedFolder.path.split(" / ");
-    // Resolve each segment to a folder by walking the tree
     const resolved: { name: string; folder: FolderNode | null }[] = [];
     let currentLevel = tree;
-    let cumulativePath = "";
     for (const part of parts) {
-      cumulativePath = cumulativePath ? `${cumulativePath} / ${part}` : part;
       const match = currentLevel.find((n) => n.name === part) ?? null;
       resolved.push({ name: part, folder: match });
       currentLevel = match?.children ?? [];
@@ -178,15 +197,22 @@ export default function LibraryPage() {
 
   // ── Tree loading ───────────────────────────────────────────────────────────
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setTreeLoading(true);
     getFolderTree()
       .then(({ tree }) => {
         setTree(tree);
-        if (tree.length === 0) return;
-        // Restore selection from URL on first load, else default to root[0]
+        if (tree.length === 0) { setSelectedFolderState(null); return; }
         const urlId = new URLSearchParams(window.location.search).get("f");
+        // Re-resolve the currently selected folder against the fresh tree so a
+        // rename/move updates its path; if it was deleted, fall back to default.
+        const currentId = selectedIdRef.current;
+        if (currentId) {
+          const fresh = findNode(tree, currentId);
+          if (fresh) { setSelectedFolderState(fresh); return; }
+        }
         const initial = (urlId && findNode(tree, urlId)) || tree[0];
-        if (!selectedFolder) navigateTo(initial, true);
+        navigateTo(initial, true);
       })
       .catch(() => {})
       .finally(() => setTreeLoading(false));
@@ -213,11 +239,13 @@ export default function LibraryPage() {
 
   useEffect(() => {
     if (!selectedFolder || isSpecialFolder) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadFiles(selectedFolder, search);
   }, [selectedFolder, isSpecialFolder, search, loadFiles]);
 
   // Reset search when switching folders
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSearchDraft("");
     setSearch("");
   }, [selectedFolder?.id]);
@@ -227,7 +255,6 @@ export default function LibraryPage() {
     loadFiles(selectedFolder, search);
   }, [selectedFolder, isSpecialFolder, search, loadFiles]);
 
-  // Auto-refresh after a successful batch
   const handleUploadDone = useCallback(() => {
     refreshFiles();
   }, [refreshFiles]);
@@ -239,25 +266,12 @@ export default function LibraryPage() {
     return () => clearInterval(id);
   }, [selectedFolder, isSpecialFolder, refreshFiles]);
 
-  // ── Drag & drop ────────────────────────────────────────────────────────────
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (!selectedFolder || isSpecialFolder) return;
-    e.preventDefault();
-    setDragOver(true);
-  }, [selectedFolder, isSpecialFolder]);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
-  }, []);
-
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    if (!selectedFolder || isSpecialFolder) return;
-    const allFiles = await extractFilesFromDrop(e.nativeEvent);
-    const valid = filterValidFiles(allFiles);
+  // ── New-menu file picking (Upload File / Upload Folder) ──────────────────────
+  const handlePickFiles = useCallback((raw: File[]) => {
+    const valid = filterValidFiles(raw);
     if (valid.length > 0) setPendingFiles((q) => [...q, ...valid]);
-  }, [selectedFolder, isSpecialFolder]);
+    else if (raw.length > 0) alert("Tidak ada file yang didukung (PDF, Word, Excel, PPT, ZIP, RAR, DWG, STEP — maks 50 MB).");
+  }, []);
 
   const handleApproveAll = useCallback((items: ApprovedItem[]) => {
     queue.add(items);
@@ -278,8 +292,14 @@ export default function LibraryPage() {
     setFilesTotal((n) => n - 1);
   }, []);
 
+  // Folder mutated via the 3-dot menu (rename/move/delete) → reload tree.
+  const handleFolderChanged = useCallback(() => {
+    refreshTree();
+  }, [refreshTree]);
+
   // Clear selection when switching folders
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedIds(new Set());
   }, [selectedFolder?.id]);
 
@@ -306,14 +326,14 @@ export default function LibraryPage() {
     op: (id: string) => Promise<unknown>,
   ) => {
     setBulkBusy({ action: label, done: 0, total: ids.length });
-    const queue = [...ids];
+    const q = [...ids];
     let done = 0;
     const succeeded: string[] = [];
     const failed: { id: string; error: string }[] = [];
 
     const worker = async () => {
-      while (queue.length > 0) {
-        const id = queue.shift();
+      while (q.length > 0) {
+        const id = q.shift();
         if (!id) return;
         try {
           await op(id);
@@ -356,37 +376,36 @@ export default function LibraryPage() {
 
   return (
     <PageGuard permission="dcc:view">
-      <div className="flex h-full overflow-hidden">
-        {/* ── Sidebar ── */}
-        {sidebarOpen && (
+      <div className="flex h-full overflow-hidden relative">
+        {/* ── Mobile drawer backdrop ── */}
+        {isMobile && sidebarOpen && (
+          <div className="absolute inset-0 z-30 bg-black/50" onClick={() => setSidebarOpen(false)} />
+        )}
+
+        {/* ── Sidebar (in-flow on desktop, overlay drawer on mobile) ── */}
+        {(sidebarOpen || isMobile) && (
           <aside
-            className="shrink-0 border-r border-border bg-bg-sidebar flex flex-col overflow-hidden"
-            style={{ width: sidebarWidth, minWidth: sidebarWidth }}
+            className={
+              isMobile
+                ? `absolute inset-y-0 left-0 z-40 w-[86%] max-w-[320px] border-r border-border bg-bg-sidebar flex flex-col overflow-hidden shadow-2xl transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`
+                : "shrink-0 border-r border-border bg-bg-sidebar flex flex-col overflow-hidden"
+            }
+            style={isMobile ? undefined : { width: sidebarWidth, minWidth: sidebarWidth }}
           >
-            <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border shrink-0">
-              <FolderOpen className="w-3.5 h-3.5 text-primary shrink-0" />
-              <span className="text-[12.5px] font-bold flex-1">Perpustakaan</span>
-              <button onClick={() => setSidebarOpen(false)} className="btn btn-ghost btn-icon btn-sm text-text-muted">
-                <PanelLeftClose className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-2 px-3.5 h-[52px] border-b border-border-soft shrink-0">
+              <div className="size-7 rounded-[var(--r)] bg-gradient-to-br from-primary to-primary-hover flex items-center justify-center shadow-[0_1px_2px_rgba(37,99,235,0.20)]">
+                <FolderOpen className="w-4 h-4 text-white" />
+              </div>
+              <span className="text-[13px] font-bold text-text flex-1 tracking-tight">Perpustakaan</span>
+              <button onClick={() => setSidebarOpen(false)} className="btn btn-ghost btn-icon btn-sm text-text-muted" title={isMobile ? "Tutup" : "Sembunyikan"}>
+                {isMobile ? <X className="w-4 h-4" /> : <PanelLeftClose className="w-3.5 h-3.5" />}
               </button>
             </div>
 
-            <div className="px-3 py-2.5 border-b border-border shrink-0">
-              {selectedFolder && !isSpecialFolder ? (
-                <UploadZone compact onFiles={(files) => setPendingFiles((q) => [...q, ...files])} />
-              ) : (
-                <div className="text-[11px] text-text-muted text-center py-1">
-                  {selectedFolder?.id === TEMP_FOLDER_ID ? "Panel admin"
-                    : selectedFolder?.id === INDEX_FOLDER_ID ? "Index Publik"
-                    : "Pilih folder untuk upload"}
-                </div>
-              )}
-            </div>
-
-            <div className="flex-1 overflow-y-auto py-1">
+            <div className="flex-1 overflow-y-auto py-2">
               {treeLoading ? (
                 <div className="flex justify-center py-6">
-                  <Loader2 className="w-4 h-4 animate-spin text-text-light" />
+                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
                 </div>
               ) : tree.length === 0 ? (
                 <p className="text-[11.5px] text-text-muted text-center py-4 px-3">
@@ -396,9 +415,11 @@ export default function LibraryPage() {
                 <FolderTree
                   tree={tree}
                   selectedId={selectedFolder?.id ?? null}
-                  onSelect={navigateTo}
+                  onSelect={handleSelectFolder}
                   isAdmin={isAdmin}
                   canCreateFolder={canCreateFolder}
+                  canRenameFolder={canRenameFolder}
+                  canDeleteFolder={canDeleteFolder}
                   onFolderCreated={refreshTree}
                 />
               )}
@@ -406,8 +427,8 @@ export default function LibraryPage() {
           </aside>
         )}
 
-        {/* Resize divider */}
-        {sidebarOpen && (
+        {/* Resize divider (desktop only) */}
+        {!isMobile && sidebarOpen && (
           <div
             onMouseDown={startResize}
             className={`w-1 cursor-col-resize shrink-0 transition-colors ${resizing ? "bg-primary/60" : "bg-transparent hover:bg-primary/30"}`}
@@ -416,63 +437,74 @@ export default function LibraryPage() {
         )}
 
         {/* ── Main content ── */}
-        <div
-          ref={mainAreaRef}
-          className="flex flex-col flex-1 min-w-0 overflow-hidden relative"
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
-          {dragOver && (
-            <div className="absolute inset-0 z-20 bg-primary/10 border-2 border-dashed border-primary rounded-lg flex flex-col items-center justify-center gap-2 pointer-events-none">
-              <Upload className="w-8 h-8 text-primary" />
-              <p className="text-primary font-semibold text-[14px]">Lepas file atau folder di sini</p>
-            </div>
-          )}
-
-          {/* Topbar — back/forward uses browser buttons (History API integrated) */}
-          <div className="flex items-center gap-1 px-4 h-[46px] min-h-[46px] border-b border-border bg-bg shrink-0">
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden relative">
+          {/* Topbar */}
+          <div className="flex items-center gap-1.5 px-3 sm:px-4 h-[52px] min-h-[52px] border-b border-border-soft bg-bg shrink-0">
             {!sidebarOpen && (
-              <button onClick={() => setSidebarOpen(true)} className="btn btn-ghost btn-icon btn-sm text-text-muted mr-1">
-                <PanelLeftOpen className="w-3.5 h-3.5" />
+              <button onClick={() => setSidebarOpen(true)} className="btn btn-ghost btn-icon btn-sm text-text-muted mr-0.5 shrink-0" title="Tampilkan folder">
+                {isMobile ? <FolderOpen className="w-4 h-4" /> : <PanelLeftOpen className="w-3.5 h-3.5" />}
               </button>
             )}
 
-            {selectedFolder ? (
-              <div className="flex items-center gap-0.5 text-[12.5px] min-w-0 flex-1 overflow-x-auto scrollbar-none">
-                <span className="text-text-muted shrink-0">DCC</span>
+            {selectedFolder && isMobile ? (
+              /* Mobile: just the current folder name (full path is cramped on a phone) */
+              <button
+                onClick={() => setSidebarOpen(true)}
+                className="flex items-center gap-1.5 min-w-0 flex-1 text-left"
+              >
+                <span className="text-[13.5px] font-bold text-text truncate">
+                  {breadcrumbs[breadcrumbs.length - 1]?.name ?? "DCC"}
+                </span>
+              </button>
+            ) : selectedFolder ? (
+              <div className="flex items-center gap-0.5 text-[13px] min-w-0 flex-1 overflow-x-auto scrollbar-none">
+                <span className="text-text-light shrink-0 font-medium hidden sm:inline">DCC</span>
                 {breadcrumbs.map((bc, i) => (
                   <span key={i} className="flex items-center gap-0.5 min-w-0">
-                    <ChevronRight className="w-3 h-3 text-text-light shrink-0" />
+                    <ChevronRight className="w-3.5 h-3.5 text-text-light shrink-0" />
                     {bc.folder ? (
                       <button
                         onClick={() => navigateTo(bc.folder!)}
-                        className={`truncate px-1 py-0.5 rounded hover:bg-bg-hover transition-colors ${
+                        className={`truncate px-1.5 py-1 rounded-[var(--r-sm)] hover:bg-bg-hover transition-colors ${
                           i === breadcrumbs.length - 1
                             ? "font-semibold text-text"
-                            : "text-text-muted hover:text-text"
+                            : "text-text-muted hover:text-primary"
                         }`}
                       >
                         {bc.name}
                       </button>
                     ) : (
-                      <span className="truncate px-1 text-text-muted">{bc.name}</span>
+                      <span className="truncate px-1.5 text-text-muted">{bc.name}</span>
                     )}
                   </span>
                 ))}
               </div>
             ) : (
-              <span className="text-[12.5px] font-bold text-text flex-1">DCC — Perpustakaan Digital</span>
+              <span className="text-[14px] font-bold text-text flex-1">DCC — Perpustakaan Digital</span>
             )}
 
-            {filesTotal > 0 && (
-              <span className="text-[11.5px] text-text-muted hidden sm:block tabular-nums shrink-0">
-                {filesTotal.toLocaleString("id")} file
-              </span>
+            {isRealFolder && (
+              <>
+                <NewMenu
+                  folder={selectedFolder!}
+                  canUpload={canUpload}
+                  canCreateFolder={canCreateFolder}
+                  onPickFiles={handlePickFiles}
+                  onFolderCreated={refreshTree}
+                />
+                <FolderActionsMenu
+                  folder={selectedFolder!}
+                  tree={tree}
+                  canRename={canRenameFolder}
+                  canDelete={canDeleteFolder}
+                  canMove={canRenameFolder}
+                  onChanged={handleFolderChanged}
+                />
+              </>
             )}
             <button
               onClick={refreshFiles}
-              disabled={filesLoading || !selectedFolder}
+              disabled={filesLoading || !isRealFolder}
               className="btn btn-ghost btn-icon btn-sm text-text-muted"
               title="Segarkan"
             >
@@ -498,59 +530,58 @@ export default function LibraryPage() {
               </div>
             ) : (
               <>
+                {/* Search bar — at the very top */}
+                <div className="px-3 sm:px-5 pt-3 sm:pt-4 pb-2 flex items-center gap-2">
+                  <div className="relative flex-1 sm:max-w-md">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-light pointer-events-none" />
+                    <input
+                      type="text"
+                      value={searchDraft}
+                      onChange={(e) => setSearchDraft(e.target.value)}
+                      placeholder="Cari file di folder ini…"
+                      className="field-input pl-9 pr-8 text-[13px] w-full"
+                    />
+                    {searchDraft && (
+                      <button onClick={() => setSearchDraft("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-light hover:text-text p-0.5 rounded transition-colors">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  {search && (
+                    <span className="text-[11.5px] text-text-muted tabular-nums px-2.5 py-1 rounded-full bg-bg-ctrl shrink-0">
+                      {filesTotal} hasil
+                    </span>
+                  )}
+                </div>
+
+                {/* Sub-folders */}
                 {subFolders.length > 0 && (
-                  <div className="px-4 pt-3 pb-1">
-                    <p className="text-[10.5px] font-bold uppercase tracking-[0.07em] text-text-light mb-2">Sub-folder</p>
+                  <div className="px-3 sm:px-5 pt-1 pb-2">
+                    <p className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-text-light mb-2">Sub-folder</p>
                     <div className="flex flex-wrap gap-2">
                       {subFolders.map((sf) => (
                         <button
                           key={sf.id}
                           onClick={() => navigateTo(sf)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-bg-ctrl hover:bg-bg-hover text-[12px] font-medium text-text transition-colors"
+                          className="flex items-center gap-2 px-3 py-2 rounded-[var(--r)] border border-border bg-bg hover:border-primary hover:bg-primary-soft hover:shadow-[var(--shadow-xs)] text-[12.5px] font-medium text-text transition-all"
                         >
-                          <FolderOpen className="w-3.5 h-3.5 text-primary shrink-0" />
+                          <FolderOpen className="w-4 h-4 text-primary shrink-0" />
                           <span>{sf.name}</span>
-                          {sf.file_count > 0 && (
-                            <span className="text-[10.5px] text-text-muted tabular-nums ml-1">({sf.file_count})</span>
-                          )}
                         </button>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Search bar */}
-                <div className="px-4 pt-3 pb-2 flex items-center gap-2">
-                  <div className="relative flex-1 max-w-md">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-light pointer-events-none" />
-                    <input
-                      type="text"
-                      value={searchDraft}
-                      onChange={(e) => setSearchDraft(e.target.value)}
-                      placeholder="Cari file di folder ini…"
-                      className="field-input pl-8 pr-7 text-[12.5px] w-full"
-                    />
-                    {searchDraft && (
-                      <button onClick={() => setSearchDraft("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-text-light hover:text-text">
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-                  {search && (
-                    <span className="text-[11px] text-text-muted tabular-nums">
-                      {filesTotal} hasil
-                    </span>
-                  )}
-                </div>
-
                 {/* Bulk action bar */}
                 {selectedIds.size > 0 && (
-                  <div className="px-4 py-2 bg-primary-bg border-y border-primary/30 flex items-center gap-2">
-                    <span className="text-[12px] font-semibold text-primary">
+                  <div className="px-3 sm:px-5 py-2.5 bg-primary-soft border-y border-primary/20 flex items-center gap-2.5 flex-wrap">
+                    <span className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-primary">
+                      <span className="size-1.5 rounded-full bg-primary animate-pulse" />
                       {selectedIds.size} file dipilih
                     </span>
-                    <button onClick={() => setSelectedIds(new Set())} className="text-[11px] underline text-text-muted">
-                      Batal
+                    <button onClick={() => setSelectedIds(new Set())} className="text-[11.5px] text-text-muted hover:text-text underline-offset-2 hover:underline">
+                      Batal pilih
                     </button>
                     <div className="flex-1" />
                     {(isAdmin || myPerms?.can_move) && (
@@ -559,16 +590,16 @@ export default function LibraryPage() {
                         disabled={Boolean(bulkBusy)}
                         className="btn btn-default btn-sm gap-1.5"
                       >
-                        <FolderInput className="w-3 h-3" /> Pindahkan
+                        <FolderInput className="w-3.5 h-3.5" /> Pindahkan
                       </button>
                     )}
                     {(isAdmin || myPerms?.can_delete) && (
                       <button
                         onClick={handleBulkDelete}
                         disabled={Boolean(bulkBusy)}
-                        className="btn btn-default btn-sm gap-1.5 text-red border-red/30 hover:bg-red-bg"
+                        className="btn btn-default btn-sm gap-1.5 text-red border-red/30 hover:bg-red-bg hover:text-red hover:border-red"
                       >
-                        <Trash2 className="w-3 h-3" /> Hapus
+                        <Trash2 className="w-3.5 h-3.5" /> Hapus
                       </button>
                     )}
                   </div>
@@ -576,9 +607,9 @@ export default function LibraryPage() {
 
                 {/* Bulk busy progress */}
                 {bulkBusy && (
-                  <div className="px-4 py-2 bg-amber-bg border-y border-amber/30 flex items-center gap-2">
+                  <div className="px-3 sm:px-5 py-2.5 bg-amber-bg border-y border-amber/30 flex items-center gap-2">
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-amber" />
-                    <span className="text-[12px] text-amber">
+                    <span className="text-[12.5px] text-amber font-medium">
                       {bulkBusy.action} {bulkBusy.done}/{bulkBusy.total}…
                     </span>
                   </div>
@@ -600,12 +631,6 @@ export default function LibraryPage() {
               </>
             )}
           </div>
-
-          {selectedFolder && !isSpecialFolder && !filesLoading && files.length === 0 && (
-            <div className="px-6 pb-6">
-              <UploadZone onFiles={(files) => setPendingFiles((q) => [...q, ...files])} />
-            </div>
-          )}
         </div>
 
         {/* ── Batch detection modal — only shown while pending ── */}
@@ -648,15 +673,15 @@ function findNode(nodes: FolderNode[], id: string): FolderNode | null {
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-6">
-      <div className="w-14 h-14 rounded-full bg-bg-ctrl border border-border flex items-center justify-center">
-        <FolderOpen className="w-6 h-6 text-text-light" />
+    <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-6">
+      <div className="size-16 rounded-[var(--r-xl)] bg-gradient-to-br from-primary-soft to-primary-bg border border-primary/15 flex items-center justify-center shadow-[var(--shadow-xs)]">
+        <FolderOpen className="size-7 text-primary" />
       </div>
-      <div>
-        <p className="text-[14px] font-semibold text-text">Pilih folder di sebelah kiri</p>
-        <p className="text-[12px] text-text-muted mt-1">
+      <div className="max-w-sm">
+        <p className="text-[15px] font-semibold text-text">Pilih folder di sebelah kiri</p>
+        <p className="text-[12.5px] text-text-muted mt-1.5 leading-relaxed">
           Permission folder diatur dari Admin Dashboard. Hanya folder yang diberikan
-          izin <span className="font-mono">View</span> yang akan tampil.
+          izin <span className="font-mono font-semibold text-text">View</span> yang akan tampil.
         </p>
       </div>
     </div>

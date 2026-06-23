@@ -480,6 +480,35 @@ async def move_file(file_id: str, new_folder_id: str) -> dict:
     return await loop.run_in_executor(None, _do)
 
 
+async def move_folder(folder_id: str, new_parent_id: str) -> dict:
+    """Move a folder under a different parent in Google Drive.
+
+    Drive treats folders as files, so this mirrors `move_file` — reparent by
+    swapping addParents/removeParents.
+    """
+    def _do():
+        service = _get_drive_service()
+        folder = service.files().get(
+            fileId=folder_id, fields="parents", supportsAllDrives=True,
+        ).execute()
+        previous_parents = ",".join(folder.get("parents", []))
+        result = (
+            service.files()
+            .update(
+                fileId=folder_id,
+                addParents=new_parent_id,
+                removeParents=previous_parents,
+                fields="id,parents",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        return dict(result)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _do)
+
+
 async def build_folder_path(client_name: str, project_name: str) -> str:
     """Build the Google Drive folder path for a document.
 

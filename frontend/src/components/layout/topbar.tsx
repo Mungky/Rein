@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/shared/theme-toggle";
 import {
   ChevronDown,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import type { AppRole } from "@/lib/utils/roles";
 import { ROLE_LABELS } from "@/lib/utils/roles";
@@ -14,6 +17,8 @@ const SCREEN_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
   dcc: "Document Manager",
   approvals: "Persetujuan",
+  admin: "Administrasi",
+  workspace: "Workspace",
   crm: "CRM",
   projects: "Proyek",
   finance: "Keuangan",
@@ -27,16 +32,24 @@ export interface TopbarProps {
   userName?: string;
   userRole?: AppRole;
   userInitials?: string;
+  /** Desktop sidebar visibility — used to flip the toggle icon. */
+  sidebarOpen?: boolean;
   onMenuClick?: () => void;
   onLogout?: () => void;
 }
 
 function ReinLogo() {
   return (
-    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" className="shrink-0">
-      <path d="M11 2L20 11 11 20 2 11z" fill="var(--primary)" opacity="0.9" />
-      <path d="M11 7L15 11 11 15 7 11z" fill="var(--bg-sidebar)" />
-    </svg>
+    <span className="relative inline-block size-10 shrink-0">
+      <Image
+        src="/rein-logo.png"
+        alt="REIN"
+        fill
+        sizes="40px"
+        priority
+        className="object-contain drop-shadow-[0_1px_2px_rgba(15,23,42,0.10)]"
+      />
+    </span>
   );
 }
 
@@ -47,6 +60,7 @@ export function Topbar({
   userName = "Pengguna",
   userRole,
   userInitials = "U",
+  sidebarOpen = true,
   onMenuClick,
   onLogout,
 }: TopbarProps) {
@@ -66,6 +80,7 @@ export function Topbar({
   }, [userMenuOpen]);
 
   const roleLabel = userRole ? ROLE_LABELS[userRole] ?? userRole : "";
+  const screenLabel = SCREEN_LABELS[screen] ?? screen;
 
   return (
     <header
@@ -74,21 +89,26 @@ export function Topbar({
         "bg-bg-sidebar border-b border-border z-[100]"
       )}
     >
-      {/* Brand slot */}
+      {/* Brand slot — collapses to logo-only when sidebar hidden */}
       <div
         className={cn(
-          "flex h-full shrink-0 items-center gap-2 overflow-hidden",
-          "w-[var(--sidebar-w)] min-w-[var(--sidebar-w)] border-r border-border px-3.5",
+          "flex h-full shrink-0 items-center gap-2.5 overflow-hidden border-r border-border transition-[width] duration-200 ease-out",
+          sidebarOpen
+            ? "w-[var(--sidebar-w)] min-w-[var(--sidebar-w)] px-4"
+            : "w-auto px-3",
           "max-md:w-auto max-md:min-w-0 max-md:border-r-0 max-md:pl-3"
         )}
       >
-<div className="flex min-w-0 flex-1 items-center gap-2 max-md:flex-initial">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <ReinLogo />
-          <div className="min-w-0 overflow-hidden max-md:hidden">
-            <span className="block text-sm font-extrabold tracking-[0.06em] text-text">
+          <div className={cn(
+            "min-w-0 overflow-hidden max-md:hidden transition-all duration-200",
+            sidebarOpen ? "opacity-100 w-auto" : "opacity-0 w-0"
+          )}>
+            <span className="block text-[15px] font-extrabold tracking-[0.02em] text-text leading-tight">
               REIN
             </span>
-            <span className="block text-[10px] tracking-[0.01em] text-text-muted -mt-px">
+            <span className="block text-[10.5px] tracking-tight text-text-muted leading-tight">
               Remula Inti Rekayasa
             </span>
           </div>
@@ -96,89 +116,100 @@ export function Topbar({
       </div>
 
       {/* Right slot */}
-      <div className="flex flex-1 items-center gap-0.5 px-3.5">
-        {/* Breadcrumb */}
-        <nav className="flex items-center gap-[5px] text-[13.5px] text-text-muted">
-          <span>REIN</span>
-          <span className="text-[18px] leading-none text-text-light mx-px">›</span>
-          <span className="font-semibold text-text">
-            {SCREEN_LABELS[screen] ?? screen}
+      <div className="flex flex-1 items-center gap-2 px-4 max-md:px-3">
+        {/* Sidebar toggle — mobile opens drawer, desktop hides/shows sidebar */}
+        <button
+          type="button"
+          onClick={onMenuClick}
+          className="btn btn-ghost btn-icon btn-sm -ml-1"
+          aria-label={sidebarOpen ? "Sembunyikan sidebar" : "Tampilkan sidebar"}
+          title={sidebarOpen ? "Sembunyikan sidebar" : "Tampilkan sidebar"}
+        >
+          {sidebarOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+        </button>
+        {/* Screen pill */}
+        <div className="flex items-center gap-2">
+          <span className="hidden sm:inline-flex items-center gap-1.5 rounded-[var(--r)] bg-primary-soft px-2.5 py-1 text-[12px] font-semibold text-primary">
+            {screenLabel}
           </span>
-        </nav>
+          <span className="sm:hidden text-[13px] font-semibold text-text">
+            {screenLabel}
+          </span>
+        </div>
 
         <div className="flex-1" />
 
         <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
 
-        <div className="mx-1.5 h-5 w-px shrink-0 bg-border" />
+        <div className="mx-1 h-6 w-px shrink-0 bg-border" />
 
         {/* User menu */}
-        <div ref={menuRef} style={{ position: "relative" }}>
+        <div ref={menuRef} className="relative">
           <button
             type="button"
             onClick={() => setUserMenuOpen((prev) => !prev)}
             className={cn(
-              "flex cursor-pointer items-center gap-[7px] rounded-[var(--r)] px-1.5 py-1",
+              "flex cursor-pointer items-center gap-2 rounded-[var(--r)] p-1 pr-2",
               "transition-[background] duration-[var(--tr)]",
               "hover:bg-bg-hover"
             )}
           >
             <div
               className={cn(
-                "flex size-[26px] shrink-0 items-center justify-center",
-                "rounded-full bg-primary text-text-inv",
-                "text-[10px] font-bold tracking-[0.03em]"
+                "flex size-8 shrink-0 items-center justify-center",
+                "rounded-full bg-gradient-to-br from-primary to-primary-hover text-text-inv",
+                "text-[11px] font-bold shadow-[0_1px_2px_rgba(37,99,235,0.30)]"
               )}
             >
               {userInitials}
             </div>
-            <div className="min-w-0 max-md:hidden">
-              <div className="whitespace-nowrap text-[12.5px] font-semibold text-text">
+            <div className="min-w-0 max-md:hidden text-left">
+              <div className="whitespace-nowrap text-[12.5px] font-semibold text-text leading-tight">
                 {userName}
               </div>
-              <div className="whitespace-nowrap text-[10px] text-text-muted">
+              <div className="whitespace-nowrap text-[10.5px] text-text-muted leading-tight">
                 {roleLabel}
               </div>
             </div>
-            <ChevronDown className="size-2.5 text-text-muted" />
+            <ChevronDown className="size-3 text-text-muted max-md:hidden" />
           </button>
 
           {/* Dropdown */}
           {userMenuOpen && (
             <div
               className={cn(
-                "absolute right-0 top-full mt-1 min-w-[180px]",
-                "rounded-[var(--r-lg)] border border-border bg-bg-sidebar",
-                "py-1 shadow-md z-[200]"
+                "absolute right-0 top-full mt-1.5 min-w-[200px]",
+                "rounded-[var(--r-lg)] border border-border bg-bg",
+                "py-1.5 shadow-[var(--shadow-lg)] z-[200]"
               )}
             >
-              <div className={cn("flex items-center gap-2 px-3 py-2", "border-b border-border-soft")}>
+              <div className={cn("flex items-center gap-2.5 px-3 py-2.5 mb-1", "border-b border-border-soft")}>
                 <div
                   className={cn(
-                    "flex size-7 shrink-0 items-center justify-center",
-                    "rounded-full bg-primary text-text-inv",
-                    "text-[10px] font-bold"
+                    "flex size-9 shrink-0 items-center justify-center",
+                    "rounded-full bg-gradient-to-br from-primary to-primary-hover text-text-inv",
+                    "text-[11px] font-bold"
                   )}
                 >
                   {userInitials}
                 </div>
                 <div className="min-w-0">
-                  <div className="truncate text-[12.5px] font-semibold text-text">{userName}</div>
-                  <div className="truncate text-[10px] text-text-muted">{roleLabel}</div>
+                  <div className="truncate text-[13px] font-semibold text-text">{userName}</div>
+                  <div className="truncate text-[10.5px] text-text-muted">{roleLabel}</div>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => { setUserMenuOpen(false); onLogout?.(); }}
                 className={cn(
-                  "flex w-full items-center gap-2 px-3 py-[7px]",
-                  "text-[13px] text-text-muted cursor-pointer border-none bg-transparent",
+                  "flex w-full items-center gap-2.5 px-3 py-2",
+                  "text-[13px] text-text cursor-pointer border-none bg-transparent",
                   "transition-[background,color] duration-[var(--tr)]",
-                  "hover:bg-bg-hover hover:text-text",
+                  "hover:bg-red-bg hover:text-red",
                   "text-left font-sans"
                 )}
               >
-                <LogOut className="size-3.5" />
+                <LogOut className="size-4" />
                 Keluar
               </button>
             </div>

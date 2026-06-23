@@ -10,7 +10,7 @@ function isPublicPath(pathname: string): boolean {
 }
 
 function isProtectedPath(pathname: string): boolean {
-  const protectedPrefixes = ["/dashboard", "/dcc", "/approvals", "/admin"];
+  const protectedPrefixes = ["/dashboard", "/dcc", "/approvals", "/admin", "/workspace"];
   return protectedPrefixes.some((p) => pathname === p || pathname.startsWith(p + "/"));
 }
 
