@@ -7,7 +7,6 @@ import {
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
-  RefreshCw,
   Search,
   Trash2,
   X,
@@ -27,6 +26,7 @@ import { TempPanel } from "@/features/library/temp-panel";
 import { useUploadQueue } from "@/features/library/use-upload-queue";
 import { UploadQueuePanel } from "@/features/library/upload-queue-panel";
 import { MoveModal } from "@/features/library/move-modal";
+import { SyncIndicator } from "@/features/library/sync-indicator";
 import type { FolderNode } from "@/features/library/types";
 
 const ALLOWED_EXTS = new Set([".docx", ".xlsx", ".pptx", ".pdf", ".zip", ".rar", ".dwg", ".step", ".stp"]);
@@ -71,6 +71,8 @@ export default function LibraryPage() {
   const [filesTotal, setFilesTotal] = useState(0);
   const [filesError, setFilesError] = useState<string | null>(null);
   const [myPerms, setMyPerms] = useState<FolderMyPerms | null>(null);
+  const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   const canUpload = isAdmin || Boolean(myPerms?.can_upload);
   const canCreateFolder = isAdmin || Boolean(myPerms?.can_create_folder);
@@ -220,21 +222,34 @@ export default function LibraryPage() {
   }, [treeKey]);
 
   // ── File loading ───────────────────────────────────────────────────────────
-  const loadFiles = useCallback((folder: FolderNode, searchTerm = "") => {
-    setFilesLoading(true);
-    setFiles([]);
-    setFilesError(null);
-    setMyPerms(null);
+  // `silent` = background/auto refresh: no spinner, no list-clear. React
+  // reconciles by file.id so unchanged rows keep their DOM (no re-animation,
+  // no flicker) — only genuinely new/removed files change. This is what makes
+  // the periodic refresh feel seamless instead of a constant reload.
+  const loadFiles = useCallback((folder: FolderNode, searchTerm = "", silent = false) => {
+    if (!silent) {
+      setFilesLoading(true);
+      setFiles([]);
+      setMyPerms(null);
+      setFilesError(null);
+    }
+    setSyncing(true);
     getFolderFiles(folder.id, { search: searchTerm || undefined })
       .then((result) => {
         setFiles(result.files);
         setFilesTotal(result.total);
         setMyPerms(result.my_perms);
+        setFilesError(null);
+        setLastSync(new Date());
       })
       .catch((err) => {
-        setFilesError(err instanceof Error ? err.message : "Gagal memuat file");
+        // On silent refresh, keep the existing list — don't clobber with an error.
+        if (!silent) setFilesError(err instanceof Error ? err.message : "Gagal memuat file");
       })
-      .finally(() => setFilesLoading(false));
+      .finally(() => {
+        if (!silent) setFilesLoading(false);
+        setSyncing(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -250,16 +265,18 @@ export default function LibraryPage() {
     setSearch("");
   }, [selectedFolder?.id]);
 
+  // Silent refresh — used by the 30s auto-sync, post-upload, and the manual
+  // sync widget. Never clears the list or shows the full-page spinner.
   const refreshFiles = useCallback(() => {
     if (!selectedFolder || isSpecialFolder) return;
-    loadFiles(selectedFolder, search);
+    loadFiles(selectedFolder, search, true);
   }, [selectedFolder, isSpecialFolder, search, loadFiles]);
 
   const handleUploadDone = useCallback(() => {
     refreshFiles();
   }, [refreshFiles]);
 
-  // Auto-refresh every 30 s
+  // Auto-sync every 30 s — silently, in the background.
   useEffect(() => {
     if (!selectedFolder || isSpecialFolder) return;
     const id = setInterval(refreshFiles, 30000);
@@ -502,14 +519,6 @@ export default function LibraryPage() {
                 />
               </>
             )}
-            <button
-              onClick={refreshFiles}
-              disabled={filesLoading || !isRealFolder}
-              className="btn btn-ghost btn-icon btn-sm text-text-muted"
-              title="Segarkan"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${filesLoading ? "animate-spin" : ""}`} />
-            </button>
           </div>
 
           {/* Content */}
@@ -657,6 +666,11 @@ export default function LibraryPage() {
 
         {/* ── Collapsible upload queue (always at bottom-right) ── */}
         <UploadQueuePanel queue={queue} onUploadDone={handleUploadDone} />
+
+        {/* ── Floating sync widget — seamless background-refresh indicator ── */}
+        {isRealFolder && (
+          <SyncIndicator lastSync={lastSync} syncing={syncing} onSync={refreshFiles} />
+        )}
       </div>
     </PageGuard>
   );
