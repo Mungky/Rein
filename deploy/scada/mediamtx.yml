@@ -1,0 +1,73 @@
+# MediaMTX config untuk REIN SCADA Monitor
+# ==========================================
+# Alur: OBS --(RTMP, localhost)--> MediaMTX --(LL-HLS, localhost)--> cloudflared --> browser
+#
+# Catatan versi: sintaks `authInternalUsers` berlaku untuk MediaMTX >= 1.9.
+# (Bentuk lama per-path `readUser`/`readPass` sudah deprecated.)
+#
+# GANTI semua nilai GANTI_* sebelum dipakai. Simpan file ini di folder yang
+# sama dengan mediamtx.exe (mis. C:\rein-scada\mediamtx\mediamtx.yml).
+
+logLevel: info
+
+###############################################
+# Protokol yang TIDAK dipakai — matikan semua
+###############################################
+rtsp: no
+webrtc: no   # WebRTC tidak bisa lewat Cloudflare Tunnel (media UDP/ICE) — kita pakai HLS
+srt: no
+moq: no
+api: no
+metrics: no
+pprof: no
+playback: no
+
+###############################################
+# RTMP — pintu masuk dari OBS (localhost saja)
+###############################################
+rtmp: yes
+rtmpAddress: 127.0.0.1:1935
+
+###############################################
+# HLS — pintu keluar ke browser (via cloudflared)
+###############################################
+hls: yes
+hlsAddress: 127.0.0.1:8888          # hanya bisa diakses cloudflared di PC yang sama
+hlsVariant: lowLatency              # latensi ~3-6 detik
+hlsSegmentDuration: 1s              # WAJIB sama dengan Keyframe Interval di OBS (1 detik)
+hlsPartDuration: 200ms
+hlsSegmentCount: 7
+# Kunci CORS ke domain frontend REIN (jangan pakai "*")
+hlsAllowOrigins: ["https://GANTI_DOMAIN_REIN"]
+# Kalau LL-HLS bermasalah lewat tunnel, fallback satu baris:
+# hlsVariant: mpegts
+
+###############################################
+# Autentikasi — tidak ada akses anonim
+###############################################
+authMethod: internal
+authInternalUsers:
+  # OBS (publisher) — hanya boleh dari PC ini sendiri
+  - user: obs
+    pass: GANTI_PASSWORD_PUBLISH
+    ips: ["127.0.0.1", "::1"]
+    permissions:
+      - action: publish
+        path: scada
+
+  # REIN (viewer) — kredensial ini diisi di dialog "Kelola Stream" di REIN;
+  # pemutar REIN mengirimkannya sebagai header "Authorization: Basic" di
+  # setiap request (query param ?user=&pass= TIDAK didukung untuk pembacaan
+  # HLS di MediaMTX modern — sudah diverifikasi di v1.19)
+  - user: rein-viewer
+    pass: GANTI_PASSWORD_VIEWER
+    permissions:
+      - action: read
+        path: scada
+
+###############################################
+# Path stream
+###############################################
+paths:
+  scada:
+    source: publisher

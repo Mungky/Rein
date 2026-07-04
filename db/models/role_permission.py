@@ -63,6 +63,10 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     "workspace:execute_wo",      # field worker: start + submit-report
     "workspace:review_wo",       # engineer/manager: approve / request revision
     "workspace:close_project",   # close completed project
+    # SCADA Monitor (added 2026-07-04)
+    "scada:view",                # open /scada, watch streams
+    "scada:edit_layout",         # arrange & save own perspectives
+    "scada:manage",              # manage stream sources (URL, credentials)
 )
 
 
@@ -85,6 +89,9 @@ PERMISSION_LABELS: dict[str, str] = {
     "workspace:execute_wo": "Eksekusi WO (mulai & submit laporan)",
     "workspace:review_wo": "Review WO (approve / minta revisi)",
     "workspace:close_project": "Tutup Proyek",
+    "scada:view": "Lihat SCADA Monitor",
+    "scada:edit_layout": "Atur Layout SCADA",
+    "scada:manage": "Kelola Stream SCADA",
 }
 
 
@@ -94,12 +101,13 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
     AppRole.director: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:manage_access", "dcc:manage_clients", "dcc:chat",
-        "workspace:view", "workspace:manage",
+        "workspace:view", "workspace:manage", "scada:view",
     ),
     AppRole.manager: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:manage_clients", "dcc:chat",
         "workspace:view", "workspace:manage",
+        "scada:view", "scada:edit_layout",
     ),
     AppRole.finance: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
@@ -114,15 +122,15 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
     ),
     AppRole.engineer_mechanical: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-        "workspace:view", "workspace:complete_task",
+        "workspace:view", "workspace:complete_task", "scada:view",
     ),
     AppRole.engineer_process: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-        "workspace:view", "workspace:complete_task",
+        "workspace:view", "workspace:complete_task", "scada:view",
     ),
     AppRole.engineer_electrical: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-        "workspace:view", "workspace:complete_task",
+        "workspace:view", "workspace:complete_task", "scada:view",
     ),
     AppRole.purchasing: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
@@ -131,5 +139,6 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
     AppRole.operational_manager: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:chat", "workspace:view", "workspace:manage",
+        "scada:view", "scada:edit_layout",
     ),
 }

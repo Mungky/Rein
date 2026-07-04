@@ -1,0 +1,44 @@
+# CI REIN — typecheck + build frontend, pytest backend.
+# Lint sengaja non-blocking dulu: ada 17 error lama (react-hooks/set-state-in-effect
+# dkk.) yang harus dilunasi bertahap; jangan biarkan utang lama memblokir kerja baru.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    name: Frontend (typecheck, build, lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+        env:
+          # Placeholder — build hanya butuh nilai terisi, koneksi nyata terjadi di runtime
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+      - name: Lint (non-blocking — utang 17 error lama)
+        run: bun run lint
+        continue-on-error: true
+
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r backend/requirements-dev.txt
+      - run: python -m pytest -q
+        working-directory: backend

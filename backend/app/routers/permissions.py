@@ -34,6 +34,11 @@ async def list_permissions(
     for row in result.scalars().all():
         matrix.setdefault(row.role.value, []).append(row.permission)
 
+    # Admin always has every permission (mirrors _load_permissions and the
+    # force-grant in PUT /api/admin/permissions). Without this, permissions
+    # added after the initial seed never reach the admin's sidebar/guards.
+    matrix[AppRole.admin.value] = list(ALL_PERMISSIONS)
+
     return {
         "permissions": matrix,
         "all_permissions": list(ALL_PERMISSIONS),

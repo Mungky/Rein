@@ -1,7 +1,9 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Home, FolderOpen, FolderKanban, Bell, User } from "lucide-react";
+import { Home, FolderOpen, FolderKanban, MonitorPlay } from "lucide-react";
+import type { AppRole, Permission } from "@/lib/utils/roles";
+import { usePermissions } from "@/components/providers/permissions-provider";
 
 export interface MobileNavProps {
   screen: string;
@@ -9,15 +11,25 @@ export interface MobileNavProps {
   userRole?: string;
 }
 
-const items = [
+/** Bottom nav = primary navigation on mobile. Items mirror the sidebar's
+ *  main menu (permission-gated); the drawer stays for Admin & account info. */
+const items: {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  permission?: Permission;
+}[] = [
   { id: "dashboard", label: "Beranda", icon: Home },
-  { id: "workspace", label: "Proyek", icon: FolderKanban },
+  { id: "workspace", label: "Proyek", icon: FolderKanban, permission: "workspace:view" },
   { id: "dcc", label: "Dokumen", icon: FolderOpen },
-  { id: "notifications", label: "Notif", icon: Bell },
-  { id: "profile", label: "Profil", icon: User },
+  { id: "scada", label: "SCADA", icon: MonitorPlay, permission: "scada:view" },
 ];
 
-export function MobileNav({ screen, setScreen }: MobileNavProps) {
+export function MobileNav({ screen, setScreen, userRole }: MobileNavProps) {
+  const { can } = usePermissions();
+  const visible = items.filter(
+    (item) => !item.permission || (userRole && can(userRole as AppRole, item.permission))
+  );
 
   return (
     <nav
@@ -26,7 +38,7 @@ export function MobileNav({ screen, setScreen }: MobileNavProps) {
         "md:hidden"
       )}
     >
-      {items.map(({ id, label, icon: Icon }) => {
+      {visible.map(({ id, label, icon: Icon }) => {
         const active = screen === id;
         return (
           <button

@@ -12,7 +12,7 @@ _project_root = str(Path(__file__).resolve().parent.parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -35,6 +35,7 @@ from app.routers import (
     dcc_activity,
     workspace,
     library,
+    scada,
 )
 from app.services.task_queue import task_queue, TaskType
 
@@ -131,6 +132,27 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_server_errors(request: Request, call_next):
+    """Server errors must never be silent — log path + traceback for every 5xx.
+
+    This is the minimum observability floor; pipe logs to an error tracker
+    (e.g. Sentry) when an account/DSN is available.
+    """
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "Unhandled exception on %s %s", request.method, request.url.path
+        )
+        raise
+    if response.status_code >= 500:
+        logger.error(
+            "HTTP %d on %s %s", response.status_code, request.method, request.url.path
+        )
+    return response
+
+
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "version": "0.1.0"}
@@ -151,3 +173,4 @@ app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(dcc_activity.router, prefix="/api/dcc/activity", tags=["dcc"])
 app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
+app.include_router(scada.router, prefix="/api/scada", tags=["scada"])

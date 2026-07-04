@@ -8,6 +8,7 @@ import {
   Lock,
   Shield,
   FolderKanban,
+  MonitorPlay,
 } from "lucide-react";
 import { ROLE_LABELS } from "@/lib/utils/roles";
 import type { AppRole, Permission } from "@/lib/utils/roles";
@@ -26,6 +27,7 @@ const NAV_PRIMARY: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
   { id: "workspace", label: "Workspace", icon: FolderKanban, permission: "workspace:view" },
   { id: "dcc", label: "Document Manager", icon: FolderOpen },
+  { id: "scada", label: "SCADA Monitor", icon: MonitorPlay, permission: "scada:view" },
 ];
 
 const NAV_ADMIN: NavItem[] = [
