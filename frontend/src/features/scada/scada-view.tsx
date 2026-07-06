@@ -1,6 +1,6 @@
 "use client";
 
-/** SCADA Monitor — main view.
+/** R-Net (Cloud SCADA Remula, sebelumnya "SCADA Monitor") — main view.
  *  View mode is the default: pick a perspective, watch. Edit mode (gated by
  *  scada:edit_layout) works on a draft; Simpan persists, Batal discards. */
 
@@ -34,6 +34,7 @@ import { PanelFrame } from "./panels/panel-frame";
 import { renderPanel } from "./panels/panel-registry";
 import { AddPanelDialog } from "./add-panel-dialog";
 import { ManageStreamsDialog } from "./manage-streams-dialog";
+import { AnalysisView } from "./analysis/analysis-view";
 
 export function ScadaView() {
   const { role } = useAuthDisplay();
@@ -129,7 +130,7 @@ export function ScadaView() {
       <div className="flex h-full items-center justify-center">
         <div className="text-center">
           <Loader2 className="mx-auto size-6 animate-spin text-primary" />
-          <p className="mt-3 text-[13px] text-text-muted">Memuat SCADA Monitor…</p>
+          <p className="mt-3 text-[13px] text-text-muted">Memuat R-Net…</p>
         </div>
       </div>
     );
@@ -150,11 +151,11 @@ export function ScadaView() {
         <div className="flex h-[52px] min-h-[52px] shrink-0 items-center gap-2 border-b border-border-soft bg-bg px-4">
           <MonitorPlay className="size-4 shrink-0 text-primary" />
           <span className="hidden text-[14px] font-bold text-text sm:block">
-            SCADA Monitor
+            R-Net
           </span>
 
-          {/* Perspective picker */}
-          {store.perspectives.length > 0 && (
+          {/* Perspective picker — monitor mode only */}
+          {store.viewMode === "monitor" && store.perspectives.length > 0 && (
             <select
               className="field-select h-8 w-auto max-w-[200px] cursor-pointer text-[12.5px]"
               value={store.activePerspectiveId ?? ""}
@@ -170,9 +171,34 @@ export function ScadaView() {
             </select>
           )}
 
+          {/* Monitor | Analisis toggle */}
+          {!store.editMode && (
+            <div className="flex items-center rounded-[var(--r)] border border-border-soft bg-bg-sidebar p-0.5">
+              {(
+                [
+                  { mode: "monitor", label: "Monitor" },
+                  { mode: "analysis", label: "Analisis" },
+                ] as const
+              ).map(({ mode, label }) => (
+                <button
+                  key={mode}
+                  onClick={() => store.setViewMode(mode)}
+                  className={cn(
+                    "cursor-pointer rounded-[var(--r-sm)] px-2.5 py-1 text-[11.5px] font-semibold transition-colors",
+                    store.viewMode === mode
+                      ? "bg-bg text-text shadow-[var(--shadow-xs)]"
+                      : "text-text-muted hover:text-text"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="flex-1" />
 
-          {store.editMode ? (
+          {store.viewMode === "analysis" ? null : store.editMode ? (
             <>
               <button
                 onClick={() => store.setShowAddPanel(true)}
@@ -221,8 +247,8 @@ export function ScadaView() {
             </>
           )}
 
-          {/* Overflow menu — perspective actions (editors only) */}
-          {canEdit && !isMobile && (
+          {/* Overflow menu — perspective actions (editors only, monitor mode) */}
+          {canEdit && !isMobile && store.viewMode === "monitor" && (
             <div className="relative">
               <button
                 onClick={() => setMenuOpen((v) => !v)}
@@ -268,7 +294,11 @@ export function ScadaView() {
         </div>
       )}
 
-      {/* Monitoring wall */}
+      {/* Analisis workbench — Excel-like tag sheet (fullscreen stays with Monitor) */}
+      {store.viewMode === "analysis" && !fullscreen ? (
+        <AnalysisView canEdit={canEdit} canManage={canManage} />
+      ) : (
+      /* Monitoring wall */
       <div
         ref={wallRef}
         className={cn("min-h-0 flex-1", fullscreen ? "bg-black" : "bg-bg-sidebar")}
@@ -311,7 +341,7 @@ export function ScadaView() {
                   editMode={false}
                   fullscreen={fullscreen}
                 >
-                  {renderPanel(panel, store.streams)}
+                  {renderPanel(panel, store.streams, store.tags)}
                 </PanelFrame>
               </div>
             ))}
@@ -330,7 +360,7 @@ export function ScadaView() {
                   fullscreen={fullscreen}
                   onRemove={() => store.removePanel(panel.id)}
                 >
-                  {renderPanel(panel, store.streams)}
+                  {renderPanel(panel, store.streams, store.tags)}
                 </PanelFrame>
               )}
             />
@@ -348,11 +378,13 @@ export function ScadaView() {
           </button>
         )}
       </div>
+      )}
 
       {/* Dialogs */}
       {store.showAddPanel && store.draftPanels && (
         <AddPanelDialog
           streams={store.streams}
+          tags={store.tags}
           existingPanels={store.draftPanels}
           onAdd={store.addPanel}
           onClose={() => store.setShowAddPanel(false)}
@@ -362,6 +394,7 @@ export function ScadaView() {
         <ManageStreamsDialog
           streams={store.streams}
           onChanged={store.refreshStreams}
+          onRefresh={store.reconnectStreams}
           onClose={() => store.setShowManageStreams(false)}
         />
       )}

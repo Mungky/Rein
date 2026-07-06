@@ -38,6 +38,7 @@ from app.routers import (
     scada,
 )
 from app.services.task_queue import task_queue, TaskType
+from app.services import historian
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +105,16 @@ async def lifespan(app: FastAPI):
     """Start background workers on startup, stop on shutdown."""
     await task_queue.start()
     cleanup_task = asyncio.create_task(_periodic_cleanup())
+    historian_task = (
+        asyncio.create_task(historian.historian_loop()) if historian.ENABLED else None
+    )
     logger.info("REIN API started — task queue active, cleanup every %ds", CLEANUP_INTERVAL)
+    if historian_task is None:
+        logger.warning("Historian sampler DISABLED via HISTORIAN_ENABLED")
     yield
     cleanup_task.cancel()
+    if historian_task:
+        historian_task.cancel()
     await task_queue.stop()
     logger.info("REIN API shutting down")
 

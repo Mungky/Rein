@@ -28,7 +28,14 @@ from .view_request import ViewRequest, ViewRequestStatus, VIEW_REQUEST_TTL_SECON
 from .library_audit_log import LibraryAuditLog
 from .document_sequence import DocumentSequence, KNOWN_DOC_TYPES, DOC_TYPE_LABELS
 from .folder_permission import FolderPermission
-from .scada import ScadaStream, ScadaPerspective
+from .scada import (
+    ScadaStream,
+    ScadaPerspective,
+    ScadaSheet,
+    ScadaTag,
+    ScadaSample,
+    ScadaWorkbenchColumn,
+)
 
 __all__ = [
     "Base",
@@ -89,4 +96,8 @@ __all__ = [
     "FolderPermission",
     "ScadaStream",
     "ScadaPerspective",
+    "ScadaSheet",
+    "ScadaTag",
+    "ScadaSample",
+    "ScadaWorkbenchColumn",
 ]

@@ -53,8 +53,8 @@ const PERM_MODULE_CARDS: { id: string; label: string; description: string; perms
   },
   {
     id: "scada",
-    label: "SCADA Monitor",
-    description: "Pemantauan layar SCADA, layout, dan sumber stream",
+    label: "R-Net",
+    description: "Cloud SCADA Remula — pemantauan layar, layout, dan sumber stream",
     accent: "blue",
     perms: ["scada:view", "scada:edit_layout", "scada:manage"],
   },

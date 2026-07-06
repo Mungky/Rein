@@ -63,7 +63,7 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     "workspace:execute_wo",      # field worker: start + submit-report
     "workspace:review_wo",       # engineer/manager: approve / request revision
     "workspace:close_project",   # close completed project
-    # SCADA Monitor (added 2026-07-04)
+    # R-Net / Cloud SCADA (added 2026-07-04 as "SCADA Monitor"; keys stay scada:*)
     "scada:view",                # open /scada, watch streams
     "scada:edit_layout",         # arrange & save own perspectives
     "scada:manage",              # manage stream sources (URL, credentials)
@@ -89,9 +89,9 @@ PERMISSION_LABELS: dict[str, str] = {
     "workspace:execute_wo": "Eksekusi WO (mulai & submit laporan)",
     "workspace:review_wo": "Review WO (approve / minta revisi)",
     "workspace:close_project": "Tutup Proyek",
-    "scada:view": "Lihat SCADA Monitor",
-    "scada:edit_layout": "Atur Layout SCADA",
-    "scada:manage": "Kelola Stream SCADA",
+    "scada:view": "Lihat R-Net",
+    "scada:edit_layout": "Atur Layout R-Net",
+    "scada:manage": "Kelola Stream R-Net",
 }
 
 

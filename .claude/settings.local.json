@@ -94,7 +94,21 @@
       "Bash(tasklist /FI \"IMAGENAME eq python.exe\" /FO CSV)",
       "Bash(cmd //c \"tasklist /FI \\\\\"IMAGENAME eq python.exe\\\\\" /FO CSV\")",
       "Bash(PYTHONPATH=\"D:\\\\006 Restard\\\\Rein v1\" python -c \"from app.routers.library import router; print\\('OK', len\\(router.routes\\), 'routes'\\)\")",
-      "Bash(PYTHONPATH=\"D:\\\\006 Restard\\\\Rein v1\" python -c \"from app.main import app; print\\('backend OK'\\)\")"
+      "Bash(PYTHONPATH=\"D:\\\\006 Restard\\\\Rein v1\" python -c \"from app.main import app; print\\('backend OK'\\)\")",
+      "PowerShell(powershell -ExecutionPolicy Bypass -File \"C:\\\\rein-scada\\\\start-scada.ps1\")",
+      "PowerShell(Register-ScheduledTask *)",
+      "PowerShell(Set-Content *)",
+      "PowerShell(Remove-Item *)",
+      "Bash(grep -v \"^\\\\.*$\")",
+      "Bash(bunx eslint *)",
+      "Read(//c/rein-scada//**)",
+      "Read(//c/rein-scada/mediamtx//**)",
+      "Bash(sed -E 's/^\\(NEXT_PUBLIC_SUPABASE_URL=\\).*/\\\\1<URL-present>/; s/^\\(SUPABASE_SERVICE_ROLE_KEY=\\).{0,8}.*/\\\\1<KEY-present, starts ok>/')",
+      "Bash(awk -F= '/^NEXT_PUBLIC_SUPABASE_URL=/{print \"url_len=\"length\\($0\\)} /^SUPABASE_SERVICE_ROLE_KEY=/{print \"key_len=\"length\\($0\\)}' .env)",
+      "PowerShell(& curl.exe -s -i -u \"rein-viewer:akufikri123\" \"http://127.0.0.1:8888/scada/index.m3u8\")",
+      "PowerShell(& curl.exe -s -o NUL -w \"obs->read: %{http_code}`n\" -u \"obs:akufikri123\" \"http://127.0.0.1:8888/scada/index.m3u8\")",
+      "PowerShell(& curl.exe -s -o NUL -w \"no-auth: %{http_code}`n\" \"http://127.0.0.1:8888/scada/index.m3u8\")",
+      "PowerShell(& \"C:\\\\rein-scada\\\\mediamtx\\\\mediamtx.exe\" --version 2>&1)"
     ]
   }
 }

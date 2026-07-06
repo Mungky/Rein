@@ -14,6 +14,7 @@ import Hls from "hls.js";
 import { Loader2, VideoOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useScadaStore } from "../store";
 import type { Stream, VideoPanelConfig } from "../types";
 
 const RETRY_BASE_MS = 2000;
@@ -41,6 +42,8 @@ export function VideoPanel({
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<PlayerStatus>("connecting");
   const isMobile = useIsMobile();
+  // Bumped by "Segarkan Stream" in Kelola Stream — forces a fresh reconnect.
+  const reconnectNonce = useScadaStore((s) => s.streamReconnectNonce);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -174,9 +177,17 @@ export function VideoPanel({
       teardown();
       video.removeAttribute("src");
     };
-    // Restart the whole pipeline when the stream target or tuning changes
+    // Restart the whole pipeline when the stream target or tuning changes,
+    // or when the user hits "Segarkan Stream" (reconnectNonce).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream?.id, stream?.hls_url, stream?.read_user, stream?.read_pass, isMobile]);
+  }, [
+    stream?.id,
+    stream?.hls_url,
+    stream?.read_user,
+    stream?.read_pass,
+    isMobile,
+    reconnectNonce,
+  ]);
 
   if (!stream) {
     return (

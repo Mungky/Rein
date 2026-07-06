@@ -22,7 +22,7 @@ const items: {
   { id: "dashboard", label: "Beranda", icon: Home },
   { id: "workspace", label: "Proyek", icon: FolderKanban, permission: "workspace:view" },
   { id: "dcc", label: "Dokumen", icon: FolderOpen },
-  { id: "scada", label: "SCADA", icon: MonitorPlay, permission: "scada:view" },
+  { id: "scada", label: "R-Net", icon: MonitorPlay, permission: "scada:view" },
 ];
 
 export function MobileNav({ screen, setScreen, userRole }: MobileNavProps) {

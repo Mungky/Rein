@@ -27,7 +27,7 @@ const NAV_PRIMARY: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
   { id: "workspace", label: "Workspace", icon: FolderKanban, permission: "workspace:view" },
   { id: "dcc", label: "Document Manager", icon: FolderOpen },
-  { id: "scada", label: "SCADA Monitor", icon: MonitorPlay, permission: "scada:view" },
+  { id: "scada", label: "R-Net", icon: MonitorPlay, permission: "scada:view" },
 ];
 
 const NAV_ADMIN: NavItem[] = [

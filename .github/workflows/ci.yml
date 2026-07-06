@@ -10,7 +10,7 @@ on:
 
 jobs:
   frontend:
-    name: Frontend (typecheck, build, lint)
+    name: Frontend (test, typecheck, build, lint)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - run: bun run test
       - run: bun run typecheck
       - run: bun run build
         env:

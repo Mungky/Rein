@@ -4,7 +4,7 @@
  *  CRUD for HLS stream sources: name, playlist URL, read credentials. */
 
 import { useState } from "react";
-import { Loader2, Pencil, Plus, Radio, Trash2, X } from "lucide-react";
+import { Loader2, Pencil, Plus, Radio, RefreshCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
@@ -29,15 +29,31 @@ const EMPTY_FORM: StreamForm = {
 export function ManageStreamsDialog({
   streams,
   onChanged,
+  onRefresh,
   onClose,
 }: {
   streams: Stream[];
   onChanged: () => Promise<void>;
+  /** Re-fetch streams from the DB and force all video players to reconnect. */
+  onRefresh: () => Promise<void>;
   onClose: () => void;
 }) {
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
   const [form, setForm] = useState<StreamForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  async function refresh() {
+    setRefreshing(true);
+    try {
+      await onRefresh();
+      toast.success("Stream disegarkan — video menyambung ulang");
+    } catch {
+      toast.error("Gagal menyegarkan stream");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   function startEdit(stream: Stream | null) {
     if (stream) {
@@ -113,6 +129,16 @@ export function ManageStreamsDialog({
               Sumber video HLS dari MediaMTX
             </p>
           </div>
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={refreshing}
+            className="btn btn-ghost btn-sm -mt-1 gap-1.5"
+            title="Ambil alamat stream terbaru dari database & sambungkan ulang video"
+          >
+            <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+            Segarkan
+          </button>
           <button
             type="button"
             onClick={onClose}

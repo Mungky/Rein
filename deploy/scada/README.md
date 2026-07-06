@@ -1,7 +1,23 @@
-# SCADA Monitor — Server-Side Streaming Stack
+# R-Net — Server-Side Streaming Stack
 
-Developer notes. For the step-by-step operator guide (Indonesian), see
-[PANDUAN-SERVER-SCADA.md](./PANDUAN-SERVER-SCADA.md).
+Developer notes. Operator guides (Indonesian):
+
+- **`install.ps1`** — universal one-command installer. On any Windows machine,
+  copy this `deploy/scada/` folder there and run
+  `powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1`. It
+  downloads MediaMTX + cloudflared from their **official GitHub releases**
+  (cloudflared verified by Authenticode signature; MediaMTX zip SHA-256
+  printed), generates `mediamtx.yml` + `config.env`, and drops the
+  start/stop switches into `C:\rein-scada\`. No Python, no REIN repo, no admin
+  rights, no Windows service. Re-runnable; never clobbers existing
+  `mediamtx.yml`/`config.env`.
+- **[PANDUAN-INSTALASI-STREAMING.md](./PANDUAN-INSTALASI-STREAMING.md)** —
+  the same install done by hand (for people who prefer step-by-step), plus the
+  every-boot routine and stream registration in R-Net.
+- [PANDUAN-SERVER-SCADA.md](./PANDUAN-SERVER-SCADA.md) — the 24/7 server-PC
+  variant: NSSM services + named tunnel (fixed URL), zero manual steps after
+  reboot.
+- [TUTORIAL-TES-LOKAL.md](./TUTORIAL-TES-LOKAL.md) — local dev smoke test.
 
 ## Architecture
 
@@ -33,10 +49,17 @@ OBS ──RTMP (127.0.0.1:1935)──▶ MediaMTX ──LL-HLS (127.0.0.1:8888)�
 
 | File | Purpose |
 |---|---|
-| `mediamtx.yml` | MediaMTX config (RTMP ingest, LL-HLS output, auth) — MediaMTX ≥ 1.9 |
-| `cloudflared-config.yml` | Named-tunnel ingress template |
-| `install-services.ps1` | Idempotent NSSM + Task Scheduler installer |
-| `PANDUAN-SERVER-SCADA.md` | Non-technical setup guide (Indonesian) |
+| `install.ps1` | **Universal installer** — downloads deps, generates config, installs switches. Manual-switch (laptop/quick-tunnel) mode. |
+| `start-scada.ps1` / `stop-scada.ps1` | Runtime switches (PowerShell-native Supabase PATCH — no Python/repo). `.bat` wrappers double-click these. |
+| `config.env.example` | Template for `config.env` (Supabase URL + service key). Real `config.env` is git-ignored. |
+| `mediamtx.yml` | MediaMTX config template (RTMP ingest, LL-HLS output, auth) — MediaMTX ≥ 1.9; `GANTI_*` filled by installer |
+| `cloudflared-config.yml` | Named-tunnel ingress template (server/24-7 mode) |
+| `install-services.ps1` | Idempotent NSSM + Task Scheduler installer (server/24-7 mode) |
+| `PANDUAN-SERVER-SCADA.md` | Non-technical server setup guide (Indonesian) |
+
+The old `update_stream_url.py` (Python, imported the REIN repo) is **retired** —
+its job (PATCH `scada_streams.hls_url`) is now a native `Invoke-RestMethod`
+call inside `start-scada.ps1`, so client machines need only PowerShell.
 
 ## Future: client deployments (Docker)
 

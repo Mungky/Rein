@@ -1,15 +1,19 @@
 "use client";
 
 /** Panel registry — maps panel `type` to its renderer.
- *  Phase 2+: add "chart" / "table" / "alarm" entries here; nothing else in
- *  the grid pipeline needs to change. Unknown types render a friendly
- *  placeholder so old clients never crash on newer layouts. */
+ *  Phase 3+: add "alarm" (and later "bar") entries here; nothing else in the
+ *  grid pipeline needs to change. Unknown types render a friendly placeholder
+ *  so old clients never crash on newer layouts. */
 
 import { Blocks } from "lucide-react";
-import type { Panel, Stream } from "../types";
+import type { Panel, Stream, Tag } from "../types";
 import { VideoPanel } from "./video-panel";
+import { ChartPanel } from "./chart-panel";
+import { TablePanel } from "./table-panel";
+import { GaugePanel } from "./gauge-panel";
+import { BarPanel } from "./bar-panel";
 
-export function renderPanel(panel: Panel, streams: Stream[]) {
+export function renderPanel(panel: Panel, streams: Stream[], tags: Tag[]) {
   switch (panel.type) {
     case "video":
       return (
@@ -18,6 +22,14 @@ export function renderPanel(panel: Panel, streams: Stream[]) {
           config={panel.config}
         />
       );
+    case "chart":
+      return <ChartPanel config={panel.config} tags={tags} />;
+    case "table":
+      return <TablePanel config={panel.config} tags={tags} />;
+    case "gauge":
+      return <GaugePanel config={panel.config} tags={tags} />;
+    case "bar":
+      return <BarPanel config={panel.config} tags={tags} />;
     default:
       return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg-sidebar text-text-muted">
