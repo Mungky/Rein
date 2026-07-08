@@ -9,13 +9,11 @@ Simulator values are a pure function of (tag id, time): base + two sine waves
 + hash-seeded noise. Because value = f(t), history can be backfilled instantly
 when a tag is created — no need to run for days before charts look real.
 
-V-NET ADAPTER SEAM — when Wecon answers these, implement `_vnet_value` here
-and nothing else in the pipeline changes:
-  1. Does the V-Net/V-BOX HTTP API expose *historical* reads (date range),
-     or only current values? (Current-only is fine: this poller becomes the
-     history.)
-  2. What are the API rate limits? (Sets HISTORIAN_INTERVAL_S floor.)
-  3. Can our V-Boxes push via MQTT to a custom broker instead?
+REAL DATA — source "mqtt": V-Boxes publish sensor values to an MQTT broker.
+A standalone bridge (deploy/scada/mqtt-bridge/bridge.py) subscribes, caches the
+latest value per topic, and writes one minute-aligned row per tag into the SAME
+scada_samples table. This in-process sampler therefore SKIPS source "mqtt" tags
+(see sample_once) so the two writers never collide.
 """
 
 import asyncio
@@ -86,9 +84,15 @@ def _compute_value(tag: ScadaTag, at: datetime) -> float:
 
 
 async def sample_once(db: AsyncSession) -> int:
-    """Write one sample per enabled tag at the current aligned minute."""
+    """Write one sample per enabled *in-process* tag at the current aligned
+    minute. Source "mqtt" tags are skipped here — the standalone bridge
+    (deploy/scada/mqtt-bridge/bridge.py) writes those from broker messages."""
     ts = _aligned_minute()
-    result = await db.execute(select(ScadaTag).where(ScadaTag.enabled.is_(True)))
+    result = await db.execute(
+        select(ScadaTag).where(
+            ScadaTag.enabled.is_(True), ScadaTag.source != "mqtt"
+        )
+    )
     rows = []
     for tag in result.scalars().all():
         try:

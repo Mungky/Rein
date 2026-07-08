@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { PageGuard } from "@/components/guards/page-guard";
+import { LockedFeature } from "@/components/guards/locked-feature";
+import { isLocked } from "@/lib/feature-flags";
 import { useAuth, useAuthDisplay } from "@/hooks/use-auth";
 import { useCan } from "@/components/providers/permissions-provider";
 import { workspaceApi, type WorkspaceSummary } from "@/lib/api/workspace";
@@ -186,6 +188,11 @@ function GenericDashboard() {
 }
 
 export default function DashboardPage() {
+  if (isLocked("dashboard")) return <LockedFeature title="Dashboard" />;
+  return <DashboardInner />;
+}
+
+function DashboardInner() {
   const { profile, role } = useAuth();
   const { userName } = useAuthDisplay();
   const canManage = useCan(role as AppRole, "workspace:manage");

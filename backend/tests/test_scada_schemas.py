@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from app.schemas.scada import (
     PerspectiveLayout,
     SheetCreateRequest,
+    SiteCreateRequest,
     TagCreateRequest,
     WorkbenchColumnCreateRequest,
 )
@@ -61,11 +62,22 @@ def _chart_panel(**overrides) -> dict:
     return panel
 
 
-def test_reserved_panel_types_not_yet_accepted():
-    # alarm is reserved for Phase 3 — saving it now must fail
+def test_valid_alarm_panel_passes():
+    layout = PerspectiveLayout.model_validate(
+        {
+            "version": 1,
+            "panels": [
+                _chart_panel(type="alarm", config={"tag_ids": [str(uuid.uuid4())]})
+            ],
+        }
+    )
+    assert layout.panels[0].config.range == "24h"  # default
+
+
+def test_alarm_panel_requires_tag():
     with pytest.raises(ValidationError):
         PerspectiveLayout.model_validate(
-            {"version": 1, "panels": [_video_panel(type="alarm")]}
+            {"version": 1, "panels": [_chart_panel(type="alarm", config={"tag_ids": []})]}
         )
 
 
@@ -288,3 +300,81 @@ def test_valid_metadata_column_passes():
         {"sheet_id": str(uuid.uuid4()), "name": "Lokasi", "kind": "text"}
     )
     assert col.formula is None
+
+
+# ── MQTT: sites + tag source "mqtt" ─────────────────────────────────────────
+
+
+def test_site_empty_name_rejected():
+    with pytest.raises(ValidationError):
+        SiteCreateRequest.model_validate({"name": "", "mqtt_host": "broker.local"})
+
+
+def test_site_requires_host():
+    with pytest.raises(ValidationError):
+        SiteCreateRequest.model_validate({"name": "Pabrik 1"})
+
+
+def test_site_default_port_is_1883():
+    site = SiteCreateRequest.model_validate(
+        {"name": "Pabrik 1", "mqtt_host": "broker.local"}
+    )
+    assert site.mqtt_port == 1883
+    assert site.mqtt_password is None  # optional
+
+
+def test_site_port_out_of_range_rejected():
+    with pytest.raises(ValidationError):
+        SiteCreateRequest.model_validate(
+            {"name": "Pabrik 1", "mqtt_host": "broker.local", "mqtt_port": 70000}
+        )
+
+
+def _mqtt_tag(**overrides) -> dict:
+    body = {
+        "sheet_id": str(uuid.uuid4()),
+        "source": "mqtt",
+        "site_id": str(uuid.uuid4()),
+        "device_key": "boiler1",
+        "label": "Suhu Boiler",
+        "config": {"mqtt_topic": "rnet/tanobel/boiler1/temperature"},
+    }
+    body.update(overrides)
+    return body
+
+
+def test_mqtt_tag_requires_site_id():
+    with pytest.raises(ValidationError):
+        TagCreateRequest.model_validate(_mqtt_tag(site_id=None))
+
+
+def test_mqtt_tag_requires_topic():
+    with pytest.raises(ValidationError):
+        TagCreateRequest.model_validate(_mqtt_tag(config={}))
+
+
+def test_valid_mqtt_tag_passes():
+    tag = TagCreateRequest.model_validate(_mqtt_tag())
+    assert tag.source == "mqtt"
+    assert tag.config["mqtt_topic"].startswith("rnet/")
+
+
+def test_simulator_tag_needs_no_site_or_topic():
+    # Default source is simulator — site_id/topic are irrelevant and optional
+    tag = TagCreateRequest.model_validate(
+        {"sheet_id": str(uuid.uuid4()), "device_key": "SIM-01", "label": "Suhu"}
+    )
+    assert tag.source == "simulator"
+    assert tag.site_id is None
+
+
+def test_unknown_tag_source_rejected():
+    with pytest.raises(ValidationError):
+        TagCreateRequest.model_validate(
+            {
+                "sheet_id": str(uuid.uuid4()),
+                "source": "vnet",
+                "device_key": "x",
+                "label": "y",
+            }
+        )

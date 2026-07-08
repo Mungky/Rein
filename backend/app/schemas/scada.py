@@ -101,9 +101,23 @@ class BarPanel(BaseModel):
     config: BarPanelConfig
 
 
-# Phase 3+: add AlarmPanel members here.
+class AlarmPanelConfig(BaseModel):
+    # Watch a set of tags; thresholds are read from each tag's own
+    # config.alarm_min / config.alarm_max (set in Analisis), not here.
+    tag_ids: list[uuid.UUID] = Field(min_length=1, max_length=8)
+    range: ChartRange = "24h"
+
+
+class AlarmPanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["alarm"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid
+    config: AlarmPanelConfig
+
+
 Panel = Annotated[
-    Union[VideoPanel, ChartPanel, TablePanel, GaugePanel, BarPanel],
+    Union[VideoPanel, ChartPanel, TablePanel, GaugePanel, BarPanel, AlarmPanel],
     Field(discriminator="type"),
 ]
 
@@ -144,6 +158,28 @@ class StreamUpdateRequest(BaseModel):
     enabled: bool | None = None
 
 
+class SiteCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    mqtt_host: str = Field(min_length=1, max_length=200)
+    mqtt_port: int = Field(default=1883, ge=1, le=65535)
+    mqtt_username: str | None = Field(default=None, max_length=120)
+    mqtt_password: str | None = Field(default=None, max_length=200)
+    base_topic: str = Field(default="", max_length=200)
+    enabled: bool = True
+
+
+class SiteUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    mqtt_host: str | None = Field(default=None, min_length=1, max_length=200)
+    mqtt_port: int | None = Field(default=None, ge=1, le=65535)
+    mqtt_username: str | None = Field(default=None, max_length=120)
+    # Send a new value to change it; omit to leave unchanged (write-only —
+    # the current password is never returned by the API).
+    mqtt_password: str | None = Field(default=None, max_length=200)
+    base_topic: str | None = Field(default=None, max_length=200)
+    enabled: bool | None = None
+
+
 class SheetCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
@@ -153,21 +189,40 @@ class SheetUpdateRequest(BaseModel):
     position: int | None = Field(default=None, ge=0)
 
 
+TagSource = Literal["simulator", "mqtt"]
+
+
 class TagCreateRequest(BaseModel):
     sheet_id: uuid.UUID
+    # "simulator" (in-process sampler) or "mqtt" (written by the standalone
+    # bridge from broker messages).
+    source: TagSource = "simulator"
+    # Required for source "mqtt": which site (broker) publishes this tag.
+    site_id: uuid.UUID | None = None
     device_key: str = Field(min_length=1, max_length=120)
     label: str = Field(min_length=1, max_length=120)
     unit: str = Field(default="", max_length=30)
     enabled: bool = True
-    # Simulator waveform: {preset, base, amplitude, period_s, noise, decimals,
-    # min?, max?} — filled by the preset dropdown in the frontend.
+    # Simulator: {preset, base, amplitude, period_s, noise, decimals, min?, max?}
+    # MQTT: {mqtt_topic, alarm_min?, alarm_max?} — mqtt_topic is required.
     config: dict = Field(default_factory=dict)
     # Manual metadata cell values, keyed by workbench column id
     meta: dict = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _mqtt_needs_site_and_topic(self):
+        if self.source == "mqtt":
+            if self.site_id is None:
+                raise ValueError("Tag MQTT harus punya site")
+            if not str(self.config.get("mqtt_topic", "")).strip():
+                raise ValueError("Tag MQTT harus punya topic")
+        return self
+
 
 class TagUpdateRequest(BaseModel):
     sheet_id: uuid.UUID | None = None
+    source: TagSource | None = None
+    site_id: uuid.UUID | None = None
     device_key: str | None = Field(default=None, min_length=1, max_length=120)
     label: str | None = Field(default=None, min_length=1, max_length=120)
     unit: str | None = Field(default=None, max_length=30)
@@ -217,12 +272,26 @@ class PerspectiveOut(BaseModel):
     name: str
     layout: PerspectiveLayout
     is_default: bool
+    # True when this is the single admin-published default layout (Masalah D)
+    is_published: bool = False
+    # True when this entry is the admin default shown to a user who does NOT own
+    # it — the frontend renders it view-only and forks it on edit ("Simpan
+    # Sebagai"). Always False for the user's own perspectives.
+    read_only: bool = False
     created_at: str | None
     updated_at: str | None
 
 
 class PerspectiveListOut(BaseModel):
     items: list[PerspectiveOut]
+
+
+class PublishedLayoutOut(BaseModel):
+    """The admin-published default layout, or exists=False when none is set."""
+
+    exists: bool
+    name: str | None = None
+    layout: PerspectiveLayout | None = None
 
 
 class StreamOut(BaseModel):
@@ -242,6 +311,25 @@ class StreamListOut(BaseModel):
     items: list[StreamOut]
 
 
+class SiteOut(BaseModel):
+    id: str
+    name: str
+    enabled: bool
+    mqtt_host: str
+    mqtt_port: int
+    mqtt_username: str | None
+    base_topic: str
+    # The broker password is intentionally NOT exposed — only whether one is
+    # set. The bridge reads the real value directly from the DB (service_role).
+    has_password: bool
+    created_at: str | None
+    updated_at: str | None
+
+
+class SiteListOut(BaseModel):
+    items: list[SiteOut]
+
+
 class SheetOut(BaseModel):
     id: str
     name: str
@@ -258,6 +346,7 @@ class TagOut(BaseModel):
     id: str
     sheet_id: str
     source: str
+    site_id: str | None
     device_key: str
     label: str
     unit: str

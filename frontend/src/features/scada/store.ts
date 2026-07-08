@@ -12,6 +12,7 @@ import type {
   PanelGridPos,
   Perspective,
   Sheet,
+  Site,
   Stream,
   Tag,
   WorkbenchColumn,
@@ -29,6 +30,7 @@ interface ScadaState {
   perspectives: Perspective[];
   activePerspectiveId: string | null;
   streams: Stream[];
+  sites: Site[];
   tags: Tag[];
   loading: boolean;
   loadError: string | null;
@@ -45,11 +47,16 @@ interface ScadaState {
    *  stream's hls_url string happens to be unchanged. */
   streamReconnectNonce: number;
 
+  /** True when an admin-published default layout exists (Masalah D). Gates the
+   *  "Kembalikan ke Bawaan Admin" action for everyone. */
+  publishedExists: boolean;
+
   editMode: boolean;
   draftPanels: Panel[] | null;
 
   showAddPanel: boolean;
   showManageStreams: boolean;
+  showManageSites: boolean;
 
   loadAll: () => Promise<void>;
   selectPerspective: (id: string) => void;
@@ -61,10 +68,17 @@ interface ScadaState {
   save: () => Promise<void>;
   saveAs: (name: string) => Promise<void>;
   setDefault: (id: string) => Promise<void>;
+  /** Publish the given perspective as THE admin default (scada:manage). */
+  publishLayout: (id: string) => Promise<void>;
+  /** Remove admin-default status from the given perspective (scada:manage). */
+  unpublishLayout: (id: string) => Promise<void>;
+  /** Overwrite the active perspective with the current admin default layout. */
+  resetToDefault: () => Promise<void>;
   deletePerspective: (id: string) => Promise<void>;
   refreshStreams: () => Promise<void>;
   /** Re-fetch streams from the DB AND force all video players to reconnect. */
   reconnectStreams: () => Promise<void>;
+  refreshSites: () => Promise<void>;
   refreshTags: () => Promise<void>;
   refreshColumns: () => Promise<void>;
   refreshSheets: () => Promise<void>;
@@ -76,6 +90,7 @@ interface ScadaState {
   addPanelToActive: (panel: Panel) => Promise<void>;
   setShowAddPanel: (v: boolean) => void;
   setShowManageStreams: (v: boolean) => void;
+  setShowManageSites: (v: boolean) => void;
 }
 
 function pickActive(perspectives: Perspective[]): string | null {
@@ -85,6 +100,11 @@ function pickActive(perspectives: Perspective[]): string | null {
       ? window.localStorage.getItem(LAST_PERSPECTIVE_KEY)
       : null;
   if (lastId && perspectives.some((p) => p.id === lastId)) return lastId;
+  // With no explicit choice, land everyone on the admin default (Masalah D) so
+  // publishing a layout is immediately visible to all users, then their own
+  // default, then the first.
+  const adminDefault = perspectives.find((p) => p.read_only);
+  if (adminDefault) return adminDefault.id;
   return (perspectives.find((p) => p.is_default) ?? perspectives[0]).id;
 }
 
@@ -102,6 +122,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   perspectives: [],
   activePerspectiveId: null,
   streams: [],
+  sites: [],
   tags: [],
   loading: true,
   loadError: null,
@@ -112,33 +133,46 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   workbenchColumns: [],
   liveValues: {},
   streamReconnectNonce: 0,
+  publishedExists: false,
 
   editMode: false,
   draftPanels: null,
 
   showAddPanel: false,
   showManageStreams: false,
+  showManageSites: false,
 
   loadAll: async () => {
     set({ loading: true, loadError: null });
     try {
-      const [perspectivesRes, streamsRes, tagsRes, columnsRes, sheetsRes] =
-        await Promise.all([
-          scadaApi.listPerspectives(),
-          scadaApi.listStreams(),
-          scadaApi.listTags(),
-          scadaApi.listColumns(),
-          scadaApi.listSheets(),
-        ]);
+      const [
+        perspectivesRes,
+        streamsRes,
+        sitesRes,
+        tagsRes,
+        columnsRes,
+        sheetsRes,
+        publishedRes,
+      ] = await Promise.all([
+        scadaApi.listPerspectives(),
+        scadaApi.listStreams(),
+        scadaApi.listSites(),
+        scadaApi.listTags(),
+        scadaApi.listColumns(),
+        scadaApi.listSheets(),
+        scadaApi.getPublishedLayout(),
+      ]);
       const perspectives = perspectivesRes.items;
       set({
         perspectives,
         streams: streamsRes.items,
+        sites: sitesRes.items,
         tags: tagsRes.items,
         workbenchColumns: columnsRes.items,
         sheets: sheetsRes.items,
         activeSheetId: pickActiveSheet(sheetsRes.items),
         activePerspectiveId: pickActive(perspectives),
+        publishedExists: publishedRes.exists,
         loading: false,
       });
     } catch {
@@ -193,6 +227,13 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   save: async () => {
     const { activePerspectiveId, draftPanels, perspectives } = get();
     if (!activePerspectiveId || !draftPanels) return;
+    const active = perspectives.find((p) => p.id === activePerspectiveId);
+    // The admin default is not the user's to overwrite — save forks it into
+    // their own editable copy instead (Masalah D, "user boleh atur ulang").
+    if (active?.read_only) {
+      await get().saveAs(`${active.name} (salinan)`);
+      return;
+    }
     const updated = await scadaApi.updatePerspective(activePerspectiveId, {
       layout: { version: 1, panels: draftPanels },
     });
@@ -231,6 +272,39 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     });
   },
 
+  publishLayout: async (id) => {
+    const updated = await scadaApi.publishPerspective(id);
+    // Exactly one perspective is published project-wide — clear it from all
+    // others locally so the badge only ever shows on the published one.
+    set({
+      perspectives: get().perspectives.map((p) =>
+        p.id === updated.id ? updated : { ...p, is_published: false }
+      ),
+      publishedExists: true,
+    });
+  },
+
+  unpublishLayout: async (id) => {
+    const updated = await scadaApi.unpublishPerspective(id);
+    set({
+      perspectives: get().perspectives.map((p) =>
+        p.id === updated.id ? updated : p
+      ),
+      publishedExists: false,
+    });
+  },
+
+  resetToDefault: async () => {
+    const { activePerspectiveId, perspectives } = get();
+    if (!activePerspectiveId) return;
+    const updated = await scadaApi.resetPerspectiveToDefault(activePerspectiveId);
+    set({
+      perspectives: perspectives.map((p) => (p.id === updated.id ? updated : p)),
+      editMode: false,
+      draftPanels: null,
+    });
+  },
+
   deletePerspective: async (id) => {
     await scadaApi.deletePerspective(id);
     const remaining = get().perspectives.filter((p) => p.id !== id);
@@ -255,6 +329,11 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       streams: res.items,
       streamReconnectNonce: get().streamReconnectNonce + 1,
     });
+  },
+
+  refreshSites: async () => {
+    const res = await scadaApi.listSites();
+    set({ sites: res.items });
   },
 
   refreshTags: async () => {
@@ -302,4 +381,5 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
 
   setShowAddPanel: (v) => set({ showAddPanel: v }),
   setShowManageStreams: (v) => set({ showManageStreams: v }),
+  setShowManageSites: (v) => set({ showManageSites: v }),
 }));

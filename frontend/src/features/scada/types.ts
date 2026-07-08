@@ -48,16 +48,20 @@ export interface BarPanelConfig {
   metric: BarMetric;
 }
 
+export interface AlarmPanelConfig {
+  tag_ids: string[]; // 1–8 tags to watch
+  range: ChartRange; // window for the min/avg context (status uses latest)
+}
+
 /** Discriminated union on `type`. Implemented: "video", "chart", "table",
- *  "gauge", "bar" — "alarm" is reserved. The backend rejects unknown types
- *  at save time. */
+ *  "gauge", "bar", "alarm". The backend rejects unknown types at save time. */
 export type Panel =
   | (PanelBase & { type: "video"; config: VideoPanelConfig })
   | (PanelBase & { type: "chart"; config: ChartPanelConfig })
   | (PanelBase & { type: "table"; config: TablePanelConfig })
   | (PanelBase & { type: "gauge"; config: GaugePanelConfig })
   | (PanelBase & { type: "bar"; config: BarPanelConfig })
-  | (PanelBase & { type: "alarm"; config: Record<string, unknown> });
+  | (PanelBase & { type: "alarm"; config: AlarmPanelConfig });
 
 export type PanelType = Panel["type"];
 
@@ -71,8 +75,20 @@ export interface Perspective {
   name: string;
   layout: PerspectiveLayout;
   is_default: boolean;
+  /** True when this is the single admin-published default layout (Masalah D) */
+  is_published: boolean;
+  /** True when this is the admin default shown to a user who doesn't own it:
+   *  view-only, forked into the user's own copy on edit ("Simpan Sebagai"). */
+  read_only: boolean;
   created_at: string | null;
   updated_at: string | null;
+}
+
+/** The admin-published default layout, or exists=false when none is set. */
+export interface PublishedLayout {
+  exists: boolean;
+  name: string | null;
+  layout: PerspectiveLayout | null;
 }
 
 export interface Stream {
@@ -94,10 +110,27 @@ export interface Sheet {
   updated_at: string | null;
 }
 
+/** An MQTT broker / physical plant. The broker password is never returned —
+ *  only `has_password`. Managed from the "Kelola Site" dialog in Analisis. */
+export interface Site {
+  id: string;
+  name: string;
+  enabled: boolean;
+  mqtt_host: string;
+  mqtt_port: number;
+  mqtt_username: string | null;
+  base_topic: string;
+  has_password: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export interface Tag {
   id: string;
   sheet_id: string;
-  source: string; // "simulator" | "vnet" (later)
+  source: string; // "simulator" | "mqtt"
+  /** Set for source "mqtt" — which site (broker) publishes this tag */
+  site_id: string | null;
   device_key: string;
   label: string;
   unit: string;

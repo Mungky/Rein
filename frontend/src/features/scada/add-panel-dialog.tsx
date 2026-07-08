@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { RANGE_LABELS } from "./panels/chart-panel";
 import type { ChartRange, Panel, Stream, Tag } from "./types";
 
-type ActiveType = "video" | "chart" | "table" | "gauge" | "bar";
+type ActiveType = "video" | "chart" | "table" | "gauge" | "bar" | "alarm";
 
 const PANEL_TYPES = [
   { type: "video", label: "Video Stream", icon: MonitorPlay, available: true },
@@ -25,18 +25,20 @@ const PANEL_TYPES = [
   { type: "table", label: "Tabel Sensor", icon: Table2, available: true },
   { type: "gauge", label: "Angka / Status", icon: Gauge, available: true },
   { type: "bar", label: "Bar Perbandingan", icon: BarChart3, available: true },
-  { type: "alarm", label: "Alarm", icon: Bell, available: false },
+  { type: "alarm", label: "Alarm", icon: Bell, available: true },
 ] as const;
 
-const MAX_TAGS: Record<"chart" | "table" | "bar", number> = {
+const MAX_TAGS: Record<"chart" | "table" | "bar" | "alarm", number> = {
   chart: 4,
   table: 8,
   bar: 8,
+  alarm: 8,
 };
-const MIN_TAGS: Record<"chart" | "table" | "bar", number> = {
+const MIN_TAGS: Record<"chart" | "table" | "bar" | "alarm", number> = {
   chart: 1,
   table: 1,
   bar: 2,
+  alarm: 1,
 };
 
 export function AddPanelDialog({
@@ -65,7 +67,10 @@ export function AddPanelDialog({
   const [direction, setDirection] = useState<"above" | "below">("above");
 
   const isTagListType =
-    panelType === "chart" || panelType === "table" || panelType === "bar";
+    panelType === "chart" ||
+    panelType === "table" ||
+    panelType === "bar" ||
+    panelType === "alarm";
   const maxTags = isTagListType ? MAX_TAGS[panelType] : 0;
 
   function toggleTag(id: string) {
@@ -158,6 +163,17 @@ export function AddPanelDialog({
         title: `Perbandingan (${tagIds.length} tag)`,
         grid: { ...baseGrid, h: 6 },
         config: { tag_ids: tagIds, range, metric: "avg" },
+      });
+      return;
+    }
+
+    if (panelType === "alarm") {
+      onAdd({
+        id,
+        type: "alarm",
+        title: `Alarm (${tagIds.length} tag)`,
+        grid: { ...baseGrid, h: 6 },
+        config: { tag_ids: tagIds, range },
       });
       return;
     }
@@ -328,6 +344,13 @@ export function AddPanelDialog({
                   ))}
                 </select>
               </div>
+
+              {panelType === "alarm" && (
+                <p className="text-[11px] text-text-light rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2">
+                  Ambang alarm (batas min/maks) diatur per tag di tab{" "}
+                  <span className="font-semibold">Analisis</span> → kolom Sumber.
+                </p>
+              )}
             </>
           )}
 

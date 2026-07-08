@@ -75,16 +75,48 @@ Buka OBS → **Settings**:
 
 (PASSWORD_PUBLISH_ANDA = yang tadi diisi di `mediamtx.yml` bagian user `obs`.)
 
-**Output → Streaming:**
+Pilih **Output → Output Mode: Advanced → tab Streaming**. Setelan di bawah dibuat
+untuk **delay serendah mungkin** (bukan kualitas maksimal). Dua baris ber-tanda 🔑
+adalah yang paling sering kelewat dan jadi biang delay 6–10 detik.
+
+**Kalau pakai x264 (CPU):**
 | Kolom | Isi |
 |---|---|
-| Encoder | x264 (atau NVENC kalau ada GPU NVIDIA) |
+| Encoder | x264 |
 | Rate Control | CBR |
-| Bitrate | 4000–6000 Kbps (untuk 1080p) |
-| Keyframe Interval | **1 s** ← WAJIB, jangan 0/auto |
+| Bitrate | 4000–6000 Kbps (1080p) · 2500–4000 (720p) — sesuaikan upload internet |
+| Keyframe Interval | **1 s** 🔑 ← WAJIB, jangan 0/auto (harus = `hlsSegmentDuration` di mediamtx.yml) |
 | CPU Usage Preset | veryfast |
+| Profile | main |
+| Tune | **zerolatency** 🔑 ← ini yang memangkas delay paling banyak |
+| x264 Options (kolom teks paling bawah) | `bframes=0` 🔑 |
 
-> ⚠️ **Keyframe Interval harus 1 detik.** Kalau tidak, video di REIN akan patah-patah/telat. Ini satu-satunya setting yang sering kelewat.
+**Kalau pakai NVENC (GPU NVIDIA — lebih ringan, disarankan bila ada):**
+| Kolom | Isi |
+|---|---|
+| Encoder | NVIDIA NVENC H.264 |
+| Rate Control | CBR |
+| Bitrate | sama seperti di atas |
+| Keyframe Interval | **1 s** 🔑 |
+| Preset | P1 (Fastest) |
+| Tuning | **Ultra Low Latency** 🔑 |
+| Multipass Mode | Disabled |
+| Profile | main |
+| Look-ahead | **OFF** 🔑 |
+| Psycho Visual Tuning | **OFF** 🔑 |
+| Max B-frames | **0** 🔑 |
+
+> ⚠️ **Kenapa B-frames & Look-ahead harus mati:** keduanya membuat encoder
+> "menunggu beberapa frame ke depan" sebelum mengirim — itu menambah 2–4 detik
+> delay sendiri. Mematikannya (`bframes=0` / Max B-frames 0 + tune zerolatency /
+> Ultra Low Latency) adalah cara terbesar menurunkan delay, jauh lebih besar
+> daripada mengutak-atik mediamtx.yml.
+>
+> ⚠️ **Keyframe Interval harus tepat 1 detik.** Kalau 0/auto, MediaMTX tak bisa
+> memotong segmen tiap 1 detik → delay membengkak & video patah-patah.
+
+**(Opsional) Settings → Advanced → Network:** centang **"Enable new networking code"**
+dan (kalau ada) **"Low latency mode"**.
 
 ---
 
@@ -137,5 +169,25 @@ Ini janji utama sistemnya: **pulih sendiri tanpa disentuh.**
 | Video muncul tapi patah-patah | Keyframe Interval bukan 1 s, atau bitrate kegedean | Cek Settings OBS bagian 4 di atas |
 | Semua service jalan tapi tetap tidak ada video | MediaMTX mati / config salah | `Get-Service rein-mediamtx` → harus `Running`. Log: `C:\rein-scada\mediamtx\` |
 | Setelah mati listrik tidak pulih sendiri | Auto-logon Windows belum aktif | Ulangi langkah 5 nomor 4 (`netplwiz`) |
+| **Delay 6–10 detik (padahal target ~3 detik)** | B-frames/Look-ahead di OBS masih nyala, atau memang batas Cloudflare Tunnel | Terapkan setelan encoder low-latency di bagian 4 (tune zerolatency / Ultra Low Latency, B-frames 0). Lihat cara pisahkan penyebabnya di bawah. |
+
+### Cara tahu delay-nya dari OBS atau dari internet (Cloudflare)
+
+Delay total = **delay OBS/encoder** + **delay Cloudflare Tunnel**. Untuk tahu
+yang mana biang keroknya, bandingkan di **PC server itu sendiri**:
+
+1. Di PC server, buka `http://127.0.0.1:8888/scada/index.m3u8` lewat pemutar HLS
+   lokal (mis. VLC → Open Network Stream), atau lihat langsung di REIN dari PC
+   server. Ini **melewati Cloudflare** — murni OBS + MediaMTX.
+2. Bandingkan delay-nya dengan yang terlihat saat dibuka dari **laptop lain via
+   domain** (lewat Cloudflare).
+
+- Kalau **di PC server pun sudah 6–10 detik** → biangnya **OBS** (B-frames/
+  Look-ahead belum dimatikan). Perbaiki di bagian 4 → delay turun drastis.
+- Kalau **di PC server ~1–3 detik tapi via domain 6–10 detik** → tambahan
+  delay-nya dari **Cloudflare Tunnel** yang menahan potongan video LL-HLS.
+  Ini **batas bawaan tunnel gratis**, tak bisa ditekan lewat config. Pilihan:
+  terima ~4–6 detik (normal untuk HLS), atau pertimbangkan WebRTC nanti (butuh
+  infrastruktur terpisah — sudah masuk rencana, dikerjakan setelah pondasi beres).
 
 Kalau semua di atas buntu: **restart PC server** — semua komponen dirancang untuk bangun sendiri.

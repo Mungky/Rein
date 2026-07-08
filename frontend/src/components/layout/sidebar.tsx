@@ -13,6 +13,7 @@ import {
 import { ROLE_LABELS } from "@/lib/utils/roles";
 import type { AppRole, Permission } from "@/lib/utils/roles";
 import { usePermissions } from "@/components/providers/permissions-provider";
+import { isLocked } from "@/lib/feature-flags";
 
 /* ── Navigation items ── */
 interface NavItem {
@@ -24,8 +25,14 @@ interface NavItem {
 }
 
 const NAV_PRIMARY: NavItem[] = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
-  { id: "workspace", label: "Workspace", icon: FolderKanban, permission: "workspace:view" },
+  { id: "dashboard", label: "Dashboard", icon: LayoutGrid, locked: isLocked("dashboard") },
+  {
+    id: "workspace",
+    label: "Workspace",
+    icon: FolderKanban,
+    permission: "workspace:view",
+    locked: isLocked("workspace"),
+  },
   { id: "dcc", label: "Document Manager", icon: FolderOpen },
   { id: "scada", label: "R-Net", icon: MonitorPlay, permission: "scada:view" },
 ];
@@ -131,7 +138,9 @@ export function Sidebar({
         )}
         <div className="flex flex-col gap-0.5">
           {NAV_PRIMARY.map((item) => {
-            if (item.permission && !hasPerm(item.permission)) return null;
+            // Locked items always show (greyed + non-clickable), even for roles
+            // without the permission — the whole module is off for everyone.
+            if (item.permission && !item.locked && !hasPerm(item.permission)) return null;
             return (
               <SidebarItem
                 key={item.id}

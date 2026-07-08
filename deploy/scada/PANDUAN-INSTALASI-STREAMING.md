@@ -134,10 +134,14 @@ pause
    | Service | Custom |
    | Server | `rtmp://127.0.0.1:1935` |
    | Stream Key | `scada?user=obs&pass=PASSWORD_PUBLISH_ANDA` |
-3. Settings → **Output** → mode Advanced → Streaming:
+3. Settings → **Output** → mode Advanced → Streaming (setelan delay-rendah):
    - Encoder: x264 (atau NVENC kalau ada GPU NVIDIA)
-   - Rate Control: CBR, Bitrate: 4000–6000 Kbps
+   - Rate Control: CBR, Bitrate: 2500–4000 Kbps (720p) / 4000–6000 (1080p)
    - **Keyframe Interval: 1 s** ← WAJIB, kalau bukan 1 detik stream tersendat
+   - **x264:** Tune = `zerolatency`, dan kolom "x264 Options" isi `bframes=0`
+   - **NVENC:** Tuning = `Ultra Low Latency`, Look-ahead OFF, Psycho Visual OFF, Max B-frames 0
+   > B-frames & Look-ahead menambah 2–4 detik delay — mematikannya adalah cara
+   > terbesar menurunkan delay. Detail lengkap di `PANDUAN-SERVER-SCADA.md` bagian 4.
 4. Susun scene: tangkap layar/jendela SCADA yang mau disiarkan.
 
 ---

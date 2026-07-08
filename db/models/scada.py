@@ -60,6 +60,13 @@ class ScadaPerspective(UUIDMixin, TimestampMixin, Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, server_default="false", nullable=False
     )
+    # The single admin-published "default layout" every user starts from and can
+    # reset to (Masalah D, opsi b). At most one row project-wide is published;
+    # only scada:manage holders can set it. A fresh user's bootstrap copies this
+    # layout instead of the generic per-stream one.
+    is_published: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False
+    )
 
     __table_args__ = (
         Index("idx_scada_perspectives_owner_id", "owner_id"),
@@ -70,6 +77,40 @@ class ScadaPerspective(UUIDMixin, TimestampMixin, Base):
             unique=True,
             postgresql_where=text("is_default"),
         ),
+        # At most one published (admin-default) perspective project-wide
+        Index(
+            "uq_scada_perspectives_published",
+            "is_published",
+            unique=True,
+            postgresql_where=text("is_published"),
+        ),
+    )
+
+
+class ScadaSite(UUIDMixin, TimestampMixin, Base):
+    """One physical site/plant that publishes sensor data over MQTT.
+
+    Holds the broker connection info for the standalone MQTT bridge
+    (deploy/scada/mqtt-bridge/bridge.py). `mqtt_password` is read only by the
+    bridge (service_role); it is never returned to the browser by the API
+    (SiteOut exposes `has_password: bool` instead). `base_topic` is a hint for
+    admins (e.g. "rnet/tanobel"); each tag stores its own full topic in
+    `ScadaTag.config['mqtt_topic']`."""
+
+    __tablename__ = "scada_sites"
+
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default="true", nullable=False
+    )
+    mqtt_host: Mapped[str] = mapped_column(String(200), nullable=False)
+    mqtt_port: Mapped[int] = mapped_column(
+        Integer, server_default="1883", nullable=False
+    )
+    mqtt_username: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    mqtt_password: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    base_topic: Mapped[str] = mapped_column(
+        String(200), server_default="", nullable=False
     )
 
 
@@ -89,20 +130,26 @@ class ScadaTag(UUIDMixin, TimestampMixin, Base):
 
     __tablename__ = "scada_tags"
 
-    # "simulator" today; "vnet" once the Wecon adapter exists. The sampler
-    # dispatches on this value (see backend/app/services/historian.py).
+    # "simulator" (in-process sampler) or "mqtt" (written by the standalone
+    # bridge from broker messages). The FastAPI sampler dispatches on this and
+    # skips "mqtt" tags — the bridge owns them (see app/services/historian.py).
     source: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default="simulator"
     )
     # Grouping key: simulator device ("SIM-01") or V-Box serial number later.
     device_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    # For source "mqtt": which site (broker) this tag is published from. NULL
+    # for simulator tags. The tag's full MQTT topic lives in config['mqtt_topic'].
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("scada_sites.id"), nullable=True
+    )
     label: Mapped[str] = mapped_column(String(120), nullable=False)
     unit: Mapped[str] = mapped_column(String(30), nullable=False, server_default="")
     enabled: Mapped[bool] = mapped_column(
         Boolean, server_default="true", nullable=False
     )
     # Simulator: {preset, base, amplitude, period_s, noise, decimals}
-    # V-Net later: monitor-point id + whatever Wecon's API needs.
+    # MQTT: {mqtt_topic, alarm_min?, alarm_max?}
     config: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

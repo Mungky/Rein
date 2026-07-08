@@ -108,7 +108,11 @@
       "PowerShell(& curl.exe -s -i -u \"rein-viewer:akufikri123\" \"http://127.0.0.1:8888/scada/index.m3u8\")",
       "PowerShell(& curl.exe -s -o NUL -w \"obs->read: %{http_code}`n\" -u \"obs:akufikri123\" \"http://127.0.0.1:8888/scada/index.m3u8\")",
       "PowerShell(& curl.exe -s -o NUL -w \"no-auth: %{http_code}`n\" \"http://127.0.0.1:8888/scada/index.m3u8\")",
-      "PowerShell(& \"C:\\\\rein-scada\\\\mediamtx\\\\mediamtx.exe\" --version 2>&1)"
+      "PowerShell(& \"C:\\\\rein-scada\\\\mediamtx\\\\mediamtx.exe\" --version 2>&1)",
+      "Skill(schedule)",
+      "Bash(grep -nE \"\\(^\\\\.env|/\\\\.env|config\\\\.env|mqtt-bridge\\)\" .gitignore)",
+      "Bash(ls app/*.tsx)",
+      "Bash(ls \"app/\\(app\\)/page.tsx\")"
     ]
   }
 }

@@ -1,0 +1,28 @@
+# systemd unit untuk R-Net MQTT bridge (server klien, Linux).
+#
+# Pasang:
+#   sudo cp rnet-mqtt-bridge.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rnet-mqtt-bridge
+#
+# Lihat log:
+#   journalctl -u rnet-mqtt-bridge -f
+#
+# Sesuaikan User, WorkingDirectory, dan path python di bawah dengan server Anda.
+
+[Unit]
+Description=R-Net MQTT bridge (sensor MQTT -> Supabase historian)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rnet
+WorkingDirectory=/opt/rnet-mqtt-bridge
+EnvironmentFile=/opt/rnet-mqtt-bridge/.env
+ExecStart=/opt/rnet-mqtt-bridge/venv/bin/python /opt/rnet-mqtt-bridge/bridge.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

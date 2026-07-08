@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "@/components/providers/theme-provider";
@@ -19,8 +19,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { theme, toggleTheme } = useTheme();
   const { mobileOpen, setMobileOpen, desktopOpen, toggleDesktopOpen } = useSidebar();
   const isMobile = useIsMobile();
-  const { loading: authLoading, logout } = useAuth();
+  const { user, loading: authLoading, logout } = useAuth();
   const { userName, userInitials, role: userRole } = useAuthDisplay();
+
+  // Session gone/expired → send to login instead of leaving the page stranded
+  // on a loading spinner (Masalah G). Middleware handles this on navigation;
+  // this covers a tab that was already open when the ticket went stale.
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.replace(`/login?next=${encodeURIComponent(pathname ?? "/dcc")}`);
+    }
+  }, [authLoading, user, pathname, router]);
 
   const handleLogout = useCallback(async () => {
     await logout();

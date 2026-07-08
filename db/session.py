@@ -3,6 +3,7 @@
 import os
 import ssl
 from collections.abc import AsyncGenerator
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import (
@@ -33,13 +34,32 @@ _ssl_ctx = ssl.create_default_context()
 _ssl_ctx.check_hostname = False
 _ssl_ctx.verify_mode = ssl.CERT_NONE
 
+# Connection budget. DATABASE_URL must point at Supabase's TRANSACTION pooler
+# (port 6543): server slots are only held for the duration of a query, so many
+# clients (local dev + deployed backend + MQTT bridge + Alembic) can share the
+# small server pool without hitting "max clients reached". The session pooler
+# (port 5432) pins one server slot per client connection and exhausts the cap.
+_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "3"))
+_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "2"))
+
 async_engine = create_async_engine(
     _database_url,
     echo=False,
-    pool_size=5,
-    max_overflow=10,
+    pool_size=_POOL_SIZE,
+    max_overflow=_MAX_OVERFLOW,
     pool_pre_ping=True,
-    connect_args={"ssl": _ssl_ctx},
+    pool_recycle=1800,  # drop connections Supabase may have idled out
+    connect_args={
+        "ssl": _ssl_ctx,
+        # Required for the transaction pooler (PgBouncer/Supavisor): server-side
+        # prepared statements outlive the transaction but the next query may run
+        # on a different server connection, causing InvalidSQLStatementName /
+        # DuplicatePreparedStatement errors. Disable both caches and give any
+        # ad-hoc prepared statement a unique name. Harmless on session mode.
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+    },
 )
 
 async_session_factory = async_sessionmaker(

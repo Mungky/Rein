@@ -28,11 +28,16 @@ from app.schemas.scada import (
     SheetListOut,
     SheetOut,
     SheetUpdateRequest,
+    SiteCreateRequest,
+    SiteListOut,
+    SiteOut,
+    SiteUpdateRequest,
     SummaryOut,
     PerspectiveCreateRequest,
     PerspectiveListOut,
     PerspectiveOut,
     PerspectiveUpdateRequest,
+    PublishedLayoutOut,
     StreamCreateRequest,
     StreamListOut,
     StreamOut,
@@ -52,6 +57,7 @@ from db.models.scada import (
     ScadaPerspective,
     ScadaSample,
     ScadaSheet,
+    ScadaSite,
     ScadaStream,
     ScadaTag,
     ScadaWorkbenchColumn,
@@ -72,9 +78,18 @@ def _perspective_dict(p: ScadaPerspective) -> dict:
         "name": p.name,
         "layout": p.layout,
         "is_default": p.is_default,
+        "is_published": p.is_published,
         "created_at": str(p.created_at) if p.created_at else None,
         "updated_at": str(p.updated_at) if p.updated_at else None,
     }
+
+
+async def _get_published(db: AsyncSession) -> ScadaPerspective | None:
+    """The single admin-published default layout, or None if none is set."""
+    result = await db.execute(
+        select(ScadaPerspective).where(ScadaPerspective.is_published.is_(True)).limit(1)
+    )
+    return result.scalars().first()
 
 
 def _stream_dict(s: ScadaStream) -> dict:
@@ -100,7 +115,12 @@ async def _get_own_perspective(
 
 
 async def _bootstrap_default(db: AsyncSession, owner_id: uuid.UUID) -> ScadaPerspective:
-    """Create a starter perspective: one full-width video panel per enabled stream."""
+    """Create a generic starter perspective (one video panel per enabled stream)
+    for a user who has no layouts and when no admin default is published.
+
+    When an admin default IS published, list_perspectives injects it as a
+    read-only entry instead — so we don't bootstrap a private copy here.
+    """
     result = await db.execute(
         select(ScadaStream)
         .where(ScadaStream.enabled.is_(True))
@@ -145,18 +165,42 @@ async def list_perspectives(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
-    """List the current user's perspectives; bootstrap a default when empty."""
+    """List the caller's own perspectives, plus the admin-published default
+    layout (Masalah D) injected as a read-only entry so EVERY user sees the
+    admin's layout — not just brand-new accounts. Bootstraps a generic starter
+    only when the user has nothing and nothing is published."""
     result = await db.execute(
         select(ScadaPerspective)
         .where(ScadaPerspective.owner_id == profile.id)
         .order_by(ScadaPerspective.created_at)
     )
-    perspectives = list(result.scalars().all())
+    own = list(result.scalars().all())
+    items = [{**_perspective_dict(p), "read_only": False} for p in own]
 
-    if not perspectives:
-        perspectives = [await _bootstrap_default(db, profile.id)]
+    published = await _get_published(db)
+    if published is not None and published.owner_id != profile.id:
+        # Show the admin default to everyone (view-only; forked on edit). Put it
+        # first so it's the natural landing layout.
+        items.insert(0, {**_perspective_dict(published), "read_only": True})
 
-    return {"items": [_perspective_dict(p) for p in perspectives]}
+    if not items:
+        boot = await _bootstrap_default(db, profile.id)
+        items = [{**_perspective_dict(boot), "read_only": False}]
+
+    return {"items": items}
+
+
+@router.get("/perspectives/published", response_model=PublishedLayoutOut)
+async def get_published_perspective(
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    """The admin-published default layout (for the 'reset to admin default'
+    action). Any viewer may read it; returns exists=False when none is set."""
+    published = await _get_published(db)
+    if published is None:
+        return {"exists": False, "name": None, "layout": None}
+    return {"exists": True, "name": published.name, "layout": published.layout}
 
 
 @router.post("/perspectives", response_model=PerspectiveOut, status_code=201)
@@ -261,6 +305,71 @@ async def set_default_perspective(
     return _perspective_dict(perspective)
 
 
+@router.post("/perspectives/{perspective_id}/publish", response_model=PerspectiveOut)
+async def publish_perspective(
+    perspective_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    """Publish one of the caller's own perspectives as THE admin default layout
+    (Masalah D, opsi b). New users start from a copy of it; existing users can
+    reset to it. Clears any previously published one first so the partial unique
+    index never trips."""
+    perspective = await _get_own_perspective(db, perspective_id, profile.id)
+
+    result = await db.execute(
+        select(ScadaPerspective).where(
+            ScadaPerspective.is_published.is_(True),
+            ScadaPerspective.id != perspective.id,
+        )
+    )
+    for old in result.scalars().all():
+        old.is_published = False
+    await db.flush()
+
+    perspective.is_published = True
+    await db.flush()
+    await db.refresh(perspective)
+    return _perspective_dict(perspective)
+
+
+@router.post("/perspectives/{perspective_id}/unpublish", response_model=PerspectiveOut)
+async def unpublish_perspective(
+    perspective_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    """Remove the admin-default status from the caller's perspective."""
+    perspective = await _get_own_perspective(db, perspective_id, profile.id)
+    perspective.is_published = False
+    await db.flush()
+    await db.refresh(perspective)
+    return _perspective_dict(perspective)
+
+
+@router.post(
+    "/perspectives/{perspective_id}/reset-to-default", response_model=PerspectiveOut
+)
+async def reset_perspective_to_published(
+    perspective_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    """Overwrite the caller's own perspective with the current admin-published
+    layout ('Kembalikan ke Bawaan Admin'). Available to any viewer so they can
+    always sync to the latest admin default. 409 when nothing is published."""
+    perspective = await _get_own_perspective(db, perspective_id, profile.id)
+    published = await _get_published(db)
+    if published is None:
+        raise HTTPException(
+            status_code=409, detail="Belum ada layout bawaan admin yang diterbitkan"
+        )
+    perspective.layout = published.layout
+    await db.flush()
+    await db.refresh(perspective)
+    return _perspective_dict(perspective)
+
+
 # ---------------------------------------------------------------------------
 # Streams
 # ---------------------------------------------------------------------------
@@ -341,6 +450,120 @@ async def delete_stream(
     await db.delete(stream)
     await db.flush()
     return {"deleted": str(stream_id)}
+
+
+# ---------------------------------------------------------------------------
+# Sites (MQTT brokers) — CRUD from the Analisis "Kelola Site" dialog.
+# The broker password is write-only: never returned, only `has_password`.
+# ---------------------------------------------------------------------------
+
+
+def _site_dict(s: ScadaSite) -> dict:
+    return {
+        "id": str(s.id),
+        "name": s.name,
+        "enabled": s.enabled,
+        "mqtt_host": s.mqtt_host,
+        "mqtt_port": s.mqtt_port,
+        "mqtt_username": s.mqtt_username,
+        "base_topic": s.base_topic,
+        "has_password": bool(s.mqtt_password),
+        "created_at": str(s.created_at) if s.created_at else None,
+        "updated_at": str(s.updated_at) if s.updated_at else None,
+    }
+
+
+async def _get_site_or_404(db: AsyncSession, site_id: uuid.UUID | None) -> ScadaSite:
+    site = await db.get(ScadaSite, site_id) if site_id else None
+    if site is None:
+        raise HTTPException(status_code=404, detail="Site tidak ditemukan")
+    return site
+
+
+@router.get("/sites", response_model=SiteListOut)
+async def list_sites(
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    result = await db.execute(select(ScadaSite).order_by(ScadaSite.created_at))
+    return {"items": [_site_dict(s) for s in result.scalars().all()]}
+
+
+@router.post("/sites", response_model=SiteOut, status_code=201)
+async def create_site(
+    body: SiteCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    site = ScadaSite(
+        name=body.name,
+        enabled=body.enabled,
+        mqtt_host=body.mqtt_host,
+        mqtt_port=body.mqtt_port,
+        mqtt_username=body.mqtt_username or None,
+        mqtt_password=body.mqtt_password or None,
+        base_topic=body.base_topic,
+    )
+    db.add(site)
+    await db.flush()
+    await db.refresh(site)
+    return _site_dict(site)
+
+
+@router.patch("/sites/{site_id}", response_model=SiteOut)
+async def update_site(
+    site_id: uuid.UUID,
+    body: SiteUpdateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    site = await db.get(ScadaSite, site_id)
+    if site is None:
+        raise HTTPException(status_code=404, detail="Site tidak ditemukan")
+
+    if body.name is not None:
+        site.name = body.name
+    if body.enabled is not None:
+        site.enabled = body.enabled
+    if body.mqtt_host is not None:
+        site.mqtt_host = body.mqtt_host
+    if body.mqtt_port is not None:
+        site.mqtt_port = body.mqtt_port
+    if body.mqtt_username is not None:
+        site.mqtt_username = body.mqtt_username or None
+    # Password is write-only: only touch it when a value is sent
+    if body.mqtt_password is not None:
+        site.mqtt_password = body.mqtt_password or None
+    if body.base_topic is not None:
+        site.base_topic = body.base_topic
+
+    await db.flush()
+    await db.refresh(site)
+    return _site_dict(site)
+
+
+@router.delete("/sites/{site_id}", response_model=DeletedOut)
+async def delete_site(
+    site_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    site = await db.get(ScadaSite, site_id)
+    if site is None:
+        raise HTTPException(status_code=404, detail="Site tidak ditemukan")
+
+    has_tags = (
+        await db.execute(select(ScadaTag.id).where(ScadaTag.site_id == site_id).limit(1))
+    ).first()
+    if has_tags:
+        raise HTTPException(
+            status_code=409,
+            detail="Site masih dipakai tag — hapus atau pindahkan tag-nya dulu",
+        )
+
+    await db.delete(site)
+    await db.flush()
+    return {"deleted": str(site_id)}
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +676,7 @@ def _tag_dict(t: ScadaTag) -> dict:
         "id": str(t.id),
         "sheet_id": str(t.sheet_id),
         "source": t.source,
+        "site_id": str(t.site_id) if t.site_id else None,
         "device_key": t.device_key,
         "label": t.label,
         "unit": t.unit,
@@ -485,12 +709,16 @@ async def create_tag(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
-    """Create a simulator tag and seed 7 days of history so charts are
-    demo-ready immediately (no waiting for the sampler)."""
+    """Create a tag. Simulator tags get 7 days of backfilled history so charts
+    are demo-ready immediately; MQTT tags start empty and fill as the bridge
+    receives broker messages (backfill is a no-op for them)."""
     await _get_sheet_or_404(db, body.sheet_id)
+    if body.source == "mqtt":
+        await _get_site_or_404(db, body.site_id)
     tag = ScadaTag(
         sheet_id=body.sheet_id,
-        source="simulator",
+        source=body.source,
+        site_id=body.site_id if body.source == "mqtt" else None,
         device_key=body.device_key,
         label=body.label,
         unit=body.unit,
@@ -519,6 +747,14 @@ async def update_tag(
     if body.sheet_id is not None:
         await _get_sheet_or_404(db, body.sheet_id)
         tag.sheet_id = body.sheet_id
+    if body.site_id is not None:
+        await _get_site_or_404(db, body.site_id)
+        tag.site_id = body.site_id
+    if body.source is not None:
+        tag.source = body.source
+        # Switching a tag back to simulator drops its broker link
+        if body.source == "simulator":
+            tag.site_id = None
     if body.device_key is not None:
         tag.device_key = body.device_key
     if body.label is not None:

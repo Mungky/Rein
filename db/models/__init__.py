@@ -31,6 +31,7 @@ from .folder_permission import FolderPermission
 from .scada import (
     ScadaStream,
     ScadaPerspective,
+    ScadaSite,
     ScadaSheet,
     ScadaTag,
     ScadaSample,
@@ -96,6 +97,7 @@ __all__ = [
     "FolderPermission",
     "ScadaStream",
     "ScadaPerspective",
+    "ScadaSite",
     "ScadaSheet",
     "ScadaTag",
     "ScadaSample",

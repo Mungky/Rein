@@ -30,7 +30,10 @@ if config.config_file_name is not None:
 # config.set_main_option() because the URL contains percent-encoded
 # characters (%26, %2B, etc.) which Python's ConfigParser treats as
 # interpolation markers, causing ValueError.
-_db_url = os.getenv("DATABASE_URL", "")
+# Migrations (DDL) are safest over the session pooler / direct connection.
+# If MIGRATION_DATABASE_URL is set (port 5432), use it; otherwise fall back
+# to DATABASE_URL (which in production points at the transaction pooler).
+_db_url = os.getenv("MIGRATION_DATABASE_URL", "") or os.getenv("DATABASE_URL", "")
 if _db_url:
     # Convert asyncpg URL to standard psycopg2 URL for Alembic migrations
     _db_url = _db_url.replace("+asyncpg", "")

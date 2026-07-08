@@ -35,24 +35,32 @@ export function useAuth(): AuthState {
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = useCallback(
-    async (accessToken: string): Promise<UserProfile | null> => {
+    async (accessToken: string): Promise<{ profile: UserProfile | null; expired: boolean }> => {
       try {
         const res = await fetch(`${API_URL}/api/auth/me`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        if (!res.ok) return null;
+        // 401/403 = the token is rejected (expired/invalid), not a transient
+        // outage. Signal "expired" so the caller can clear the stale session
+        // and send the user to login instead of hanging (Masalah G). A network
+        // error or 5xx is NOT expired — keep the session and let it retry.
+        if (res.status === 401 || res.status === 403) return { profile: null, expired: true };
+        if (!res.ok) return { profile: null, expired: false };
         const data = await res.json();
         return {
-          id: data.id,
-          username: data.username ?? "",
-          full_name: data.full_name ?? "",
-          initials: data.initials ?? "",
-          avatar_url: data.avatar_url ?? null,
-          role: (data.role as AppRole) ?? "engineer_mechanical",
-          is_active: data.is_active ?? true,
+          profile: {
+            id: data.id,
+            username: data.username ?? "",
+            full_name: data.full_name ?? "",
+            initials: data.initials ?? "",
+            avatar_url: data.avatar_url ?? null,
+            role: (data.role as AppRole) ?? "engineer_mechanical",
+            is_active: data.is_active ?? true,
+          },
+          expired: false,
         };
       } catch {
-        return null;
+        return { profile: null, expired: false };
       }
     },
     []
@@ -75,8 +83,17 @@ export function useAuth(): AuthState {
 
       if (session?.user) {
         setUser(session.user);
-        const prof = await fetchProfile(session.access_token);
-        if (!cancelled) setProfile(prof);
+        const { profile: prof, expired } = await fetchProfile(session.access_token);
+        if (cancelled) return;
+        if (expired) {
+          // Stale ticket — clear it so we don't sit half-authenticated.
+          // onAuthStateChange fires with null and the guards send us to login.
+          await supabase!.auth.signOut();
+          setUser(null);
+          setProfile(null);
+        } else {
+          setProfile(prof);
+        }
       }
       setLoading(false);
     }
@@ -91,8 +108,15 @@ export function useAuth(): AuthState {
 
         if (session?.user) {
           setUser(session.user);
-          const prof = await fetchProfile(session.access_token);
-          if (!cancelled) setProfile(prof);
+          const { profile: prof, expired } = await fetchProfile(session.access_token);
+          if (cancelled) return;
+          if (expired) {
+            await supabase!.auth.signOut();
+            setUser(null);
+            setProfile(null);
+          } else {
+            setProfile(prof);
+          }
         } else {
           setUser(null);
           setProfile(null);

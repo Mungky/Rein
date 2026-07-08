@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import { FolderKanban, Plus } from "lucide-react";
 import { PageGuard } from "@/components/guards/page-guard";
+import { LockedFeature } from "@/components/guards/locked-feature";
+import { isLocked } from "@/lib/feature-flags";
 import { useAuth, useAuthDisplay } from "@/hooks/use-auth";
 import { useCan } from "@/components/providers/permissions-provider";
 import type { AppRole } from "@/lib/utils/roles";
@@ -15,6 +17,11 @@ import { KanbanView } from "@/features/workspace/kanban/kanban-view";
 import { CalendarView } from "@/features/workspace/calendar/calendar-view";
 
 export default function WorkspacePage() {
+  if (isLocked("workspace")) return <LockedFeature title="Workspace" />;
+  return <WorkspaceInner />;
+}
+
+function WorkspaceInner() {
   const { role } = useAuthDisplay();
   const canManage = useCan(role as AppRole, "workspace:manage");
   const canComplete = useCan(role as AppRole, "workspace:complete_task");

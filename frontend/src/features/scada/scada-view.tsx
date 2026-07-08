@@ -17,6 +17,8 @@ import {
   Pencil,
   Plus,
   Radio,
+  RotateCcw,
+  Send,
   Star,
   Trash2,
   X,
@@ -108,6 +110,38 @@ export function ScadaView() {
     setMenuOpen(false);
   }
 
+  async function handleTogglePublish() {
+    if (!active) return;
+    try {
+      if (active.is_published) {
+        await store.unpublishLayout(active.id);
+        toast.success("Bawaan admin dicabut");
+      } else {
+        await store.publishLayout(active.id);
+        toast.success(`"${active.name}" jadi bawaan admin — user baru mulai dari sini`);
+      }
+    } catch {
+      toast.error("Gagal mengubah bawaan admin");
+    }
+    setMenuOpen(false);
+  }
+
+  async function handleResetToDefault() {
+    if (
+      !window.confirm(
+        "Ganti layout ini dengan bawaan admin? Susunan Anda saat ini akan ditimpa."
+      )
+    )
+      return;
+    try {
+      await store.resetToDefault();
+      toast.success("Layout dikembalikan ke bawaan admin");
+    } catch {
+      toast.error("Gagal mengembalikan ke bawaan admin");
+    }
+    setMenuOpen(false);
+  }
+
   async function handleDelete() {
     if (!active) return;
     if (!window.confirm(`Hapus perspective "${active.name}"?`)) return;
@@ -169,6 +203,15 @@ export function ScadaView() {
                 </option>
               ))}
             </select>
+          )}
+
+          {/* Badge — this layout is the admin-published default (Masalah D):
+              either the admin's own published one, or the read-only copy shown
+              to other users. */}
+          {store.viewMode === "monitor" && (active?.is_published || active?.read_only) && (
+            <span className="hidden items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10.5px] font-semibold text-primary sm:inline-flex">
+              <Send className="size-3" /> Bawaan Admin
+            </span>
           )}
 
           {/* Monitor | Analisis toggle */}
@@ -263,19 +306,42 @@ export function ScadaView() {
                     className="fixed inset-0 z-10"
                     onClick={() => setMenuOpen(false)}
                   />
-                  <div className="absolute right-0 top-9 z-20 w-56 rounded-[var(--r-lg)] border border-border bg-bg p-1 shadow-[var(--shadow-lg)]">
+                  <div className="absolute right-0 top-9 z-20 w-64 rounded-[var(--r-lg)] border border-border bg-bg p-1 shadow-[var(--shadow-lg)]">
                     <MenuItem icon={ChevronDown} label="Simpan Sebagai…" onClick={handleSaveAs} />
                     <MenuItem
                       icon={Star}
                       label="Jadikan Tampilan Utama"
                       onClick={handleSetDefault}
-                      disabled={!active || active.is_default}
+                      disabled={!active || active.is_default || active.read_only}
                     />
+                    {/* Admin-published default layout (Masalah D). Publish only
+                        applies to your OWN layouts, not the injected read-only
+                        admin copy. */}
+                    {canManage && !active?.read_only && (
+                      <MenuItem
+                        icon={Send}
+                        label={
+                          active?.is_published
+                            ? "Cabut dari Bawaan Admin"
+                            : "Terbitkan sebagai Bawaan Admin"
+                        }
+                        onClick={handleTogglePublish}
+                        disabled={!active}
+                      />
+                    )}
+                    {store.publishedExists && !active?.read_only && (
+                      <MenuItem
+                        icon={RotateCcw}
+                        label="Kembalikan ke Bawaan Admin"
+                        onClick={handleResetToDefault}
+                        disabled={!active}
+                      />
+                    )}
                     <MenuItem
                       icon={Trash2}
                       label="Hapus Perspective Ini"
                       onClick={handleDelete}
-                      disabled={store.perspectives.length <= 1}
+                      disabled={store.perspectives.length <= 1 || active?.read_only}
                       danger
                     />
                   </div>

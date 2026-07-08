@@ -17,6 +17,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  Server,
   Sigma,
   Table2,
   TrendingUp,
@@ -35,12 +36,14 @@ import type {
   WorkbenchColumn,
 } from "../types";
 import { useScadaStore } from "../store";
-import { PRESETS, presetOf, type PresetKey } from "../presets";
+import { PRESETS, presetOf } from "../presets";
 import { RANGE_LABELS, RANGE_MS } from "../panels/chart-panel";
 import { usePanelRefresh } from "../panels/use-panel-refresh";
 import { useLiveSamples } from "./use-live-samples";
 import { ColumnFormDialog } from "./column-form";
 import { HistoryDrawer } from "./history-drawer";
+import { SourceDialog } from "./source-dialog";
+import { ManageSitesDialog } from "../manage-sites-dialog";
 import { exportSheetToExcel } from "./export-excel";
 import { compileFormula, evaluateFormula, normalizeRef } from "./formula";
 
@@ -106,6 +109,7 @@ export function AnalysisView({
   } | null>(null);
   const [columnForm, setColumnForm] = useState<{ column: WorkbenchColumn | null } | null>(null);
   const [drawerTag, setDrawerTag] = useState<Tag | null>(null);
+  const [sourceTag, setSourceTag] = useState<Tag | null>(null);
   const [exporting, setExporting] = useState(false);
   const [addingRow, setAddingRow] = useState(false);
 
@@ -330,16 +334,14 @@ export function AnalysisView({
     }
   }
 
-  async function changePreset(tag: Tag, preset: PresetKey) {
-    try {
-      await scadaApi.updateTag(tag.id, {
-        config: { ...PRESETS[preset].config },
-        unit: PRESETS[preset].unit,
-      });
-      await store.refreshTags();
-    } catch {
-      toast.error("Gagal mengubah jenis sensor");
+  function sourceLabel(tag: Tag): string {
+    if (tag.source === "mqtt") {
+      const site = store.sites.find((s) => s.id === tag.site_id);
+      const topic = String((tag.config as Record<string, unknown>).mqtt_topic ?? "");
+      const short = topic.split("/").pop() || topic;
+      return `MQTT · ${site?.name ?? "?"}${short ? ` / ${short}` : ""}`;
     }
+    return `Simulator · ${PRESETS[presetOf(tag.config)].label}`;
   }
 
   async function toggleEnabled(tag: Tag) {
@@ -600,13 +602,23 @@ export function AnalysisView({
             <span className="hidden sm:inline">Export Excel</span>
           </button>
           {canManage && (
-            <button
-              onClick={() => setColumnForm({ column: null })}
-              className="btn btn-secondary btn-sm gap-1.5"
-            >
-              <Sigma className="size-3.5" />
-              <span className="hidden sm:inline">Tambah Kolom</span>
-            </button>
+            <>
+              <button
+                onClick={() => store.setShowManageSites(true)}
+                className="btn btn-ghost btn-sm gap-1.5"
+                title="Kelola broker MQTT (site)"
+              >
+                <Server className="size-3.5" />
+                <span className="hidden sm:inline">Kelola Site</span>
+              </button>
+              <button
+                onClick={() => setColumnForm({ column: null })}
+                className="btn btn-secondary btn-sm gap-1.5"
+              >
+                <Sigma className="size-3.5" />
+                <span className="hidden sm:inline">Tambah Kolom</span>
+              </button>
+            </>
           )}
         </div>
 
@@ -790,23 +802,24 @@ export function AnalysisView({
                     {...cellEditorProps(tag, "device_key", tag.device_key)}
                     className="font-mono text-[11px] text-text-muted"
                   />
-                  {/* Sumber: "data diambil melalui apa" */}
+                  {/* Sumber: "data diambil melalui apa" — klik untuk mengatur */}
                   <td className="px-2 py-1.5">
                     {canManage ? (
-                      <select
-                        className="field-select h-6 w-auto cursor-pointer text-[11.5px]"
-                        value={presetOf(tag.config)}
-                        onChange={(e) => changePreset(tag, e.target.value as PresetKey)}
+                      <button
+                        onClick={() => setSourceTag(tag)}
+                        className={cn(
+                          "flex max-w-[190px] cursor-pointer items-center gap-1 rounded-[var(--r-sm)] border px-1.5 py-0.5 text-[11px] font-medium",
+                          tag.source === "mqtt"
+                            ? "border-primary/40 bg-primary/5 text-text"
+                            : "border-border-soft text-text-muted hover:border-border hover:text-text"
+                        )}
+                        title="Atur sumber data (Simulator / MQTT)"
                       >
-                        {(Object.keys(PRESETS) as PresetKey[]).map((key) => (
-                          <option key={key} value={key}>
-                            Simulator · {PRESETS[key].label}
-                          </option>
-                        ))}
-                      </select>
+                        <span className="truncate">{sourceLabel(tag)}</span>
+                      </button>
                     ) : (
                       <span className="text-[11.5px] text-text-muted">
-                        Simulator · {PRESETS[presetOf(tag.config)].label}
+                        {sourceLabel(tag)}
                       </span>
                     )}
                   </td>
@@ -943,6 +956,21 @@ export function AnalysisView({
         />
       )}
       {drawerTag && <HistoryDrawer tag={drawerTag} onClose={() => setDrawerTag(null)} />}
+      {sourceTag && (
+        <SourceDialog
+          tag={sourceTag}
+          sites={store.sites}
+          onSaved={store.refreshTags}
+          onClose={() => setSourceTag(null)}
+        />
+      )}
+      {store.showManageSites && (
+        <ManageSitesDialog
+          sites={store.sites}
+          onChanged={store.refreshSites}
+          onClose={() => store.setShowManageSites(false)}
+        />
+      )}
     </div>
   );
 }

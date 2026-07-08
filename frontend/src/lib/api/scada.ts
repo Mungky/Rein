@@ -6,8 +6,10 @@ import type {
   HistorySeries,
   Perspective,
   PerspectiveLayout,
+  PublishedLayout,
   RecentSample,
   Sheet,
+  Site,
   Stream,
   SummaryItem,
   Tag,
@@ -32,6 +34,22 @@ export const scadaApi = {
 
   setDefaultPerspective: (id: string) =>
     apiClient.post<Perspective>(`/api/scada/perspectives/${id}/default`, {}),
+
+  /** The admin-published default layout (Masalah D) — exists=false when none. */
+  getPublishedLayout: () =>
+    apiClient.get<PublishedLayout>("/api/scada/perspectives/published"),
+
+  /** Publish one of the caller's perspectives as THE admin default (scada:manage). */
+  publishPerspective: (id: string) =>
+    apiClient.post<Perspective>(`/api/scada/perspectives/${id}/publish`, {}),
+
+  /** Remove admin-default status from the caller's perspective (scada:manage). */
+  unpublishPerspective: (id: string) =>
+    apiClient.post<Perspective>(`/api/scada/perspectives/${id}/unpublish`, {}),
+
+  /** Overwrite the caller's perspective with the current admin default. */
+  resetPerspectiveToDefault: (id: string) =>
+    apiClient.post<Perspective>(`/api/scada/perspectives/${id}/reset-to-default`, {}),
 
   /* ── Streams ── */
   listStreams: () => apiClient.get<{ items: Stream[] }>("/api/scada/streams"),
@@ -58,6 +76,35 @@ export const scadaApi = {
   deleteStream: (id: string) =>
     apiClient.delete<{ deleted: string }>(`/api/scada/streams/${id}`),
 
+  /* ── Sites (MQTT brokers) ── */
+  listSites: () => apiClient.get<{ items: Site[] }>("/api/scada/sites"),
+
+  createSite: (data: {
+    name: string;
+    mqtt_host: string;
+    mqtt_port?: number;
+    mqtt_username?: string | null;
+    mqtt_password?: string | null;
+    base_topic?: string;
+    enabled?: boolean;
+  }) => apiClient.post<Site>("/api/scada/sites", data),
+
+  updateSite: (
+    id: string,
+    data: {
+      name?: string;
+      mqtt_host?: string;
+      mqtt_port?: number;
+      mqtt_username?: string | null;
+      mqtt_password?: string | null;
+      base_topic?: string;
+      enabled?: boolean;
+    }
+  ) => apiClient.patch<Site>(`/api/scada/sites/${id}`, data),
+
+  deleteSite: (id: string) =>
+    apiClient.delete<{ deleted: string }>(`/api/scada/sites/${id}`),
+
   /* ── Workbench: sheets ("Tabel") ── */
   listSheets: () => apiClient.get<{ items: Sheet[] }>("/api/scada/sheets"),
 
@@ -75,6 +122,8 @@ export const scadaApi = {
 
   createTag: (data: {
     sheet_id: string;
+    source?: "simulator" | "mqtt";
+    site_id?: string | null;
     device_key: string;
     label: string;
     unit?: string;
@@ -87,6 +136,8 @@ export const scadaApi = {
     id: string,
     data: {
       sheet_id?: string;
+      source?: "simulator" | "mqtt";
+      site_id?: string | null;
       device_key?: string;
       label?: string;
       unit?: string;

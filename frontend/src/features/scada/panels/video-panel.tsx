@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import Hls from "hls.js";
+import Hls, { type ErrorData } from "hls.js";
 import { Loader2, VideoOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -32,6 +32,27 @@ function basicAuthHeader(stream: Stream): string | null {
   return "Basic " + btoa(`${stream.read_user}:${stream.read_pass ?? ""}`);
 }
 
+/** Turn an hls.js error into a short code + a plain-language cause so the wall
+ *  operator can act without reading logs. HTTP status is the most telling
+ *  signal (401 = auth, 404 = OBS off, 5xx = server/tunnel). */
+function describeError(data: ErrorData): { code: string; hint: string } {
+  const httpCode = data.response?.code;
+  if (httpCode) {
+    if (httpCode === 401 || httpCode === 403)
+      return { code: `HTTP ${httpCode}`, hint: "Akses ditolak — cek user/password di Kelola Stream" };
+    if (httpCode === 404)
+      return { code: "HTTP 404", hint: "Stream tidak ada — OBS mungkin belum 'Start Streaming'" };
+    if (httpCode >= 500)
+      return { code: `HTTP ${httpCode}`, hint: "Server stream bermasalah — cek MediaMTX / tunnel" };
+    return { code: `HTTP ${httpCode}`, hint: "Gangguan pada server stream" };
+  }
+  if (data.type === Hls.ErrorTypes.NETWORK_ERROR)
+    return { code: data.details || "NETWORK", hint: "Tak terjangkau — tunnel/koneksi mungkin mati" };
+  if (data.type === Hls.ErrorTypes.MEDIA_ERROR)
+    return { code: data.details || "MEDIA", hint: "Masalah decoding video" };
+  return { code: data.details || "UNKNOWN", hint: "Gangguan tidak dikenal" };
+}
+
 export function VideoPanel({
   stream,
   config,
@@ -41,6 +62,10 @@ export function VideoPanel({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<PlayerStatus>("connecting");
+  // Seconds behind the live edge, shown on the LANGSUNG badge.
+  const [latencyS, setLatencyS] = useState<number | null>(null);
+  // Last diagnostic while not live — {code, hint} so operators know why.
+  const [errorInfo, setErrorInfo] = useState<{ code: string; hint: string } | null>(null);
   const isMobile = useIsMobile();
   // Bumped by "Segarkan Stream" in Kelola Stream — forces a fresh reconnect.
   const reconnectNonce = useScadaStore((s) => s.streamReconnectNonce);
@@ -53,6 +78,8 @@ export function VideoPanel({
     let retries = 0;
     let disposed = false;
     let restartTimer: ReturnType<typeof setTimeout> | null = null;
+    // Avoid re-setting state on every repeat of the same error detail.
+    let lastErrCode: string | null = null;
 
     const scheduleRestart = () => {
       if (disposed) return;
@@ -105,6 +132,15 @@ export function VideoPanel({
           },
         });
         hls.on(Hls.Events.ERROR, (_event, data) => {
+          // Surface real problems (any HTTP error, or a fatal) — but ignore
+          // benign non-fatal blips (e.g. buffer stalls) that self-recover.
+          if (data.fatal || data.response?.code) {
+            const desc = describeError(data);
+            if (desc.code !== lastErrCode) {
+              lastErrCode = desc.code;
+              setErrorInfo(desc);
+            }
+          }
           if (!data.fatal || !hls) return;
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
             hls.recoverMediaError();
@@ -116,6 +152,10 @@ export function VideoPanel({
         hls.on(Hls.Events.FRAG_BUFFERED, () => {
           retries = 0;
           setStatus("live");
+          lastErrCode = null;
+          setErrorInfo(null);
+          const lat = hls && Number.isFinite(hls.latency) ? hls.latency : null;
+          setLatencyS(lat && lat > 0 ? Math.round(lat * 10) / 10 : null);
         });
         hls.loadSource(src);
         hls.attachMedia(video);
@@ -126,8 +166,22 @@ export function VideoPanel({
         const onPlaying = () => {
           retries = 0;
           setStatus("live");
+          setErrorInfo(null);
+          // Native HLS (Safari): estimate lag from the seekable live edge.
+          try {
+            const sk = video.seekable;
+            if (sk.length) {
+              const lag = sk.end(sk.length - 1) - video.currentTime;
+              setLatencyS(lag > 0 ? Math.round(lag * 10) / 10 : null);
+            }
+          } catch {
+            /* seekable not ready yet */
+          }
         };
-        const onError = () => scheduleRestart();
+        const onError = () => {
+          setErrorInfo({ code: "SRC", hint: "Gagal memuat stream — cek koneksi/kredensial" });
+          scheduleRestart();
+        };
         video.addEventListener("playing", onPlaying);
         video.addEventListener("error", onError);
       }
@@ -213,25 +267,39 @@ export function VideoPanel({
         )}
       />
 
-      {/* Status badge */}
+      {/* Status badge — live + how far behind real time */}
       {status === "live" && (
         <div className="absolute right-2 top-2 flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-0.5">
           <span className="size-1.5 animate-pulse rounded-full bg-green-500" />
           <span className="text-[10px] font-bold tracking-wide text-white">
             LANGSUNG
           </span>
+          {latencyS !== null && (
+            <span className="text-[10px] font-medium tabular-nums text-white/70">
+              · {latencyS.toFixed(1)}s
+            </span>
+          )}
         </div>
       )}
 
-      {/* Reconnect / connecting overlay — never a silent black box */}
+      {/* Reconnect / connecting overlay — never a silent black box, and always
+          show a diagnostic code + cause when something is wrong. */}
       {status !== "live" && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 px-4 text-center">
           <Loader2 className="size-6 animate-spin text-amber-400" />
           <span className="text-[12px] font-medium text-white">
             {status === "connecting"
               ? "Menghubungkan ke stream…"
               : "Stream terputus — menyambung ulang…"}
           </span>
+          {errorInfo && (
+            <span className="flex flex-col items-center gap-1">
+              <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-300">
+                {errorInfo.code}
+              </span>
+              <span className="text-[11px] text-white/70">{errorInfo.hint}</span>
+            </span>
+          )}
         </div>
       )}
     </div>

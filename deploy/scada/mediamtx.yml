@@ -31,15 +31,25 @@ rtmpAddress: 127.0.0.1:1935
 ###############################################
 # HLS — pintu keluar ke browser (via cloudflared)
 ###############################################
+# TUNING LATENSI (baca sebelum mengubah):
+#   Nilai di bawah sudah mendekati batas bawah LL-HLS (server-side < ~1 detik).
+#   Kalau delay masih 6-10 detik, penyebabnya BUKAN di sini, melainkan:
+#     1) Setelan encoder OBS (B-frames/Look-ahead nyala) — perbaiki di OBS dulu.
+#     2) Cloudflare Tunnel menahan potongan LL-HLS — batas bawaan tunnel gratis.
+#   Cara memisahkan kedua penyebab: lihat PANDUAN-SERVER-SCADA.md bagian 8.
+#   Menurunkan hlsPartDuration/hlsSegmentCount di bawah nilai ini TIDAK membantu
+#   (justru menambah request lewat tunnel = lebih patah-patah).
 hls: yes
 hlsAddress: 127.0.0.1:8888          # hanya bisa diakses cloudflared di PC yang sama
-hlsVariant: lowLatency              # latensi ~3-6 detik
+hlsVariant: lowLatency              # latensi ~3-6 detik (batas praktis lewat Cloudflare Tunnel)
 hlsSegmentDuration: 1s              # WAJIB sama dengan Keyframe Interval di OBS (1 detik)
-hlsPartDuration: 200ms
-hlsSegmentCount: 7
+hlsPartDuration: 200ms              # potongan mini LL-HLS; 200ms = seimbang delay vs jumlah request
+hlsSegmentCount: 7                  # minimum untuk lowLatency di MediaMTX; jangan diturunkan
 # Kunci CORS ke domain frontend REIN (jangan pakai "*")
 hlsAllowOrigins: ["https://GANTI_DOMAIN_REIN"]
-# Kalau LL-HLS bermasalah lewat tunnel, fallback satu baris:
+# Kalau LL-HLS tetap patah-patah lewat tunnel dan Anda lebih pilih STABIL daripada
+# delay rendah, ganti baris hlsVariant di atas jadi `mpegts` (lebih tahan banting,
+# tapi delay naik jadi ~8-15 detik):
 # hlsVariant: mpegts
 
 ###############################################
