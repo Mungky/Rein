@@ -16,6 +16,9 @@ interface StreamForm {
   read_user: string;
   read_pass: string;
   enabled: boolean;
+  mosaic_rows: number;
+  mosaic_cols: number;
+  channel_start: number;
 }
 
 const EMPTY_FORM: StreamForm = {
@@ -24,7 +27,12 @@ const EMPTY_FORM: StreamForm = {
   read_user: "",
   read_pass: "",
   enabled: true,
+  mosaic_rows: 1,
+  mosaic_cols: 1,
+  channel_start: 1,
 };
+
+const MOSAIC_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
 
 export function ManageStreamsDialog({
   streams,
@@ -64,6 +72,9 @@ export function ManageStreamsDialog({
         read_user: stream.read_user ?? "",
         read_pass: stream.read_pass ?? "",
         enabled: stream.enabled,
+        mosaic_rows: stream.mosaic_rows ?? 1,
+        mosaic_cols: stream.mosaic_cols ?? 1,
+        channel_start: stream.channel_start ?? 1,
       });
     } else {
       setEditingId("new");
@@ -82,6 +93,9 @@ export function ManageStreamsDialog({
         read_user: form.read_user.trim() || null,
         read_pass: form.read_pass.trim() || null,
         enabled: form.enabled,
+        mosaic_rows: form.mosaic_rows,
+        mosaic_cols: form.mosaic_cols,
+        channel_start: form.channel_start,
       };
       if (editingId === "new") {
         await scadaApi.createStream(payload);
@@ -255,6 +269,82 @@ export function ManageStreamsDialog({
                   />
                 </div>
               </div>
+
+              {/* Mosaic → Video Wall channels */}
+              <div className="rounded-[var(--r)] border border-border-soft bg-bg p-3">
+                <div className="text-[12px] font-semibold text-text mb-0.5">
+                  Mosaic (untuk Video Wall)
+                </div>
+                <p className="text-[11px] text-text-light mb-2.5">
+                  Jika 1 stream berisi beberapa kamera (mis. OBS 3×3), atur jumlah
+                  baris × kolomnya. Tiap kotak jadi 1 channel yang bisa dipasang di
+                  panel Video Wall. Biarkan 1×1 untuk stream biasa.
+                </p>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="text-[11px] font-semibold text-text-muted mb-1 block">
+                      Baris
+                    </label>
+                    <select
+                      className="field-select cursor-pointer"
+                      value={form.mosaic_rows}
+                      onChange={(e) =>
+                        setForm({ ...form, mosaic_rows: Number(e.target.value) })
+                      }
+                    >
+                      {MOSAIC_OPTIONS.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-text-muted mb-1 block">
+                      Kolom
+                    </label>
+                    <select
+                      className="field-select cursor-pointer"
+                      value={form.mosaic_cols}
+                      onChange={(e) =>
+                        setForm({ ...form, mosaic_cols: Number(e.target.value) })
+                      }
+                    >
+                      {MOSAIC_OPTIONS.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-text-muted mb-1 block">
+                      Channel mulai
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100000}
+                      className="field-input"
+                      value={form.channel_start}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          channel_start: Math.max(1, Number(e.target.value) || 1),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+                <p className="mt-2 text-[11px] text-text-muted">
+                  {form.mosaic_rows * form.mosaic_cols === 1
+                    ? `Channel ${form.channel_start} (1 kotak).`
+                    : `Channel ${form.channel_start}–${
+                        form.channel_start + form.mosaic_rows * form.mosaic_cols - 1
+                      } (${form.mosaic_rows * form.mosaic_cols} kotak).`}
+                </p>
+              </div>
+
               <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-text-muted">
                 <input
                   type="checkbox"

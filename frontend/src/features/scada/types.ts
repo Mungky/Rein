@@ -53,15 +53,33 @@ export interface AlarmPanelConfig {
   range: ChartRange; // window for the min/avg context (status uses latest)
 }
 
+/** One cell of a video wall → one channel = (stream, cell index in its mosaic). */
+export interface WallCell {
+  stream_id: string;
+  cell: number; // 0-based, row-major, within that stream's mosaic
+}
+
+export interface WallPanelConfig {
+  rows: number; // 1–6
+  cols: number; // 1–6
+  cells: (WallCell | null)[]; // row-major, length = rows×cols; null = empty
+}
+
+/** Activity panel has no config — it always shows everyone currently on REIN. */
+export type ActivityPanelConfig = Record<string, never>;
+
 /** Discriminated union on `type`. Implemented: "video", "chart", "table",
- *  "gauge", "bar", "alarm". The backend rejects unknown types at save time. */
+ *  "gauge", "bar", "alarm", "wall", "activity". The backend rejects unknown
+ *  types at save time. */
 export type Panel =
   | (PanelBase & { type: "video"; config: VideoPanelConfig })
   | (PanelBase & { type: "chart"; config: ChartPanelConfig })
   | (PanelBase & { type: "table"; config: TablePanelConfig })
   | (PanelBase & { type: "gauge"; config: GaugePanelConfig })
   | (PanelBase & { type: "bar"; config: BarPanelConfig })
-  | (PanelBase & { type: "alarm"; config: AlarmPanelConfig });
+  | (PanelBase & { type: "alarm"; config: AlarmPanelConfig })
+  | (PanelBase & { type: "wall"; config: WallPanelConfig })
+  | (PanelBase & { type: "activity"; config: ActivityPanelConfig });
 
 export type PanelType = Panel["type"];
 
@@ -98,6 +116,11 @@ export interface Stream {
   read_user: string | null;
   read_pass: string | null;
   enabled: boolean;
+  /** Video-wall mosaic: one OBS output can carry mosaic_rows×mosaic_cols cameras. */
+  mosaic_rows: number;
+  mosaic_cols: number;
+  /** Global channel number of cell 0 (a 3×3 stream starting at 1 owns 1..9). */
+  channel_start: number;
   created_at: string | null;
   updated_at: string | null;
 }

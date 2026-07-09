@@ -3,11 +3,13 @@
 /** Add-panel dialog — pick a panel type, fill its source, done.
  *  Alarm stays greyed out until its phase lands. */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
+  Activity,
   BarChart3,
   Bell,
   Gauge,
+  LayoutGrid,
   MonitorPlay,
   Table2,
   TrendingUp,
@@ -15,18 +17,32 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RANGE_LABELS } from "./panels/chart-panel";
-import type { ChartRange, Panel, Stream, Tag } from "./types";
+import type { ChartRange, Panel, Stream, Tag, WallCell } from "./types";
+import { channelNumberOf, listChannels } from "./channels";
+import { ChannelCombobox } from "./channel-combobox";
 
-type ActiveType = "video" | "chart" | "table" | "gauge" | "bar" | "alarm";
+type ActiveType =
+  | "video"
+  | "chart"
+  | "table"
+  | "gauge"
+  | "bar"
+  | "alarm"
+  | "wall"
+  | "activity";
 
 const PANEL_TYPES = [
   { type: "video", label: "Video Stream", icon: MonitorPlay, available: true },
+  { type: "wall", label: "Video Wall", icon: LayoutGrid, available: true },
   { type: "chart", label: "Grafik Sensor", icon: TrendingUp, available: true },
   { type: "table", label: "Tabel Sensor", icon: Table2, available: true },
   { type: "gauge", label: "Angka / Status", icon: Gauge, available: true },
   { type: "bar", label: "Bar Perbandingan", icon: BarChart3, available: true },
   { type: "alarm", label: "Alarm", icon: Bell, available: true },
+  { type: "activity", label: "Aktivitas", icon: Activity, available: true },
 ] as const;
+
+const WALL_SIZES = [1, 2, 3, 4] as const;
 
 const MAX_TAGS: Record<"chart" | "table" | "bar" | "alarm", number> = {
   chart: 4,
@@ -66,6 +82,29 @@ export function AddPanelDialog({
   const [critical, setCritical] = useState("");
   const [direction, setDirection] = useState<"above" | "below">("above");
 
+  // Video Wall: NxN grid of channels (each channel = a cell of a stream mosaic)
+  const [wallN, setWallN] = useState<number>(2);
+  const [wallCells, setWallCells] = useState<(WallCell | null)[]>(
+    Array(4).fill(null)
+  );
+  const channels = useMemo(() => listChannels(enabledStreams), [enabledStreams]);
+
+  function setWallSize(n: number) {
+    setWallN(n);
+    setWallCells((prev) => Array.from({ length: n * n }, (_, i) => prev[i] ?? null));
+  }
+  function setWallCell(i: number, channelNumber: string) {
+    const ch =
+      channelNumber === ""
+        ? null
+        : channels.find((c) => c.number === Number(channelNumber));
+    setWallCells((prev) =>
+      prev.map((c, idx) =>
+        idx === i ? (ch ? { stream_id: ch.stream_id, cell: ch.cell } : null) : c
+      )
+    );
+  }
+
   const isTagListType =
     panelType === "chart" ||
     panelType === "table" ||
@@ -92,9 +131,13 @@ export function AddPanelDialog({
   const canSubmit =
     panelType === "video"
       ? enabledStreams.length > 0
-      : panelType === "gauge"
-        ? gaugeTagId !== ""
-        : tagIds.length >= MIN_TAGS[panelType];
+      : panelType === "activity"
+        ? true
+        : panelType === "wall"
+          ? wallCells.some((c) => c !== null)
+          : panelType === "gauge"
+            ? gaugeTagId !== ""
+            : tagIds.length >= MIN_TAGS[panelType];
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -138,6 +181,28 @@ export function AddPanelDialog({
           critical: critical.trim() === "" ? null : Number(critical),
           direction,
         },
+      });
+      return;
+    }
+
+    if (panelType === "wall") {
+      onAdd({
+        id,
+        type: "wall",
+        title: `Video Wall ${wallN}×${wallN}`,
+        grid: { x: 0, y: bottomY, w: 12, h: 8 },
+        config: { rows: wallN, cols: wallN, cells: wallCells },
+      });
+      return;
+    }
+
+    if (panelType === "activity") {
+      onAdd({
+        id,
+        type: "activity",
+        title: "Aktivitas Pengguna",
+        grid: { ...baseGrid, w: existingPanels.length === 0 ? 12 : 4, h: 6 },
+        config: {},
       });
       return;
     }
@@ -279,6 +344,73 @@ export function AddPanelDialog({
                 </select>
               )}
             </div>
+          )}
+
+          {panelType === "wall" && (
+            <div className="flex flex-col gap-3">
+              {enabledStreams.length === 0 ? (
+                <p className="text-[12px] text-text-muted rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2.5">
+                  Belum ada stream. Tambahkan stream dan atur mosaic-nya (mis. 3×3)
+                  lewat tombol &ldquo;Kelola Stream&rdquo;.
+                </p>
+              ) : (
+                <>
+                  <div>
+                    <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                      Ukuran Grid
+                    </label>
+                    <div className="flex gap-2">
+                      {WALL_SIZES.map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setWallSize(n)}
+                          className={cn(
+                            "flex-1 rounded-[var(--r)] border py-2 text-[12.5px] font-semibold",
+                            wallN === n
+                              ? "border-primary bg-primary/5 text-text"
+                              : "border-border-soft text-text-muted cursor-pointer hover:border-border"
+                          )}
+                        >
+                          {n}×{n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                      Channel per Kotak <span className="text-red">*</span>
+                    </label>
+                    <div
+                      className="grid gap-1.5"
+                      style={{ gridTemplateColumns: `repeat(${wallN}, minmax(0,1fr))` }}
+                    >
+                      {Array.from({ length: wallN * wallN }).map((_, i) => (
+                        <ChannelCombobox
+                          key={i}
+                          channels={channels}
+                          value={channelNumberOf(enabledStreams, wallCells[i] ?? null)}
+                          onChange={(n) => setWallCell(i, n === null ? "" : String(n))}
+                        />
+                      ))}
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-text-light">
+                      Channel = satu kotak dari mosaic sebuah stream. Atur mosaic
+                      (mis. 3×3) &amp; nomor channel di &ldquo;Kelola Stream&rdquo;.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {panelType === "activity" && (
+            <p className="text-[12px] text-text-muted rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2.5">
+              Panel ini menampilkan siapa saja yang sedang membuka REIN sekarang
+              beserta sudah berapa lama — otomatis, tanpa pengaturan. Perlu diingat:
+              jika layout ini diterbitkan sebagai bawaan admin, semua yang melihatnya
+              ikut melihat daftar ini.
+            </p>
           )}
 
           {isTagListType && (

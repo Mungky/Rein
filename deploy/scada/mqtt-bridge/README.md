@@ -35,7 +35,8 @@ Bridge hanya butuh **satu** hal: `DATABASE_URL`.
 
 ```bash
 cp .env.example .env
-# edit .env → isi DATABASE_URL dari Supabase (Session pooler, port 5432)
+# edit .env → isi DATABASE_URL dari Supabase (Transaction pooler, port 6543).
+# Bridge sudah memakai prepare_threshold=None sehingga aman di pooler 6543.
 pip install -r requirements.txt
 ```
 

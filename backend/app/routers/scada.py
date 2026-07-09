@@ -100,6 +100,9 @@ def _stream_dict(s: ScadaStream) -> dict:
         "read_user": s.read_user,
         "read_pass": s.read_pass,
         "enabled": s.enabled,
+        "mosaic_rows": s.mosaic_rows,
+        "mosaic_cols": s.mosaic_cols,
+        "channel_start": s.channel_start,
         "created_at": str(s.created_at) if s.created_at else None,
         "updated_at": str(s.updated_at) if s.updated_at else None,
     }
@@ -403,6 +406,9 @@ async def create_stream(
         read_user=body.read_user,
         read_pass=body.read_pass,
         enabled=body.enabled,
+        mosaic_rows=body.mosaic_rows,
+        mosaic_cols=body.mosaic_cols,
+        channel_start=body.channel_start,
     )
     db.add(stream)
     await db.flush()
@@ -431,6 +437,12 @@ async def update_stream(
         stream.read_pass = body.read_pass or None
     if body.enabled is not None:
         stream.enabled = body.enabled
+    if body.mosaic_rows is not None:
+        stream.mosaic_rows = body.mosaic_rows
+    if body.mosaic_cols is not None:
+        stream.mosaic_cols = body.mosaic_cols
+    if body.channel_start is not None:
+        stream.channel_start = body.channel_start
 
     await db.flush()
     await db.refresh(stream)

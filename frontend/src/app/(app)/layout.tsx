@@ -11,6 +11,7 @@ import { Topbar } from "@/components/layout/topbar";
 import { Sidebar } from "@/components/layout/sidebar";
 import { SidebarDrawer } from "@/components/layout/sidebar-drawer";
 import { MobileNav } from "@/components/layout/mobile-nav";
+import { PresenceProvider } from "@/components/providers/presence-provider";
 import type { AppRole } from "@/lib/utils/roles";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -97,6 +98,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
+    <PresenceProvider>
     <div className="flex h-full flex-col overflow-hidden">
       {/* Topbar */}
       <Topbar
@@ -138,5 +140,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       {/* Bottom nav for mobile */}
       {isMobile && <MobileNav screen={screen} setScreen={handleSetScreen} userRole={userRole as AppRole} />}
     </div>
+    </PresenceProvider>
   );
 }

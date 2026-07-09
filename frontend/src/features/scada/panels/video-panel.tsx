@@ -62,8 +62,9 @@ export function VideoPanel({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<PlayerStatus>("connecting");
-  // Seconds behind the live edge, shown on the LANGSUNG badge.
-  const [latencyS, setLatencyS] = useState<number | null>(null);
+  // Network ping (segment fetch time-to-first-byte, ms) — shown as a game-style
+  // signal meter. NOT the glass-to-glass latency (HLS keeps that a few seconds).
+  const [pingMs, setPingMs] = useState<number | null>(null);
   // Last diagnostic while not live — {code, hint} so operators know why.
   const [errorInfo, setErrorInfo] = useState<{ code: string; hint: string } | null>(null);
   const isMobile = useIsMobile();
@@ -154,8 +155,16 @@ export function VideoPanel({
           setStatus("live");
           lastErrCode = null;
           setErrorInfo(null);
-          const lat = hls && Number.isFinite(hls.latency) ? hls.latency : null;
-          setLatencyS(lat && lat > 0 ? Math.round(lat * 10) / 10 : null);
+        });
+        // Ping = time-to-first-byte of each segment fetch, smoothed (EMA) so the
+        // meter doesn't jitter. A game-style network-health readout in ms.
+        hls.on(Hls.Events.FRAG_LOADED, (_e, data) => {
+          const load = data.frag.stats.loading;
+          const ttfb = load.first - load.start;
+          if (!Number.isFinite(ttfb) || ttfb < 0) return;
+          setPingMs((prev) =>
+            prev === null ? Math.round(ttfb) : Math.round(prev * 0.6 + ttfb * 0.4)
+          );
         });
         hls.loadSource(src);
         hls.attachMedia(video);
@@ -167,16 +176,8 @@ export function VideoPanel({
           retries = 0;
           setStatus("live");
           setErrorInfo(null);
-          // Native HLS (Safari): estimate lag from the seekable live edge.
-          try {
-            const sk = video.seekable;
-            if (sk.length) {
-              const lag = sk.end(sk.length - 1) - video.currentTime;
-              setLatencyS(lag > 0 ? Math.round(lag * 10) / 10 : null);
-            }
-          } catch {
-            /* seekable not ready yet */
-          }
+          // Native HLS (Safari) doesn't expose per-fragment fetch stats, so the
+          // ping meter stays hidden here.
         };
         const onError = () => {
           setErrorInfo({ code: "SRC", hint: "Gagal memuat stream — cek koneksi/kredensial" });
@@ -267,20 +268,8 @@ export function VideoPanel({
         )}
       />
 
-      {/* Status badge — live + how far behind real time */}
-      {status === "live" && (
-        <div className="absolute right-2 top-2 flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-0.5">
-          <span className="size-1.5 animate-pulse rounded-full bg-green-500" />
-          <span className="text-[10px] font-bold tracking-wide text-white">
-            LANGSUNG
-          </span>
-          {latencyS !== null && (
-            <span className="text-[10px] font-medium tabular-nums text-white/70">
-              · {latencyS.toFixed(1)}s
-            </span>
-          )}
-        </div>
-      )}
+      {/* Network ping meter (ms) — green normal, kuning bila > 70ms, merah bila parah */}
+      {status === "live" && pingMs !== null && <PingBadge ms={pingMs} />}
 
       {/* Reconnect / connecting overlay — never a silent black box, and always
           show a diagnostic code + cause when something is wrong. */}
@@ -302,6 +291,31 @@ export function VideoPanel({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Game-style network ping meter: three signal bars + ms.
+ *  < 70ms hijau · 70–150ms kuning · > 150ms merah. */
+function PingBadge({ ms }: { ms: number }) {
+  const tier = ms < 70 ? 3 : ms < 150 ? 2 : 1;
+  const barColor =
+    tier === 3 ? "bg-green-500" : tier === 2 ? "bg-amber-400" : "bg-red-500";
+  const textColor =
+    tier === 3 ? "text-green-400" : tier === 2 ? "text-amber-300" : "text-red-400";
+  const heights = [5, 8, 11];
+  return (
+    <div className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-black/55 px-1.5 py-0.5">
+      <span className="flex items-end gap-[1.5px]">
+        {heights.map((h, i) => (
+          <span
+            key={i}
+            className={cn("w-[3px] rounded-[1px]", i < tier ? barColor : "bg-white/25")}
+            style={{ height: h }}
+          />
+        ))}
+      </span>
+      <span className={cn("text-[10px] font-bold tabular-nums", textColor)}>{ms}ms</span>
     </div>
   );
 }

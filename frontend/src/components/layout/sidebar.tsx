@@ -138,9 +138,10 @@ export function Sidebar({
         )}
         <div className="flex flex-col gap-0.5">
           {NAV_PRIMARY.map((item) => {
-            // Locked items always show (greyed + non-clickable), even for roles
-            // without the permission — the whole module is off for everyone.
-            if (item.permission && !item.locked && !hasPerm(item.permission)) return null;
+            // Locked modules aren't finished yet — hide them entirely (not
+            // presentable). Flip the flag in lib/feature-flags.ts to bring back.
+            if (item.locked) return null;
+            if (item.permission && !hasPerm(item.permission)) return null;
             return (
               <SidebarItem
                 key={item.id}
@@ -179,18 +180,22 @@ export function Sidebar({
           </>
         )}
 
-        {/* Settings */}
-        {!collapsed && (
-          <div className="px-5 pt-5 pb-2 text-[10px] font-bold uppercase tracking-[0.10em] text-text-light">
-            Lainnya
-          </div>
+        {/* Settings — hidden while every item is locked (not presentable yet) */}
+        {NAV_SETTINGS.some((item) => !item.locked) && (
+          <>
+            {!collapsed && (
+              <div className="px-5 pt-5 pb-2 text-[10px] font-bold uppercase tracking-[0.10em] text-text-light">
+                Lainnya
+              </div>
+            )}
+            {collapsed && <div className="mx-3 my-3 h-px bg-border-soft" />}
+            <div className="flex flex-col gap-0.5">
+              {NAV_SETTINGS.filter((item) => !item.locked).map((item) => (
+                <SidebarItem key={item.id} item={item} active={screen === item.id} collapsed={collapsed} />
+              ))}
+            </div>
+          </>
         )}
-        {collapsed && <div className="mx-3 my-3 h-px bg-border-soft" />}
-        <div className="flex flex-col gap-0.5">
-          {NAV_SETTINGS.map((item) => (
-            <SidebarItem key={item.id} item={item} active={screen === item.id} collapsed={collapsed} />
-          ))}
-        </div>
       </div>
 
       {/* Bottom user info */}

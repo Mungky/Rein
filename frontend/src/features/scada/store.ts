@@ -65,8 +65,18 @@ interface ScadaState {
   updateGrid: (positions: { id: string; grid: PanelGridPos }[]) => void;
   addPanel: (panel: Panel) => void;
   removePanel: (panelId: string) => void;
+  /** Merge a patch into one draft panel — used for in-place editing (e.g.
+   *  changing a Video Wall's grid/channels without deleting & re-adding it). */
+  updatePanel: (
+    panelId: string,
+    patch: { title?: string; config?: Panel["config"] }
+  ) => void;
   save: () => Promise<void>;
   saveAs: (name: string) => Promise<void>;
+  /** Create a fresh, empty page (perspective) and drop straight into edit mode. */
+  newPage: (name: string) => Promise<void>;
+  /** Rename a page (perspective). */
+  renamePage: (id: string, name: string) => Promise<void>;
   setDefault: (id: string) => Promise<void>;
   /** Publish the given perspective as THE admin default (scada:manage). */
   publishLayout: (id: string) => Promise<void>;
@@ -224,6 +234,16 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     set({ draftPanels: draftPanels.filter((p) => p.id !== panelId) });
   },
 
+  updatePanel: (panelId, patch) => {
+    const { draftPanels } = get();
+    if (!draftPanels) return;
+    set({
+      draftPanels: draftPanels.map((p) =>
+        p.id === panelId ? ({ ...p, ...patch } as Panel) : p
+      ),
+    });
+  },
+
   save: async () => {
     const { activePerspectiveId, draftPanels, perspectives } = get();
     if (!activePerspectiveId || !draftPanels) return;
@@ -260,6 +280,29 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       activePerspectiveId: created.id,
       editMode: false,
       draftPanels: null,
+    });
+  },
+
+  newPage: async (name) => {
+    const created = await scadaApi.createPerspective(name, {
+      version: 1,
+      panels: [],
+    });
+    window.localStorage.setItem(LAST_PERSPECTIVE_KEY, created.id);
+    set({
+      perspectives: [...get().perspectives, created],
+      activePerspectiveId: created.id,
+      editMode: true,
+      draftPanels: [],
+    });
+  },
+
+  renamePage: async (id, name) => {
+    const updated = await scadaApi.updatePerspective(id, { name });
+    set({
+      perspectives: get().perspectives.map((p) =>
+        p.id === updated.id ? updated : p
+      ),
     });
   },
 

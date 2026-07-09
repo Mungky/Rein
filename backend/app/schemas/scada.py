@@ -116,8 +116,52 @@ class AlarmPanel(BaseModel):
     config: AlarmPanelConfig
 
 
+class WallCell(BaseModel):
+    """One cell of a video wall → one channel = (stream, cell index in its mosaic)."""
+
+    stream_id: uuid.UUID
+    cell: int = Field(ge=0, le=35)  # up to a 6×6 mosaic
+
+
+class WallPanelConfig(BaseModel):
+    rows: int = Field(ge=1, le=6)
+    cols: int = Field(ge=1, le=6)
+    # Row-major cells; null = empty slot. Length should equal rows×cols.
+    cells: list[WallCell | None] = Field(default_factory=list, max_length=36)
+
+
+class WallPanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["wall"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid
+    config: WallPanelConfig
+
+
+class ActivityPanelConfig(BaseModel):
+    # No configuration — the panel always lists everyone currently on REIN.
+    model_config = {"extra": "forbid"}
+
+
+class ActivityPanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["activity"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid
+    config: ActivityPanelConfig = Field(default_factory=ActivityPanelConfig)
+
+
 Panel = Annotated[
-    Union[VideoPanel, ChartPanel, TablePanel, GaugePanel, BarPanel, AlarmPanel],
+    Union[
+        VideoPanel,
+        ChartPanel,
+        TablePanel,
+        GaugePanel,
+        BarPanel,
+        AlarmPanel,
+        WallPanel,
+        ActivityPanel,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -148,6 +192,9 @@ class StreamCreateRequest(BaseModel):
     read_user: str | None = Field(default=None, max_length=64)
     read_pass: str | None = Field(default=None, max_length=128)
     enabled: bool = True
+    mosaic_rows: int = Field(default=1, ge=1, le=6)
+    mosaic_cols: int = Field(default=1, ge=1, le=6)
+    channel_start: int = Field(default=1, ge=1, le=100000)
 
 
 class StreamUpdateRequest(BaseModel):
@@ -156,6 +203,9 @@ class StreamUpdateRequest(BaseModel):
     read_user: str | None = Field(default=None, max_length=64)
     read_pass: str | None = Field(default=None, max_length=128)
     enabled: bool | None = None
+    mosaic_rows: int | None = Field(default=None, ge=1, le=6)
+    mosaic_cols: int | None = Field(default=None, ge=1, le=6)
+    channel_start: int | None = Field(default=None, ge=1, le=100000)
 
 
 class SiteCreateRequest(BaseModel):
@@ -303,6 +353,9 @@ class StreamOut(BaseModel):
     read_user: str | None
     read_pass: str | None
     enabled: bool
+    mosaic_rows: int
+    mosaic_cols: int
+    channel_start: int
     created_at: str | None
     updated_at: str | None
 

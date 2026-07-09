@@ -8,13 +8,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   Maximize,
   Minimize,
   MonitorPlay,
   MoreVertical,
   Move,
+  Pause,
   Pencil,
+  Play,
   Plus,
   Radio,
   RotateCcw,
@@ -55,8 +59,61 @@ export function ScadaView() {
 
   const isMobile = useIsMobile();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pagesOpen, setPagesOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const wallRef = useRef<HTMLDivElement>(null);
+
+  // Fullscreen "pages": each perspective is a page. Flip manually (arrows /
+  // number keys / the on-screen bar) or let auto-rotate cycle them.
+  const [autoRotate, setAutoRotate] = useState(false);
+  const [rotateSec, setRotateSec] = useState(15);
+  const pageIndex = store.perspectives.findIndex(
+    (p) => p.id === store.activePerspectiveId
+  );
+  const pageCount = store.perspectives.length;
+
+  const gotoPage = useCallback((idx: number) => {
+    const { perspectives, selectPerspective } = useScadaStore.getState();
+    if (perspectives.length === 0) return;
+    const i = ((idx % perspectives.length) + perspectives.length) % perspectives.length;
+    selectPerspective(perspectives[i].id);
+  }, []);
+
+  // Keyboard flipping — only while fullscreen (arrows + digits 1-9)
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      const { perspectives, activePerspectiveId } = useScadaStore.getState();
+      if (perspectives.length === 0) return;
+      const idx = perspectives.findIndex((p) => p.id === activePerspectiveId);
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        gotoPage(idx + 1);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        gotoPage(idx - 1);
+      } else if (/^[1-9]$/.test(e.key)) {
+        const n = Number(e.key) - 1;
+        if (n < perspectives.length) {
+          e.preventDefault();
+          gotoPage(n);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen, gotoPage]);
+
+  // Auto-rotate carousel
+  useEffect(() => {
+    if (!fullscreen || !autoRotate || store.editMode || pageCount <= 1) return;
+    const t = setInterval(() => {
+      const { perspectives, activePerspectiveId } = useScadaStore.getState();
+      const idx = perspectives.findIndex((p) => p.id === activePerspectiveId);
+      gotoPage(idx + 1);
+    }, rotateSec * 1000);
+    return () => clearInterval(t);
+  }, [fullscreen, autoRotate, rotateSec, store.editMode, pageCount, gotoPage]);
 
   useEffect(() => {
     if (authLoading || !profile) return;
@@ -97,6 +154,31 @@ export function ScadaView() {
       toast.error("Gagal membuat perspective");
     }
     setMenuOpen(false);
+  }
+
+  async function handleNewPage() {
+    const name = window.prompt("Nama halaman baru:");
+    if (!name?.trim()) return;
+    try {
+      await store.newPage(name.trim());
+      toast.success(`Halaman "${name.trim()}" dibuat — susun panelnya`);
+    } catch {
+      toast.error("Gagal membuat halaman");
+    }
+    setPagesOpen(false);
+  }
+
+  async function handleRenamePage() {
+    if (!active) return;
+    const name = window.prompt("Ganti nama halaman:", active.name);
+    if (!name?.trim() || name.trim() === active.name) return;
+    try {
+      await store.renamePage(active.id, name.trim());
+      toast.success("Nama halaman diperbarui");
+    } catch {
+      toast.error("Gagal mengganti nama halaman");
+    }
+    setPagesOpen(false);
   }
 
   async function handleSetDefault() {
@@ -188,32 +270,6 @@ export function ScadaView() {
             R-Net
           </span>
 
-          {/* Perspective picker — monitor mode only */}
-          {store.viewMode === "monitor" && store.perspectives.length > 0 && (
-            <select
-              className="field-select h-8 w-auto max-w-[200px] cursor-pointer text-[12.5px]"
-              value={store.activePerspectiveId ?? ""}
-              onChange={(e) => store.selectPerspective(e.target.value)}
-              disabled={store.editMode}
-            >
-              {store.perspectives.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.is_default ? " ★" : ""}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* Badge — this layout is the admin-published default (Masalah D):
-              either the admin's own published one, or the read-only copy shown
-              to other users. */}
-          {store.viewMode === "monitor" && (active?.is_published || active?.read_only) && (
-            <span className="hidden items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10.5px] font-semibold text-primary sm:inline-flex">
-              <Send className="size-3" /> Bawaan Admin
-            </span>
-          )}
-
           {/* Monitor | Analisis toggle */}
           {!store.editMode && (
             <div className="flex items-center rounded-[var(--r)] border border-border-soft bg-bg-sidebar p-0.5">
@@ -236,6 +292,70 @@ export function ScadaView() {
                   {label}
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* Halaman (page) dropdown — switch, create & rename pages. Each page
+              is a perspective; in fullscreen you flip between them. */}
+          {store.viewMode === "monitor" && !store.editMode && (
+            <div className="relative">
+              <button
+                onClick={() => setPagesOpen((v) => !v)}
+                className="flex h-8 max-w-[220px] items-center gap-1.5 rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-2.5 text-[12.5px] font-semibold text-text hover:border-border"
+                title="Pilih / kelola halaman"
+              >
+                <MonitorPlay className="size-3.5 shrink-0 text-text-muted" />
+                <span className="truncate">{active?.name ?? "Halaman"}</span>
+                {(active?.is_published || active?.read_only) && (
+                  <Send className="size-3 shrink-0 text-primary" />
+                )}
+                <ChevronDown className="size-3.5 shrink-0 text-text-light" />
+              </button>
+              {pagesOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setPagesOpen(false)} />
+                  <div className="absolute left-0 top-9 z-20 w-64 rounded-[var(--r-lg)] border border-border bg-bg p-1 shadow-[var(--shadow-lg)]">
+                    <div className="max-h-64 overflow-y-auto">
+                      {store.perspectives.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => {
+                            store.selectPerspective(p.id);
+                            setPagesOpen(false);
+                          }}
+                          className={cn(
+                            "flex w-full cursor-pointer items-center gap-2 rounded-[var(--r)] px-3 py-2 text-left text-[12.5px]",
+                            p.id === store.activePerspectiveId
+                              ? "bg-primary/8 font-semibold text-text"
+                              : "text-text-muted hover:bg-bg-hover"
+                          )}
+                        >
+                          <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                          {p.is_default && <Star className="size-3 shrink-0 text-amber-500" />}
+                          {(p.is_published || p.read_only) && (
+                            <Send className="size-3 shrink-0 text-primary" />
+                          )}
+                          {p.id === store.activePerspectiveId && (
+                            <Check className="size-3.5 shrink-0 text-primary" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    {canEdit && (
+                      <>
+                        <div className="my-1 h-px bg-border-soft" />
+                        <MenuItem icon={Plus} label="Halaman Baru" onClick={handleNewPage} />
+                        <MenuItem
+                          icon={Pencil}
+                          label="Ganti Nama Halaman Ini"
+                          onClick={handleRenamePage}
+                          disabled={!active || active.read_only}
+                        />
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -426,10 +546,90 @@ export function ScadaView() {
                   fullscreen={fullscreen}
                   onRemove={() => store.removePanel(panel.id)}
                 >
-                  {renderPanel(panel, store.streams, store.tags)}
+                  {renderPanel(
+                    panel,
+                    store.streams,
+                    store.tags,
+                    store.editMode
+                      ? {
+                          onConfigChange: (config) =>
+                            store.updatePanel(panel.id, { config }),
+                        }
+                      : undefined
+                  )}
                 </PanelFrame>
               )}
             />
+          </div>
+        )}
+
+        {/* Fullscreen page-flipper (each perspective = a page) */}
+        {fullscreen && pageCount > 1 && (
+          <div className="group fixed bottom-4 left-1/2 z-30 -translate-x-1/2">
+            <div className="flex items-center gap-1.5 rounded-full bg-black/55 px-2 py-1.5 text-white opacity-40 backdrop-blur-sm transition-opacity group-hover:opacity-100">
+              <button
+                onClick={() => gotoPage(pageIndex - 1)}
+                className="flex size-7 items-center justify-center rounded-full hover:bg-white/15"
+                title="Halaman sebelumnya (←)"
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+
+              <div className="flex items-center gap-1 px-1">
+                {store.perspectives.map((p, i) => (
+                  <button
+                    key={p.id}
+                    onClick={() => gotoPage(i)}
+                    title={`${i + 1}. ${p.name}`}
+                    className={cn(
+                      "h-2 rounded-full transition-all",
+                      i === pageIndex
+                        ? "w-5 bg-white"
+                        : "w-2 bg-white/40 hover:bg-white/70"
+                    )}
+                  />
+                ))}
+              </div>
+
+              <button
+                onClick={() => gotoPage(pageIndex + 1)}
+                className="flex size-7 items-center justify-center rounded-full hover:bg-white/15"
+                title="Halaman berikutnya (→)"
+              >
+                <ChevronRight className="size-4" />
+              </button>
+
+              <span className="max-w-[160px] truncate px-1 text-[11.5px] font-medium">
+                {pageIndex + 1}/{pageCount} · {store.perspectives[pageIndex]?.name}
+              </span>
+
+              <div className="mx-0.5 h-5 w-px bg-white/20" />
+
+              <button
+                onClick={() => setAutoRotate((v) => !v)}
+                className={cn(
+                  "flex size-7 items-center justify-center rounded-full",
+                  autoRotate ? "bg-primary text-white" : "hover:bg-white/15"
+                )}
+                title={autoRotate ? "Hentikan gilir otomatis" : "Gilir halaman otomatis"}
+              >
+                {autoRotate ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+              </button>
+              {autoRotate && (
+                <select
+                  value={rotateSec}
+                  onChange={(e) => setRotateSec(Number(e.target.value))}
+                  className="cursor-pointer rounded-full bg-white/10 px-1.5 py-0.5 text-[11px] text-white"
+                  title="Jeda gilir"
+                >
+                  {[10, 15, 30, 60].map((s) => (
+                    <option key={s} value={s} className="text-black">
+                      {s}s
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
           </div>
         )}
 

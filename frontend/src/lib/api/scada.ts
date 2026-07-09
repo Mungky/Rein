@@ -60,6 +60,9 @@ export const scadaApi = {
     read_user?: string | null;
     read_pass?: string | null;
     enabled?: boolean;
+    mosaic_rows?: number;
+    mosaic_cols?: number;
+    channel_start?: number;
   }) => apiClient.post<Stream>("/api/scada/streams", data),
 
   updateStream: (
@@ -70,6 +73,9 @@ export const scadaApi = {
       read_user?: string | null;
       read_pass?: string | null;
       enabled?: boolean;
+      mosaic_rows?: number;
+      mosaic_cols?: number;
+      channel_start?: number;
     }
   ) => apiClient.patch<Stream>(`/api/scada/streams/${id}`, data),
 

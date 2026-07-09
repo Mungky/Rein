@@ -30,8 +30,8 @@ const items: {
 export function MobileNav({ screen, setScreen, userRole }: MobileNavProps) {
   const { can } = usePermissions();
   const visible = items.filter(
-    // Locked items always show (greyed + non-clickable); the rest are permission-gated.
-    (item) => item.locked || !item.permission || (userRole && can(userRole as AppRole, item.permission))
+    // Locked modules are hidden until finished; the rest are permission-gated.
+    (item) => !item.locked && (!item.permission || (userRole && can(userRole as AppRole, item.permission)))
   );
 
   return (

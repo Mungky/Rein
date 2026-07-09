@@ -43,6 +43,19 @@ class ScadaStream(UUIDMixin, TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, server_default="true", nullable=False
     )
+    # Video-wall support: one OBS output can carry an R×C mosaic of cameras.
+    # Each cell is an addressable "channel"; the browser crops the single decoded
+    # stream into cells (no server-side splitting). channel_start is the global
+    # number of cell 0, so a 3×3 stream starting at 1 owns channels 1..9.
+    mosaic_rows: Mapped[int] = mapped_column(
+        Integer, server_default="1", nullable=False
+    )
+    mosaic_cols: Mapped[int] = mapped_column(
+        Integer, server_default="1", nullable=False
+    )
+    channel_start: Mapped[int] = mapped_column(
+        Integer, server_default="1", nullable=False
+    )
 
 
 class ScadaPerspective(UUIDMixin, TimestampMixin, Base):

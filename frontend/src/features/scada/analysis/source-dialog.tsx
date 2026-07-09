@@ -41,7 +41,31 @@ export function SourceDialog({
   const [alarmMax, setAlarmMax] = useState(
     cfg.alarm_max === undefined || cfg.alarm_max === null ? "" : String(cfg.alarm_max)
   );
+  // Scaling / calibration: stored = raw * scale + offset, rounded to `decimals`.
+  const [scale, setScale] = useState(
+    cfg.scale === undefined || cfg.scale === null ? "" : String(cfg.scale)
+  );
+  const [offset, setOffset] = useState(
+    cfg.offset === undefined || cfg.offset === null ? "" : String(cfg.offset)
+  );
+  const [decimals, setDecimals] = useState(
+    cfg.decimals === undefined || cfg.decimals === null ? "" : String(cfg.decimals)
+  );
   const [saving, setSaving] = useState(false);
+
+  // Live preview of what a raw reading of 100 becomes after scaling
+  const scaleNum = scale.trim() === "" ? 1 : Number(scale.trim().replace(",", "."));
+  const offsetNum = offset.trim() === "" ? 0 : Number(offset.trim().replace(",", "."));
+  const decNum = decimals.trim() === "" ? null : Number(decimals.trim());
+  const previewValid = Number.isFinite(scaleNum) && Number.isFinite(offsetNum);
+  const previewStored = previewValid
+    ? (() => {
+        const v = 100 * scaleNum + offsetNum;
+        return decNum !== null && Number.isFinite(decNum)
+          ? v.toFixed(Math.max(0, Math.min(6, decNum)))
+          : String(v);
+      })()
+    : "—";
 
   const canSave =
     mode === "simulator" ||
@@ -63,6 +87,16 @@ export function SourceDialog({
         const max = alarmMax.trim().replace(",", ".");
         if (min !== "" && Number.isFinite(Number(min))) config.alarm_min = Number(min);
         if (max !== "" && Number.isFinite(Number(max))) config.alarm_max = Number(max);
+        // Scaling / calibration — omit no-op values to keep config clean
+        const sc = scale.trim().replace(",", ".");
+        const of = offset.trim().replace(",", ".");
+        const dec = decimals.trim();
+        if (sc !== "" && Number.isFinite(Number(sc)) && Number(sc) !== 1)
+          config.scale = Number(sc);
+        if (of !== "" && Number.isFinite(Number(of)) && Number(of) !== 0)
+          config.offset = Number(of);
+        if (dec !== "" && Number.isInteger(Number(dec)))
+          config.decimals = Number(dec);
         await scadaApi.updateTag(tag.id, {
           source: "mqtt",
           site_id: siteId,
@@ -215,6 +249,70 @@ export function SourceDialog({
                     onChange={(e) => setAlarmMax(e.target.value)}
                   />
                 </div>
+              </div>
+
+              {/* Scaling / kalibrasi — mentah → satuan teknik */}
+              <div className="rounded-[var(--r-lg)] border border-border-soft bg-bg-sidebar p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-[12px] font-semibold text-text">
+                    Scaling / Kalibrasi <span className="font-normal text-text-light">(opsional)</span>
+                  </span>
+                  <code className="text-[10.5px] text-text-muted">
+                    tersimpan = mentah × skala + offset
+                  </code>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-text-muted">
+                      Skala
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      className="field-input"
+                      placeholder="1"
+                      value={scale}
+                      onChange={(e) => setScale(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-text-muted">
+                      Offset
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      className="field-input"
+                      placeholder="0"
+                      value={offset}
+                      onChange={(e) => setOffset(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-text-muted">
+                      Desimal
+                    </label>
+                    <input
+                      type="number"
+                      step="1"
+                      min="0"
+                      max="6"
+                      className="field-input"
+                      placeholder="auto"
+                      value={decimals}
+                      onChange={(e) => setDecimals(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <p className="mt-2 text-[11px] text-text-light">
+                  {previewValid ? (
+                    <>Contoh: nilai mentah <span className="font-mono text-text-muted">100</span> tersimpan jadi{" "}
+                    <span className="font-mono font-semibold text-text">{previewStored}</span> {tag.unit}.</>
+                  ) : (
+                    <span className="text-red">Skala/offset harus berupa angka.</span>
+                  )}{" "}
+                  Berlaku untuk data baru saja; contoh 4–20&nbsp;mA → 0–100: skala 6.25, offset −25.
+                </p>
               </div>
             </>
           )}

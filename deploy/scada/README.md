@@ -17,6 +17,10 @@ Developer notes. Operator guides (Indonesian):
 - [PANDUAN-SERVER-SCADA.md](./PANDUAN-SERVER-SCADA.md) — the 24/7 server-PC
   variant: NSSM services + named tunnel (fixed URL), zero manual steps after
   reboot.
+- **[PANDUAN-MQTT-RNET.md](./PANDUAN-MQTT-RNET.md)** — the **sensor-data** side
+  (separate from video): broker → V-Net/V-Box → R-Net Analisis, including tag
+  scaling/calibration and alarms. The MQTT bridge installs on the SAME server as
+  the streaming stack. Technical bridge notes: `mqtt-bridge/README.md`.
 - [TUTORIAL-TES-LOKAL.md](./TUTORIAL-TES-LOKAL.md) — local dev smoke test.
 
 ## Architecture

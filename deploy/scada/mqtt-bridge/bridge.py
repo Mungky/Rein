@@ -123,6 +123,40 @@ def _coerce_value(payload: bytes) -> float | None:
         return None
 
 
+# tag_id -> (scale, offset, decimals|None). Applied to the RAW sensor value
+# before it is stored: stored = round(raw * scale + offset, decimals). This is
+# the per-tag scaling/tuning set in R-Net (Analisis → Sumber). Defaults are a
+# no-op (scale 1, offset 0), so tags without scaling store the raw value.
+Transform = tuple[float, float, "int | None"]
+
+
+def _parse_transform(config: dict | None) -> Transform:
+    cfg = config or {}
+
+    def _num(v, default: float) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    scale = _num(cfg.get("scale"), 1.0)
+    offset = _num(cfg.get("offset"), 0.0)
+    dec_raw = cfg.get("decimals")
+    try:
+        decimals = (
+            int(dec_raw) if dec_raw is not None and str(dec_raw).strip() != "" else None
+        )
+    except (TypeError, ValueError):
+        decimals = None
+    return scale, offset, decimals
+
+
+def _apply_transform(raw: float, xform: Transform) -> float:
+    scale, offset, decimals = xform
+    value = raw * scale + offset
+    return round(value, decimals) if decimals is not None else value
+
+
 # --------------------------------------------------------------------------- #
 # Bridge
 # --------------------------------------------------------------------------- #
@@ -139,6 +173,8 @@ class Bridge:
         self._clients: dict[str, mqtt.Client] = {}
         # site_id -> topic -> tag_id (the desired subscription set)
         self._routes: dict[str, dict[str, str]] = {}
+        # tag_id -> (scale, offset, decimals) applied to the raw value on ingest
+        self._xform: dict[str, Transform] = {}
         self._conn: psycopg.Connection | None = None
         self._stop = threading.Event()
 
@@ -153,9 +189,14 @@ class Bridge:
             )
         return self._conn
 
-    def load_config(self) -> dict[str, SiteCfg]:
-        """Read enabled sites + their enabled MQTT tags from the DB."""
+    def load_config(self) -> tuple[dict[str, SiteCfg], dict[str, Transform]]:
+        """Read enabled sites + their enabled MQTT tags from the DB.
+
+        Returns the sites (with their topic→tag_id subscriptions) and a
+        tag_id→transform map used to scale each raw value before storing.
+        """
         sites: dict[str, SiteCfg] = {}
+        xform: dict[str, Transform] = {}
         with self._db().cursor() as cur:
             cur.execute(
                 "SELECT id, mqtt_host, mqtt_port, mqtt_username, mqtt_password "
@@ -175,7 +216,8 @@ class Bridge:
                 topic = (config or {}).get("mqtt_topic")
                 if isinstance(topic, str) and topic.strip():
                     site.topics[topic.strip()] = str(tag_id)
-        return sites
+                    xform[str(tag_id)] = _parse_transform(config)
+        return sites, xform
 
     # -- mqtt callbacks (paho v2 signatures) ------------------------------- #
 
@@ -198,10 +240,12 @@ class Bridge:
         tag_id = self._routes.get(site_id, {}).get(msg.topic)
         if tag_id is None:
             return  # not a topic we care about
-        value = _coerce_value(msg.payload)
-        if value is None:
+        raw = _coerce_value(msg.payload)
+        if raw is None:
             log.debug("Site %s topik %s: payload tidak valid, dilewati", site_id, msg.topic)
             return
+        # Scale/tune the raw sensor value before storing (config set in R-Net).
+        value = _apply_transform(raw, self._xform.get(tag_id, (1.0, 0.0, None)))
         with self._lock:
             self._pending[tag_id] = value
 
@@ -224,7 +268,7 @@ class Bridge:
     def reconcile(self) -> None:
         """Re-read config and align live MQTT clients + subscriptions to it."""
         try:
-            sites = self.load_config()
+            sites, self._xform = self.load_config()
         except Exception:
             log.exception("Gagal membaca konfigurasi dari database")
             return
