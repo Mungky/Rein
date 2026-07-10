@@ -20,7 +20,6 @@ import {
   Pencil,
   Play,
   Plus,
-  Radio,
   RotateCcw,
   Send,
   Star,
@@ -41,6 +40,7 @@ import { renderPanel } from "./panels/panel-registry";
 import { AddPanelDialog } from "./add-panel-dialog";
 import { ManageStreamsDialog } from "./manage-streams-dialog";
 import { AnalysisView } from "./analysis/analysis-view";
+import { ChannelsView } from "./channels-view";
 
 export function ScadaView() {
   const { role } = useAuthDisplay();
@@ -56,6 +56,24 @@ export function ScadaView() {
     store.editMode && store.draftPanels
       ? store.draftPanels
       : active?.layout.panels ?? [];
+
+  // Channel panels get a live title from the registry (nickname can change
+  // after the panel was placed); other panels keep their stored title.
+  const panelTitle = useCallback(
+    (panel: Panel): string => {
+      if (panel.type === "channel") {
+        const ch = store.channels.find((c) => c.id === panel.config.channel_id);
+        return ch ? `CH ${ch.number} · ${ch.name}` : panel.title || "Channel";
+      }
+      return panel.title;
+    },
+    [store.channels]
+  );
+
+  const maximizedPanel =
+    store.maximizedPanelId !== null
+      ? panels.find((p) => p.id === store.maximizedPanelId) ?? null
+      : null;
 
   const isMobile = useIsMobile();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -78,6 +96,17 @@ export function ScadaView() {
     const i = ((idx % perspectives.length) + perspectives.length) % perspectives.length;
     selectPerspective(perspectives[i].id);
   }, []);
+
+  // Escape restores a maximized channel (any view state)
+  useEffect(() => {
+    if (store.maximizedPanelId === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") store.setMaximizedPanel(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.maximizedPanelId]);
 
   // Keyboard flipping — only while fullscreen (arrows + digits 1-9)
   useEffect(() => {
@@ -334,13 +363,14 @@ export function ScadaView() {
             </div>
           )}
 
-          {/* Monitor | Analisis toggle */}
+          {/* Monitor | Channel | Data toggle */}
           {!store.editMode && (
             <div className="flex items-center rounded-[var(--r)] border border-border-soft bg-bg-sidebar p-0.5">
               {(
                 [
                   { mode: "monitor", label: "Monitor" },
-                  { mode: "analysis", label: "Analisis" },
+                  { mode: "channels", label: "Channel" },
+                  { mode: "analysis", label: "Data" },
                 ] as const
               ).map(({ mode, label }) => (
                 <button
@@ -361,7 +391,7 @@ export function ScadaView() {
 
           <div className="flex-1" />
 
-          {store.viewMode === "analysis" ? null : store.editMode ? (
+          {store.viewMode !== "monitor" ? null : store.editMode ? (
             <>
               <button
                 onClick={() => store.setShowAddPanel(true)}
@@ -389,15 +419,6 @@ export function ScadaView() {
                   disabled={!active}
                 >
                   <Pencil className="size-3.5" /> Atur Layout
-                </button>
-              )}
-              {canManage && (
-                <button
-                  onClick={() => store.setShowManageStreams(true)}
-                  className="btn btn-ghost btn-sm gap-1.5"
-                >
-                  <Radio className="size-3.5" />
-                  <span className="hidden sm:inline">Kelola Stream</span>
                 </button>
               )}
               <button
@@ -480,14 +501,19 @@ export function ScadaView() {
         </div>
       )}
 
-      {/* Analisis workbench — Excel-like tag sheet (fullscreen stays with Monitor) */}
+      {/* Data workbench / Channel registry (fullscreen stays with Monitor) */}
       {store.viewMode === "analysis" && !fullscreen ? (
         <AnalysisView canEdit={canEdit} canManage={canManage} />
+      ) : store.viewMode === "channels" && !fullscreen ? (
+        <ChannelsView canManage={canManage} />
       ) : (
       /* Monitoring wall */
       <div
         ref={wallRef}
-        className={cn("min-h-0 flex-1", fullscreen ? "bg-black" : "bg-bg-sidebar")}
+        className={cn(
+          "relative min-h-0 flex-1",
+          fullscreen ? "bg-black" : "bg-bg-sidebar"
+        )}
       >
         {panels.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
@@ -504,7 +530,8 @@ export function ScadaView() {
               </button>
             ) : canEdit ? (
               <p className="text-[12px] text-text-muted">
-                Klik &ldquo;Atur Layout&rdquo; untuk menambah panel video.
+                Klik &ldquo;Atur Layout&rdquo; lalu pilih channel yang mau
+                ditampilkan (channel dibuat di tab Channel).
               </p>
             ) : (
               <p className="text-[12px] text-text-muted">
@@ -523,11 +550,13 @@ export function ScadaView() {
             {panels.map((panel) => (
               <div key={panel.id} className="aspect-video w-full shrink-0">
                 <PanelFrame
-                  title={panel.title}
+                  title={panelTitle(panel)}
                   editMode={false}
                   fullscreen={fullscreen}
                 >
-                  {renderPanel(panel, store.streams, store.tags)}
+                  {renderPanel(panel, store.streams, store.tags, {
+                    channels: store.channels,
+                  })}
                 </PanelFrame>
               </div>
             ))}
@@ -541,12 +570,18 @@ export function ScadaView() {
               onGridChange={store.updateGrid}
               renderPanelContent={(panel) => (
                 <PanelFrame
-                  title={panel.title}
+                  title={panelTitle(panel)}
                   editMode={store.editMode}
                   fullscreen={fullscreen}
                   onRemove={() => store.removePanel(panel.id)}
+                  onMaximize={
+                    store.editMode
+                      ? undefined
+                      : () => store.setMaximizedPanel(panel.id)
+                  }
                 >
                   {renderPanel(panel, store.streams, store.tags, {
+                    channels: store.channels,
                     editMode: store.editMode,
                     canInlineEdit: canEdit && !active?.read_only,
                     onConfigChange: store.editMode
@@ -559,6 +594,24 @@ export function ScadaView() {
                 </PanelFrame>
               )}
             />
+          </div>
+        )}
+
+        {/* Maximized channel — one panel fills the whole wall (CCTV style).
+            Esc, the frame button, or switching pages restores the grid. */}
+        {maximizedPanel && !store.editMode && (
+          <div className={cn("absolute inset-0 z-40", fullscreen ? "bg-black" : "bg-bg-sidebar p-2")}>
+            <PanelFrame
+              title={panelTitle(maximizedPanel)}
+              editMode={false}
+              fullscreen={fullscreen}
+              maximized
+              onMaximize={() => store.setMaximizedPanel(null)}
+            >
+              {renderPanel(maximizedPanel, store.streams, store.tags, {
+                channels: store.channels,
+              })}
+            </PanelFrame>
           </div>
         )}
 
@@ -648,8 +701,7 @@ export function ScadaView() {
       {/* Dialogs */}
       {store.showAddPanel && store.draftPanels && (
         <AddPanelDialog
-          streams={store.streams}
-          tags={store.tags}
+          channels={store.channels}
           existingPanels={store.draftPanels}
           onAdd={store.addPanel}
           onClose={() => store.setShowAddPanel(false)}

@@ -2,6 +2,8 @@
 
 import { apiClient } from "./client";
 import type {
+  Channel,
+  ChannelKind,
   ColumnKind,
   HistorySeries,
   Perspective,
@@ -81,6 +83,31 @@ export const scadaApi = {
 
   deleteStream: (id: string) =>
     apiClient.delete<{ deleted: string }>(`/api/scada/streams/${id}`),
+
+  /* ── Channels (TV-style registry: number + nickname + one source) ── */
+  listChannels: () => apiClient.get<{ items: Channel[] }>("/api/scada/channels"),
+
+  createChannel: (data: {
+    number: number;
+    name: string;
+    kind: ChannelKind;
+    config: Record<string, unknown>;
+    enabled?: boolean;
+  }) => apiClient.post<Channel>("/api/scada/channels", data),
+
+  updateChannel: (
+    id: string,
+    data: {
+      number?: number;
+      name?: string;
+      kind?: ChannelKind;
+      config?: Record<string, unknown>;
+      enabled?: boolean;
+    }
+  ) => apiClient.patch<Channel>(`/api/scada/channels/${id}`, data),
+
+  deleteChannel: (id: string) =>
+    apiClient.delete<{ deleted: string }>(`/api/scada/channels/${id}`),
 
   /* ── Sites (MQTT brokers) ── */
   listSites: () => apiClient.get<{ items: Site[] }>("/api/scada/sites"),

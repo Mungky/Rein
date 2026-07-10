@@ -159,10 +159,19 @@ if (Test-Path $Cfg) {
     $sKey = Read-Host "   SUPABASE_SERVICE_KEY (service_role)"
     if ([string]::IsNullOrWhiteSpace($sUrl)) { $sUrl = "GANTI_DENGAN_URL_SUPABASE" }
     if ([string]::IsNullOrWhiteSpace($sKey)) { $sKey = "GANTI_DENGAN_SERVICE_ROLE_KEY" }
+    Write-Host ""
+    Info "Nama stream milik MESIN INI (harus PERSIS sama dengan nama di"
+    Info "R-Net > Channel > Sumber Stream). WAJIB diisi kalau ada lebih dari"
+    Info "satu mesin siaran - tanpa ini mesin-mesin akan saling menimpa alamat."
+    $sName = Read-Host "   STREAM_NAME (mis. Line Server; kosong = mode 1 mesin)"
     Write-TextNoBom $Cfg (@(
         "# config.env - RAHASIA, jangan kirim ke Git/orang lain.",
         "SUPABASE_URL=$sUrl",
-        "SUPABASE_SERVICE_KEY=$sKey"
+        "SUPABASE_SERVICE_KEY=$sKey",
+        "# Nama stream yang alamatnya di-update mesin ini (kosong = semua).",
+        "STREAM_NAME=$sName",
+        "# Path MediaMTX untuk stream ini (default scada).",
+        "STREAM_PATH=scada"
     ) -join "`r`n")
     Good "config.env dibuat."
 }

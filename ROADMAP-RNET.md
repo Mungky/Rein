@@ -28,7 +28,16 @@ sekaligus — tidak ada browser/TV yang sanggup, di produk komersial mana pun.
 - [x] Video Wall (mosaic→channel, crop canvas) + edit in-place + fit Penuh/Utuh
 - [x] Halaman (pages) + dropdown kiri + fullscreen flipper + auto-rotate
 - [x] Panel Aktivitas (presence), panel Web-Embed (iframe), ping ms badge
-- [x] Fix multi-sumber streaming (STREAM_NAME per mesin)
+- [x] Fix multi-sumber streaming (STREAM_NAME per mesin, install.ps1 ikut tanya)
+
+### Fase 0.5 — Restrukturisasi Channel ✅ (2026-07-10)
+- [x] R-Net = 3 tab: **Monitor | Channel | Data**
+- [x] Tabel `scada_channels`: nomor unik + nickname + 1 sumber
+      (video[+kotak mosaic] / web / grafik / tabel / angka / bar / alarm / aktivitas)
+- [x] Tambah Panel = pilih channel dari daftar (bukan jenis panel);
+      layout lama tetap jalan (kompatibel)
+- [x] Maximize per-channel (tombol di bar judul / hover saat fullscreen; Esc)
+- [x] Web-embed: kontrol Geser Kiri/Atas (px) — buang navbar HMI tanpa fullscreen
 
 ### Fase 1 — Validasi sumber (SEKARANG — butuh tes lapangan user)
 - [ ] Tes 2 stream dari 2 mesin (STREAM_NAME diisi beda) — tidak saling timpa

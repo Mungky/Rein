@@ -58,6 +58,29 @@ class ScadaStream(UUIDMixin, TimestampMixin, Base):
     )
 
 
+class ScadaChannel(UUIDMixin, TimestampMixin, Base):
+    """One TV-style channel — the single addressable unit shown on the Monitor
+    wall. A channel binds a number + nickname to ONE source definition:
+    kind "video" (a stream, optionally one mosaic cell), "web" (embedded page),
+    or a historian visual ("chart"/"table"/"gauge"/"bar"/"alarm"/"activity").
+    Layouts reference channels by id; the source is defined once, here."""
+
+    __tablename__ = "scada_channels"
+
+    number: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Kind-specific config, validated by backend/app/schemas/scada.py:
+    #   video → {stream_id, cell?}   web → {url, zoom, offset_x, offset_y}
+    #   chart/table/bar/alarm → {tag_ids, range, ...}   gauge → {tag_id, ...}
+    config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default="true", nullable=False
+    )
+
+
 class ScadaPerspective(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "scada_perspectives"
 

@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import { scadaApi } from "@/lib/api/scada";
 import type {
+  Channel,
   Panel,
   PanelGridPos,
   Perspective,
@@ -30,13 +31,19 @@ interface ScadaState {
   perspectives: Perspective[];
   activePerspectiveId: string | null;
   streams: Stream[];
+  /** TV-style channel registry (halaman Channel). */
+  channels: Channel[];
   sites: Site[];
   tags: Tag[];
   loading: boolean;
   loadError: string | null;
 
-  /** "monitor" = panel wall, "analysis" = Excel-like tag workbench */
-  viewMode: "monitor" | "analysis";
+  /** One panel expanded to fill the whole wall area (CCTV-style maximize). */
+  maximizedPanelId: string | null;
+
+  /** "monitor" = panel wall, "channels" = channel registry,
+   *  "analysis" = Excel-like tag workbench (tab "Data") */
+  viewMode: "monitor" | "channels" | "analysis";
   sheets: Sheet[];
   activeSheetId: string | null;
   workbenchColumns: WorkbenchColumn[];
@@ -95,12 +102,14 @@ interface ScadaState {
   refreshStreams: () => Promise<void>;
   /** Re-fetch streams from the DB AND force all video players to reconnect. */
   reconnectStreams: () => Promise<void>;
+  refreshChannels: () => Promise<void>;
   refreshSites: () => Promise<void>;
   refreshTags: () => Promise<void>;
   refreshColumns: () => Promise<void>;
   refreshSheets: () => Promise<void>;
   selectSheet: (id: string) => void;
-  setViewMode: (v: "monitor" | "analysis") => void;
+  setViewMode: (v: "monitor" | "channels" | "analysis") => void;
+  setMaximizedPanel: (id: string | null) => void;
   setLiveValue: (tagId: string, value: LiveValue) => void;
   /** Append a panel to the active perspective and persist immediately —
    *  used by the Analisis action bar ("Buat Grafik/Gauge/Bar"). */
@@ -139,10 +148,12 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   perspectives: [],
   activePerspectiveId: null,
   streams: [],
+  channels: [],
   sites: [],
   tags: [],
   loading: true,
   loadError: null,
+  maximizedPanelId: null,
 
   viewMode: "monitor",
   sheets: [],
@@ -165,6 +176,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       const [
         perspectivesRes,
         streamsRes,
+        channelsRes,
         sitesRes,
         tagsRes,
         columnsRes,
@@ -173,6 +185,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       ] = await Promise.all([
         scadaApi.listPerspectives(),
         scadaApi.listStreams(),
+        scadaApi.listChannels(),
         scadaApi.listSites(),
         scadaApi.listTags(),
         scadaApi.listColumns(),
@@ -183,6 +196,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       set({
         perspectives,
         streams: streamsRes.items,
+        channels: channelsRes.items,
         sites: sitesRes.items,
         tags: tagsRes.items,
         workbenchColumns: columnsRes.items,
@@ -202,7 +216,12 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
 
   selectPerspective: (id) => {
     window.localStorage.setItem(LAST_PERSPECTIVE_KEY, id);
-    set({ activePerspectiveId: id, editMode: false, draftPanels: null });
+    set({
+      activePerspectiveId: id,
+      editMode: false,
+      draftPanels: null,
+      maximizedPanelId: null,
+    });
   },
 
   enterEdit: () => {
@@ -212,6 +231,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     set({
       editMode: true,
       draftPanels: structuredClone(active.layout.panels),
+      maximizedPanelId: null,
     });
   },
 
@@ -403,6 +423,11 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     });
   },
 
+  refreshChannels: async () => {
+    const res = await scadaApi.listChannels();
+    set({ channels: res.items });
+  },
+
   refreshSites: async () => {
     const res = await scadaApi.listSites();
     set({ sites: res.items });
@@ -433,7 +458,9 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     set({ activeSheetId: id });
   },
 
-  setViewMode: (v) => set({ viewMode: v }),
+  setViewMode: (v) => set({ viewMode: v, maximizedPanelId: null }),
+
+  setMaximizedPanel: (id) => set({ maximizedPanelId: id }),
 
   setLiveValue: (tagId, value) =>
     set({ liveValues: { ...get().liveValues, [tagId]: value } }),

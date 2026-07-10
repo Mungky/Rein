@@ -21,9 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import _load_permissions, require_permission
 from app.schemas.scada import (
+    ChannelCreateRequest,
+    ChannelListOut,
+    ChannelOut,
+    ChannelUpdateRequest,
     DeletedOut,
     HistoryOut,
     RecentSamplesOut,
+    validate_channel_config,
     SheetCreateRequest,
     SheetListOut,
     SheetOut,
@@ -54,6 +59,7 @@ from app.schemas.scada import (
 from app.services import historian
 from db.models.profile import Profile
 from db.models.scada import (
+    ScadaChannel,
     ScadaPerspective,
     ScadaSample,
     ScadaSheet,
@@ -462,6 +468,119 @@ async def delete_stream(
     await db.delete(stream)
     await db.flush()
     return {"deleted": str(stream_id)}
+
+
+# ---------------------------------------------------------------------------
+# Channels — the TV-style registry (number + nickname + one source). Layout
+# panels reference channels by id; sources are defined once, on halaman
+# Channel. Viewing needs scada:view; managing needs scada:manage.
+# ---------------------------------------------------------------------------
+
+
+def _channel_dict(c: ScadaChannel) -> dict:
+    return {
+        "id": str(c.id),
+        "number": c.number,
+        "name": c.name,
+        "kind": c.kind,
+        "config": c.config,
+        "enabled": c.enabled,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+    }
+
+
+async def _check_channel_number_free(
+    db: AsyncSession, number: int, exclude_id: uuid.UUID | None = None
+) -> None:
+    query = select(ScadaChannel.id).where(ScadaChannel.number == number)
+    if exclude_id is not None:
+        query = query.where(ScadaChannel.id != exclude_id)
+    if (await db.execute(query)).first() is not None:
+        raise HTTPException(
+            status_code=409, detail=f"Nomor channel {number} sudah dipakai"
+        )
+
+
+@router.get("/channels", response_model=ChannelListOut)
+async def list_channels(
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    result = await db.execute(select(ScadaChannel).order_by(ScadaChannel.number))
+    return {"items": [_channel_dict(c) for c in result.scalars().all()]}
+
+
+@router.post("/channels", response_model=ChannelOut, status_code=201)
+async def create_channel(
+    body: ChannelCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    await _check_channel_number_free(db, body.number)
+    channel = ScadaChannel(
+        number=body.number,
+        name=body.name,
+        kind=body.kind,
+        config=body.config,
+        enabled=body.enabled,
+    )
+    db.add(channel)
+    await db.flush()
+    await db.refresh(channel)
+    return _channel_dict(channel)
+
+
+@router.patch("/channels/{channel_id}", response_model=ChannelOut)
+async def update_channel(
+    channel_id: uuid.UUID,
+    body: ChannelUpdateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    channel = await db.get(ScadaChannel, channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel tidak ditemukan")
+
+    if body.number is not None and body.number != channel.number:
+        await _check_channel_number_free(db, body.number, exclude_id=channel.id)
+        channel.number = body.number
+    if body.name is not None:
+        channel.name = body.name
+
+    # Config is validated against the EFFECTIVE kind (new kind if changing,
+    # else the current one) so a kind switch always carries a matching config.
+    effective_kind = body.kind or channel.kind
+    if body.kind is not None or body.config is not None:
+        raw = body.config if body.config is not None else channel.config
+        try:
+            channel.config = validate_channel_config(effective_kind, raw)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Config channel tidak valid: {exc}"
+            ) from exc
+        channel.kind = effective_kind
+
+    if body.enabled is not None:
+        channel.enabled = body.enabled
+
+    await db.flush()
+    await db.refresh(channel)
+    return _channel_dict(channel)
+
+
+@router.delete("/channels/{channel_id}", response_model=DeletedOut)
+async def delete_channel(
+    channel_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    channel = await db.get(ScadaChannel, channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel tidak ditemukan")
+    await db.delete(channel)
+    await db.flush()
+    return {"deleted": str(channel_id)}
 
 
 # ---------------------------------------------------------------------------

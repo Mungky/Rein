@@ -77,6 +77,15 @@ export interface WebPanelConfig {
   url: string;
   /** Visual zoom, 1 = 100%. Lets you tighten an HMI to fit the cell. */
   zoom?: number;
+  /** Shift the page inside the cell (CSS px, pre-zoom) — crops away the
+   *  embedded site's own navbar/sidebar without fullscreen. */
+  offset_x?: number;
+  offset_y?: number;
+}
+
+/** A layout cell that shows one TV-style channel (see Channel below). */
+export interface ChannelPanelConfig {
+  channel_id: string;
 }
 
 /** Discriminated union on `type`. Implemented: "video", "chart", "table",
@@ -91,7 +100,49 @@ export type Panel =
   | (PanelBase & { type: "alarm"; config: AlarmPanelConfig })
   | (PanelBase & { type: "wall"; config: WallPanelConfig })
   | (PanelBase & { type: "activity"; config: ActivityPanelConfig })
-  | (PanelBase & { type: "web"; config: WebPanelConfig });
+  | (PanelBase & { type: "web"; config: WebPanelConfig })
+  | (PanelBase & { type: "channel"; config: ChannelPanelConfig });
+
+/* ── Channels (TV-style registry) ── */
+
+export type ChannelKind =
+  | "video"
+  | "web"
+  | "chart"
+  | "table"
+  | "gauge"
+  | "bar"
+  | "alarm"
+  | "activity";
+
+/** Video channel source: a stream, optionally cropped to ONE mosaic cell
+ *  (row-major, 0-based; null = whole frame). */
+export interface ChannelVideoConfig {
+  stream_id: string;
+  cell: number | null;
+}
+
+/** One TV-style channel: number + nickname + one source definition. Defined
+ *  on halaman Channel; the Monitor layout references channels by id. */
+export interface Channel {
+  id: string;
+  number: number;
+  name: string;
+  kind: ChannelKind;
+  config:
+    | ChannelVideoConfig
+    | WebPanelConfig
+    | ChartPanelConfig
+    | TablePanelConfig
+    | GaugePanelConfig
+    | BarPanelConfig
+    | AlarmPanelConfig
+    | ActivityPanelConfig
+    | Record<string, unknown>;
+  enabled: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
 
 export type PanelType = Panel["type"];
 

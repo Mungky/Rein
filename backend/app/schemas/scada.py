@@ -158,6 +158,10 @@ class WebPanelConfig(BaseModel):
     # never javascript:/data: URLs.
     url: str = Field(min_length=8, max_length=2048, pattern=r"^https?://")
     zoom: float = Field(default=1.0, ge=0.25, le=3.0)
+    # Shift the page inside the cell (CSS px, pre-zoom) — crops away the
+    # embedded site's own navbar/sidebar without fullscreen.
+    offset_x: int = Field(default=0, ge=0, le=4000)
+    offset_y: int = Field(default=0, ge=0, le=4000)
 
 
 class WebPanel(BaseModel):
@@ -166,6 +170,19 @@ class WebPanel(BaseModel):
     title: str = Field(default="", max_length=120)
     grid: PanelGrid
     config: WebPanelConfig
+
+
+class ChannelPanelConfig(BaseModel):
+    # A layout cell that shows one TV-style channel (see ScadaChannel).
+    channel_id: uuid.UUID
+
+
+class ChannelPanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["channel"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid
+    config: ChannelPanelConfig
 
 
 Panel = Annotated[
@@ -179,6 +196,7 @@ Panel = Annotated[
         WallPanel,
         ActivityPanel,
         WebPanel,
+        ChannelPanel,
     ],
     Field(discriminator="type"),
 ]
@@ -224,6 +242,62 @@ class StreamUpdateRequest(BaseModel):
     mosaic_rows: int | None = Field(default=None, ge=1, le=6)
     mosaic_cols: int | None = Field(default=None, ge=1, le=6)
     channel_start: int | None = Field(default=None, ge=1, le=100000)
+
+
+# --- Channels (TV-style registry: number + nickname + one source) ----------
+
+ChannelKind = Literal[
+    "video", "web", "chart", "table", "gauge", "bar", "alarm", "activity"
+]
+
+
+class ChannelVideoConfig(BaseModel):
+    stream_id: uuid.UUID
+    # Crop ONE cell of the stream's mosaic (row-major, 0-based). None = whole
+    # frame. The mosaic grid itself lives on the stream (mosaic_rows/cols).
+    cell: int | None = Field(default=None, ge=0, le=35)
+
+
+# Which config model validates each channel kind — panel configs are reused so
+# a channel is exactly "a panel definition without a grid position".
+CHANNEL_CONFIG_MODELS: dict[str, type[BaseModel]] = {
+    "video": ChannelVideoConfig,
+    "web": WebPanelConfig,
+    "chart": ChartPanelConfig,
+    "table": TablePanelConfig,
+    "gauge": GaugePanelConfig,
+    "bar": BarPanelConfig,
+    "alarm": AlarmPanelConfig,
+    "activity": ActivityPanelConfig,
+}
+
+
+def validate_channel_config(kind: str, config: dict) -> dict:
+    """Validate + normalize a channel config for its kind (raises ValueError)."""
+    model = CHANNEL_CONFIG_MODELS[kind]
+    return model.model_validate(config).model_dump(mode="json")
+
+
+class ChannelCreateRequest(BaseModel):
+    number: int = Field(ge=1, le=100000)
+    name: str = Field(min_length=1, max_length=120)
+    kind: ChannelKind
+    config: dict = Field(default_factory=dict)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _check_config(self) -> "ChannelCreateRequest":
+        self.config = validate_channel_config(self.kind, self.config)
+        return self
+
+
+class ChannelUpdateRequest(BaseModel):
+    number: int | None = Field(default=None, ge=1, le=100000)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    kind: ChannelKind | None = None
+    # Validated in the router against the EFFECTIVE kind (new or existing).
+    config: dict | None = None
+    enabled: bool | None = None
 
 
 class SiteCreateRequest(BaseModel):
@@ -380,6 +454,21 @@ class StreamOut(BaseModel):
 
 class StreamListOut(BaseModel):
     items: list[StreamOut]
+
+
+class ChannelOut(BaseModel):
+    id: str
+    number: int
+    name: str
+    kind: str
+    config: dict
+    enabled: bool
+    created_at: str | None
+    updated_at: str | None
+
+
+class ChannelListOut(BaseModel):
+    items: list[ChannelOut]
 
 
 class SiteOut(BaseModel):

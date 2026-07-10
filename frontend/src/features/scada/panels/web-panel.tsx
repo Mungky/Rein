@@ -16,6 +16,8 @@ function clamp(v: number, lo: number, hi: number) {
 
 export function WebPanel({ config }: { config: WebPanelConfig }) {
   const zoom = clamp(config.zoom ?? 1, 0.25, 3);
+  const ox = clamp(config.offset_x ?? 0, 0, 4000);
+  const oy = clamp(config.offset_y ?? 0, 0, 4000);
   const [nonce, setNonce] = useState(0);
   const url = /^https?:\/\//i.test(config.url) ? config.url : null;
 
@@ -47,9 +49,11 @@ export function WebPanel({ config }: { config: WebPanelConfig }) {
         title={url}
         className="absolute left-0 top-0 border-0"
         style={{
-          width: `${100 / zoom}%`,
-          height: `${100 / zoom}%`,
-          transform: `scale(${zoom})`,
+          // Oversize by the offset, then shift pre-scale — offsets crop away
+          // the embedded site's own chrome (navbar/sidebar).
+          width: `calc(${100 / zoom}% + ${ox}px)`,
+          height: `calc(${100 / zoom}% + ${oy}px)`,
+          transform: `scale(${zoom}) translate(-${ox}px, -${oy}px)`,
           transformOrigin: "top left",
         }}
         // Enough for a live HMI session (scripts + login cookies + forms),
