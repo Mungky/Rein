@@ -1,46 +1,102 @@
 "use client";
 
-/** Halaman Channel — the TV-style registry. Every channel (number + nickname
- *  + one source) is defined here, once; the Monitor layouts just reference
- *  them. Also hosts the HLS stream-source manager (start-scada updates those
- *  rows, so they stay a separate, admin-managed list). */
+/** Halaman Channel — OBS-style three sections:
+ *  [ Daftar Channel | Preview channel terpilih | Sources ]
+ *  Channels are the TV-style registry (number + nickname + one source);
+ *  Sources shows every underlying source (HLS stream / URL) and which
+ *  channel numbers use it. */
 
-import { useState } from "react";
-import { Pencil, Plus, Radio, Trash2, Tv } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  Eye,
+  Globe,
+  Pencil,
+  Plus,
+  Radio,
+  RefreshCw,
+  Trash2,
+  Tv,
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
 import { useScadaStore } from "./store";
 import { ChannelForm, CHANNEL_KINDS, channelKindLabel } from "./channel-form";
+import { renderChannelContent } from "./panels/panel-registry";
 import type { Channel, ChannelVideoConfig, WebPanelConfig } from "./types";
 
 export function ChannelsView({ canManage }: { canManage: boolean }) {
   const store = useScadaStore();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const sorted = [...store.channels].sort((a, b) => a.number - b.number);
+  const sorted = useMemo(
+    () => [...store.channels].sort((a, b) => a.number - b.number),
+    [store.channels]
+  );
+  const selected =
+    sorted.find((c) => c.id === selectedId) ?? sorted[0] ?? null;
 
-  function sourceSummary(c: Channel): string {
-    if (c.kind === "video") {
-      const cfg = c.config as ChannelVideoConfig;
-      const stream = store.streams.find((s) => s.id === cfg.stream_id);
-      const base = stream?.name ?? "stream terhapus";
-      return cfg.cell != null ? `${base} · kotak ${cfg.cell + 1}` : base;
+  // ── Sources: every HLS stream + every distinct URL, with usage map ──
+  const sources = useMemo(() => {
+    const rows: {
+      key: string;
+      label: string;
+      detail: string;
+      type: "HLS Stream" | "URL";
+      usedBy: number[];
+    }[] = [];
+    for (const s of store.streams) {
+      rows.push({
+        key: `stream:${s.id}`,
+        label: s.name,
+        detail: s.hls_url,
+        type: "HLS Stream",
+        usedBy: store.channels
+          .filter(
+            (c) =>
+              c.kind === "video" &&
+              (c.config as ChannelVideoConfig).stream_id === s.id
+          )
+          .map((c) => c.number)
+          .sort((a, b) => a - b),
+      });
     }
-    if (c.kind === "web") {
+    const byUrl = new Map<string, number[]>();
+    for (const c of store.channels) {
+      if (c.kind !== "web") continue;
+      const url = (c.config as WebPanelConfig).url;
+      byUrl.set(url, [...(byUrl.get(url) ?? []), c.number]);
+    }
+    for (const [url, numbers] of byUrl) {
+      let label = url;
       try {
-        return new URL((c.config as WebPanelConfig).url).hostname;
+        label = new URL(url).hostname;
       } catch {
-        return "alamat tidak valid";
+        /* keep raw */
       }
+      rows.push({
+        key: `url:${url}`,
+        label,
+        detail: url,
+        type: "URL",
+        usedBy: numbers.sort((a, b) => a - b),
+      });
     }
-    if (c.kind === "gauge") {
-      const tagId = (c.config as { tag_id?: string }).tag_id;
-      return store.tags.find((t) => t.id === tagId)?.label ?? "1 tag";
+    return rows;
+  }, [store.streams, store.channels]);
+
+  async function refresh() {
+    setRefreshing(true);
+    try {
+      await Promise.all([store.refreshChannels(), store.refreshStreams()]);
+      toast.success("Daftar channel disegarkan");
+    } catch {
+      toast.error("Gagal menyegarkan");
+    } finally {
+      setRefreshing(false);
     }
-    if (c.kind === "activity") return "pengguna online";
-    const n = (c.config as { tag_ids?: string[] }).tag_ids?.length ?? 0;
-    return `${n} tag`;
   }
 
   async function remove(c: Channel) {
@@ -48,6 +104,8 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
     try {
       await scadaApi.deleteChannel(c.id);
       toast.success(`Channel ${c.number} dihapus`);
+      if (selectedId === c.id) setSelectedId(null);
+      if (editingId === c.id) setEditingId(null);
       await store.refreshChannels();
     } catch {
       toast.error("Gagal menghapus channel");
@@ -59,130 +117,148 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
     setEditingId(null);
   }
 
+  const editingChannel =
+    editingId !== null && editingId !== "new"
+      ? sorted.find((c) => c.id === editingId) ?? null
+      : null;
+
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto bg-bg-sidebar">
-      <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 py-5 md:px-6">
-        {/* Header */}
-        <div className="flex items-center gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-[var(--r-lg)] bg-gradient-to-br from-primary to-primary-hover text-white">
-            <Tv className="size-5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-[16px] font-bold text-text leading-tight">
-              Daftar Channel
-            </h2>
-            <p className="text-[12px] text-text-muted">
-              Seperti channel TV: tiap nomor = satu sumber (stream, HMI web,
-              atau data sensor). Susun tampilannya di tab Monitor.
-            </p>
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
+      {/* ── 1. Daftar Channel ── */}
+      <section className="flex min-h-0 shrink-0 flex-col border-b border-border-soft bg-bg lg:w-[320px] lg:border-b-0 lg:border-r">
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-soft px-3">
+          <Tv className="size-4 shrink-0 text-primary" />
+          <span className="flex-1 text-[13px] font-bold text-text">
+            Daftar Channel
+            <span className="ml-1.5 text-[11px] font-semibold text-text-muted">
+              {sorted.length}
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={refreshing}
+            className="btn btn-ghost btn-icon btn-sm"
+            title="Segarkan daftar channel"
+          >
+            <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+          </button>
           {canManage && (
             <button
               type="button"
-              onClick={() => store.setShowManageStreams(true)}
-              className="btn btn-ghost btn-sm gap-1.5"
-              title="Sumber video HLS dari MediaMTX (alamatnya di-update otomatis oleh start-scada)"
+              onClick={() => setEditingId("new")}
+              className="btn btn-secondary btn-sm gap-1"
+              title="Tambah channel"
             >
-              <Radio className="size-3.5" />
-              <span className="hidden sm:inline">Sumber Stream (HLS)</span>
+              <Plus className="size-3.5" /> Baru
             </button>
           )}
         </div>
-
-        {/* Channel list */}
-        {sorted.length === 0 && editingId === null && (
-          <div className="flex flex-col items-center gap-2 rounded-[var(--r-lg)] border border-border-soft bg-bg py-10 text-center">
-            <Tv className="size-8 text-text-light" />
-            <p className="text-[13px] font-semibold text-text">Belum ada channel</p>
-            <p className="text-[12px] text-text-muted">
-              {canManage
-                ? "Buat channel pertama — misalnya CH 1 untuk stream SCADA utama."
-                : "Hubungi admin untuk menyiapkan daftar channel."}
-            </p>
-          </div>
-        )}
-
-        {sorted.map((c) => {
-          const kindMeta = CHANNEL_KINDS.find((k) => k.kind === c.kind);
-          const KindIcon = kindMeta?.icon ?? Tv;
-          return (
-            <div key={c.id} className="flex flex-col gap-3">
-              <div
-                className={cn(
-                  "flex items-center gap-3 rounded-[var(--r-lg)] border bg-bg px-3.5 py-3",
-                  editingId === c.id
-                    ? "border-primary/50 ring-1 ring-primary/30"
-                    : "border-border-soft"
-                )}
-              >
-                <span
-                  className={cn(
-                    "flex h-8 min-w-14 shrink-0 items-center justify-center rounded-[var(--r)] px-2 text-[13px] font-bold tabular-nums",
-                    c.enabled
-                      ? "bg-primary/10 text-primary"
-                      : "bg-bg-sidebar text-text-light"
-                  )}
-                >
-                  CH {c.number}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13.5px] font-semibold text-text">
-                    {c.name}
-                    {!c.enabled && (
-                      <span className="ml-2 text-[10.5px] font-semibold text-text-light">
-                        NONAKTIF
-                      </span>
+        <div className="max-h-[40vh] min-h-0 flex-1 overflow-y-auto p-2 lg:max-h-none">
+          {sorted.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <Tv className="size-7 text-text-light" />
+              <p className="text-[12px] text-text-muted">
+                {canManage
+                  ? "Belum ada channel — klik “Baru”."
+                  : "Belum ada channel. Hubungi admin."}
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {sorted.map((c) => {
+                const KindIcon =
+                  CHANNEL_KINDS.find((k) => k.kind === c.kind)?.icon ?? Tv;
+                const isSelected = selected?.id === c.id;
+                return (
+                  <div
+                    key={c.id}
+                    className={cn(
+                      "group flex cursor-pointer items-center gap-2 rounded-[var(--r)] border px-2 py-1.5",
+                      isSelected
+                        ? "border-primary/50 bg-primary/5"
+                        : "border-transparent hover:bg-bg-hover"
+                    )}
+                    onClick={() => {
+                      setSelectedId(c.id);
+                      if (editingId === "new") setEditingId(null);
+                    }}
+                  >
+                    <span
+                      className={cn(
+                        "flex h-6 min-w-11 shrink-0 items-center justify-center rounded-[var(--r-sm)] px-1 text-[11px] font-bold tabular-nums",
+                        c.enabled
+                          ? "bg-primary/10 text-primary"
+                          : "bg-bg-sidebar text-text-light"
+                      )}
+                    >
+                      CH {c.number}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-text">
+                      {c.name}
+                    </span>
+                    <KindIcon className="size-3 shrink-0 text-text-light" />
+                    {canManage && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedId(c.id);
+                            setEditingId(editingId === c.id ? null : c.id);
+                          }}
+                          className={cn(
+                            "hidden size-6 shrink-0 items-center justify-center rounded-[var(--r-xs)] text-text-light hover:bg-bg-hover hover:text-text group-hover:flex",
+                            editingId === c.id && "flex text-primary"
+                          )}
+                          title="Ubah"
+                        >
+                          <Pencil className="size-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void remove(c);
+                          }}
+                          className="hidden size-6 shrink-0 items-center justify-center rounded-[var(--r-xs)] text-text-light hover:bg-red/10 hover:text-red group-hover:flex"
+                          title="Hapus"
+                        >
+                          <Trash2 className="size-3" />
+                        </button>
+                      </>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 text-[11.5px] text-text-muted">
-                    <KindIcon className="size-3 shrink-0" />
-                    <span className="shrink-0">{channelKindLabel(c.kind)}</span>
-                    <span className="text-text-light">·</span>
-                    <span className="min-w-0 truncate">{sourceSummary(c)}</span>
-                  </div>
-                </div>
-                {canManage && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        editingId === c.id ? setEditingId(null) : setEditingId(c.id)
-                      }
-                      className={cn(
-                        "btn btn-ghost btn-icon btn-sm",
-                        editingId === c.id && "text-primary"
-                      )}
-                      title={editingId === c.id ? "Tutup" : "Ubah"}
-                    >
-                      <Pencil className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => remove(c)}
-                      className="btn btn-ghost btn-icon btn-sm text-red"
-                      title="Hapus"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                  </>
-                )}
-              </div>
-              {editingId === c.id && (
-                <ChannelForm
-                  initial={c}
-                  channels={store.channels}
-                  streams={store.streams}
-                  tags={store.tags}
-                  onSaved={onSaved}
-                  onCancel={() => setEditingId(null)}
-                />
-              )}
+                );
+              })}
             </div>
-          );
-        })}
+          )}
+        </div>
+      </section>
 
-        {canManage &&
-          (editingId === "new" ? (
+      {/* ── 2. Preview / form ── */}
+      <section className="flex min-h-0 flex-1 flex-col border-b border-border-soft bg-bg-sidebar lg:border-b-0">
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-soft bg-bg px-3">
+          <Eye className="size-4 shrink-0 text-primary" />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-text">
+            {editingId === "new"
+              ? "Channel Baru"
+              : selected
+                ? `Preview — CH ${selected.number} · ${selected.name}`
+                : "Preview"}
+          </span>
+          {selected && editingId === null && canManage && (
+            <button
+              type="button"
+              onClick={() => setEditingId(selected.id)}
+              className="btn btn-ghost btn-sm gap-1.5"
+            >
+              <Pencil className="size-3" /> Ubah
+            </button>
+          )}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          {editingId === "new" ? (
             <ChannelForm
               initial={null}
               channels={store.channels}
@@ -191,16 +267,116 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
               onSaved={onSaved}
               onCancel={() => setEditingId(null)}
             />
-          ) : editingId === null ? (
+          ) : editingChannel ? (
+            <ChannelForm
+              initial={editingChannel}
+              channels={store.channels}
+              streams={store.streams}
+              tags={store.tags}
+              onSaved={onSaved}
+              onCancel={() => setEditingId(null)}
+            />
+          ) : selected ? (
+            <div className="flex flex-col gap-3">
+              <div className="aspect-video w-full overflow-hidden rounded-[var(--r-lg)] border border-border bg-black shadow-[var(--shadow-sm)]">
+                {renderChannelContent(selected, store.streams, store.tags)}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-text-muted">
+                <span>
+                  Jenis:{" "}
+                  <span className="font-semibold text-text">
+                    {channelKindLabel(selected.kind)}
+                  </span>
+                </span>
+                <span>
+                  Status:{" "}
+                  <span
+                    className={cn(
+                      "font-semibold",
+                      selected.enabled ? "text-green-600" : "text-text-light"
+                    )}
+                  >
+                    {selected.enabled ? "Aktif" : "Nonaktif"}
+                  </span>
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+              <Eye className="size-7 text-text-light" />
+              <p className="text-[12px] text-text-muted">
+                Pilih channel di kiri untuk melihat preview.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* ── 3. Sources ── */}
+      <section className="flex min-h-0 shrink-0 flex-col bg-bg lg:w-[300px] lg:border-l lg:border-border-soft">
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-soft px-3">
+          <Radio className="size-4 shrink-0 text-primary" />
+          <span className="flex-1 text-[13px] font-bold text-text">Sources</span>
+          {canManage && (
             <button
               type="button"
-              onClick={() => setEditingId("new")}
-              className="btn btn-secondary btn-sm self-start gap-1.5"
+              onClick={() => store.setShowManageStreams(true)}
+              className="btn btn-ghost btn-sm gap-1.5"
+              title="Kelola sumber video HLS (alamat di-update otomatis oleh start-scada)"
             >
-              <Plus className="size-3.5" /> Tambah Channel
+              <Radio className="size-3" /> HLS
             </button>
-          ) : null)}
-      </div>
+          )}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {sources.length === 0 ? (
+            <p className="px-2 py-6 text-center text-[12px] text-text-muted">
+              Belum ada source — tambah stream HLS atau buat channel web.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {sources.map((s) => (
+                <div
+                  key={s.key}
+                  className="rounded-[var(--r)] border border-border-soft px-2.5 py-2"
+                >
+                  <div className="flex items-center gap-1.5">
+                    {s.type === "HLS Stream" ? (
+                      <Radio className="size-3 shrink-0 text-primary" />
+                    ) : (
+                      <Globe className="size-3 shrink-0 text-primary" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-text">
+                      {s.label}
+                    </span>
+                    <span className="shrink-0 rounded-full bg-bg-sidebar px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-text-muted">
+                      {s.type}
+                    </span>
+                  </div>
+                  <div
+                    className="mt-0.5 truncate text-[10.5px] font-mono text-text-light"
+                    title={s.detail}
+                  >
+                    {s.detail}
+                  </div>
+                  <div className="mt-1 text-[11px] text-text-muted">
+                    {s.usedBy.length === 0 ? (
+                      <span className="text-text-light">Belum dipakai channel</span>
+                    ) : (
+                      <>
+                        Dipakai:{" "}
+                        <span className="font-semibold text-text">
+                          {s.usedBy.map((n) => `CH ${n}`).join(", ")}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

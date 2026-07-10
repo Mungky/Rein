@@ -58,9 +58,14 @@ export function WebPanel({ config }: { config: WebPanelConfig }) {
         }}
         // Enough for a live HMI session (scripts + login cookies + forms),
         // but no popups and no navigating REIN itself away.
+        //
+        // Fullscreen permission is deliberately ABSENT: with it, the embedded
+        // site's own fullscreen button would take over the entire monitor.
+        // Without it, well-behaved sites fall back to "fill the viewport" —
+        // and inside an iframe their viewport IS this panel, so their
+        // fullscreen stays contained to the cell (OBS-style layouting).
         sandbox="allow-scripts allow-same-origin allow-forms"
         referrerPolicy="no-referrer"
-        allow="fullscreen"
       />
 
       {/* Reload — appears on hover so it never covers the HMI while watching */}
