@@ -141,11 +141,27 @@ export type ChannelKind =
   | "alarm"
   | "activity";
 
-/** Video channel source: a stream, optionally cropped to ONE mosaic cell
- *  (row-major, 0-based; null = whole frame). */
+/** Manual crop region in SOURCE pixels (relative to src_w×src_h). */
+export interface CropRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Video channel source: a stream, optionally cropped — either a manual free
+ *  crop (preferred; user-drawn region, 1 OBS mosaic → N channels) or the
+ *  legacy mosaic cell index. Neither = whole frame. */
 export interface ChannelVideoConfig {
   stream_id: string;
-  cell: number | null;
+  /** LEGACY mosaic cell (row-major, 0-based). */
+  cell?: number | null;
+  crop?: CropRect | null;
+  /** Reference resolution the crop was drawn against (auto-detected). */
+  src_w?: number | null;
+  src_h?: number | null;
+  view_w?: number | null;
+  view_h?: number | null;
 }
 
 /** One TV-style channel: number + nickname + one source definition. Defined

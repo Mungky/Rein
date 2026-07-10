@@ -1,42 +1,46 @@
 "use client";
 
-/** One cropped cell of a mosaic stream — the renderer behind a "video" channel
- *  whose config points at a specific mosaic cell. Same technique as the Video
- *  Wall (decode once, canvas-crop), but for a single cell filling the panel. */
+/** One cropped region of a stream — the renderer behind a "video" channel.
+ *  Supports the manual free crop (user-drawn rect in source pixels, scaled by
+ *  the reference resolution) and the legacy mosaic-cell index. Decoding is
+ *  SHARED through the stream pool: nine crops of one OBS mosaic = one decode. */
 
 import { useEffect, useRef } from "react";
-import { MonitorPlay } from "lucide-react";
-import type { Stream } from "../types";
+import type { ChannelVideoConfig, Stream } from "../types";
 import { useScadaStore } from "../store";
-import { attachHls, type HlsHandle } from "./hls-attach";
+import { acquireStreamVideo } from "../stream-pool";
+import { OrbitFallback } from "./orbit-fallback";
 
 export function CroppedVideoPanel({
   stream,
-  cell,
+  cfg,
 }: {
   stream: Stream | undefined;
-  cell: number;
+  cfg: ChannelVideoConfig;
 }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reconnectNonce = useScadaStore((s) => s.streamReconnectNonce);
 
-  const attachKey = stream
-    ? `${stream.id}:${stream.hls_url}:${stream.read_user}:${stream.read_pass}`
-    : "";
-
   useEffect(() => {
-    const video = videoRef.current;
-    if (!stream || !video) return;
-    const handle: HlsHandle = attachHls(video, stream);
-    return () => handle.destroy();
+    if (!stream) return;
+    const { video, release } = acquireStreamVideo(stream, reconnectNonce);
+    videoRef.current = video;
+    return () => {
+      videoRef.current = null;
+      release();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachKey, reconnectNonce]);
+  }, [
+    stream?.id,
+    stream?.hls_url,
+    stream?.read_user,
+    stream?.read_pass,
+    reconnectNonce,
+  ]);
 
   useEffect(() => {
     if (!stream) return;
-    const R = Math.max(1, stream.mosaic_rows);
-    const C = Math.max(1, stream.mosaic_cols);
     let raf = 0;
     const draw = () => {
       const video = videoRef.current;
@@ -53,11 +57,28 @@ export function CroppedVideoPanel({
           }
           const ctx = canvas.getContext("2d");
           if (ctx) {
-            const sw = vw / C;
-            const sh = vh / R;
-            const sx = (cell % C) * sw;
-            const sy = Math.floor(cell / C) * sh;
-            // contain — show the whole camera cell, letterboxed
+            // Source region: manual crop (scaled from its reference
+            // resolution) > legacy mosaic cell > whole frame.
+            let sx = 0;
+            let sy = 0;
+            let sw = vw;
+            let sh = vh;
+            if (cfg.crop) {
+              const fx = vw / (cfg.src_w ?? vw);
+              const fy = vh / (cfg.src_h ?? vh);
+              sx = cfg.crop.x * fx;
+              sy = cfg.crop.y * fy;
+              sw = Math.max(1, cfg.crop.w * fx);
+              sh = Math.max(1, cfg.crop.h * fy);
+            } else if (cfg.cell !== null && cfg.cell !== undefined) {
+              const R = Math.max(1, stream.mosaic_rows);
+              const C = Math.max(1, stream.mosaic_cols);
+              sw = vw / C;
+              sh = vh / R;
+              sx = (cfg.cell % C) * sw;
+              sy = Math.floor(cfg.cell / C) * sh;
+            }
+            // contain — show the whole region, letterboxed
             const scale = Math.min(cw / sw, ch / sh);
             const dw = sw * scale;
             const dh = sh * scale;
@@ -71,25 +92,16 @@ export function CroppedVideoPanel({
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [stream, cell]);
+  }, [stream, cfg.crop, cfg.src_w, cfg.src_h, cfg.cell]);
 
   if (!stream) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-black text-white/40">
-        <MonitorPlay className="size-6" />
-        <span className="text-[12px]">Stream tidak ditemukan</span>
-      </div>
+      <OrbitFallback kind="error" reason="Sumber stream tidak ditemukan" />
     );
   }
 
   return (
     <div className="relative h-full w-full bg-black">
-      <div
-        aria-hidden
-        style={{ position: "absolute", width: 0, height: 0, overflow: "hidden", opacity: 0 }}
-      >
-        <video ref={videoRef} muted playsInline />
-      </div>
       <canvas ref={canvasRef} className="block h-full w-full" />
     </div>
   );

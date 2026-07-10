@@ -312,11 +312,26 @@ ChannelKind = Literal[
 ]
 
 
+class CropRect(BaseModel):
+    """Manual crop region in SOURCE pixels (relative to src_w×src_h)."""
+
+    x: float = Field(ge=0, le=7680)
+    y: float = Field(ge=0, le=4320)
+    w: float = Field(ge=8, le=7680)
+    h: float = Field(ge=8, le=4320)
+
+
 class ChannelVideoConfig(ScreenSize):
     stream_id: uuid.UUID
-    # Crop ONE cell of the stream's mosaic (row-major, 0-based). None = whole
-    # frame. The mosaic grid itself lives on the stream (mosaic_rows/cols).
+    # LEGACY: crop one cell of the stream's mosaic grid (row-major, 0-based).
     cell: int | None = Field(default=None, ge=0, le=35)
+    # Manual free crop (preferred): user-drawn region of the source frame —
+    # one OBS mosaic stream becomes N independent channels, no grid assumed.
+    # Defined against the reference resolution src_w×src_h (auto-detected in
+    # the editor) so it survives source resolution changes.
+    crop: CropRect | None = None
+    src_w: int | None = Field(default=None, ge=16, le=7680)
+    src_h: int | None = Field(default=None, ge=16, le=4320)
 
 
 # Which config model validates each channel kind — panel configs are reused so

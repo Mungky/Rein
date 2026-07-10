@@ -68,8 +68,9 @@ function renderChannelSource(
           />
         );
       }
-      if (cfg.cell !== null && cfg.cell !== undefined) {
-        return <CroppedVideoPanel stream={stream} cell={cfg.cell} />;
+      // Manual free crop or legacy mosaic cell → shared-decoder crop renderer
+      if (cfg.crop || (cfg.cell !== null && cfg.cell !== undefined)) {
+        return <CroppedVideoPanel stream={stream} cfg={cfg} />;
       }
       return (
         <VideoPanel

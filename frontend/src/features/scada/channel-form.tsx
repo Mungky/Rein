@@ -25,11 +25,13 @@ import type {
   ChannelKind,
   ChannelVideoConfig,
   ChartRange,
+  CropRect,
   GaugePanelConfig,
   Stream,
   Tag,
   WebPanelConfig,
 } from "./types";
+import { CropEditor } from "./crop-editor";
 
 export const CHANNEL_KINDS: {
   kind: ChannelKind;
@@ -109,7 +111,11 @@ export function ChannelForm({
   const [streamId, setStreamId] = useState(
     vidCfg?.stream_id ?? enabledStreams[0]?.id ?? ""
   );
-  const [cell, setCell] = useState<number | null>(vidCfg?.cell ?? null);
+  // Manual free crop (null = whole frame); legacy `cell` is preserved on save
+  // only while no crop is drawn.
+  const [crop, setCrop] = useState<CropRect | null>(vidCfg?.crop ?? null);
+  const [srcW, setSrcW] = useState<number | null>(vidCfg?.src_w ?? null);
+  const [srcH, setSrcH] = useState<number | null>(vidCfg?.src_h ?? null);
 
   const webCfg = init?.kind === "web" ? (init.config as WebPanelConfig) : null;
   const [url, setUrl] = useState(webCfg?.url ?? "");
@@ -146,9 +152,6 @@ export function ChannelForm({
   );
 
   const selectedStream = enabledStreams.find((s) => s.id === streamId);
-  const mosaicCells = selectedStream
-    ? Math.max(1, selectedStream.mosaic_rows) * Math.max(1, selectedStream.mosaic_cols)
-    : 1;
 
   const isTagKind =
     kind === "chart" || kind === "table" || kind === "bar" || kind === "alarm";
@@ -190,7 +193,14 @@ export function ChannelForm({
     };
     switch (kind) {
       case "video":
-        return { ...screen, stream_id: streamId, cell };
+        return {
+          ...screen,
+          stream_id: streamId,
+          cell: crop ? null : vidCfg?.cell ?? null,
+          crop,
+          src_w: srcW,
+          src_h: srcH,
+        };
       case "web":
         return {
           ...screen,
@@ -225,8 +235,9 @@ export function ChannelForm({
 
   // Live draft → the preview above updates as you type (WYSIWYG)
   const draftKey = JSON.stringify([
-    number, name, kind, enabled, streamId, cell, url, zoom, offsetX, offsetY,
-    viewW, viewH, tagIds, range, gaugeTagId, warning, critical, direction,
+    number, name, kind, enabled, streamId, crop, srcW, srcH, url, zoom,
+    offsetX, offsetY, viewW, viewH, tagIds, range, gaugeTagId, warning,
+    critical, direction,
   ]);
   useEffect(() => {
     onDraftChange?.({
@@ -344,7 +355,7 @@ export function ChannelForm({
       {/* ── Kind-specific source fields ── */}
 
       {kind === "video" && (
-        <div className="grid grid-cols-2 gap-3">
+        <>
           <div>
             <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
               Sumber Stream <span className="text-red">*</span>
@@ -359,7 +370,9 @@ export function ChannelForm({
                 value={streamId}
                 onChange={(e) => {
                   setStreamId(e.target.value);
-                  setCell(null);
+                  setCrop(null);
+                  setSrcW(null);
+                  setSrcH(null);
                 }}
               >
                 {enabledStreams.map((s) => (
@@ -370,32 +383,18 @@ export function ChannelForm({
               </select>
             )}
           </div>
-          <div>
-            <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-              Bagian Mosaic
-            </label>
-            <select
-              className="field-select cursor-pointer"
-              value={cell === null ? "" : cell}
-              onChange={(e) =>
-                setCell(e.target.value === "" ? null : Number(e.target.value))
-              }
-              disabled={mosaicCells <= 1}
-            >
-              <option value="">Utuh (seluruh layar)</option>
-              {Array.from({ length: mosaicCells }).map((_, i) => (
-                <option key={i} value={i}>
-                  Kotak {i + 1}
-                </option>
-              ))}
-            </select>
-            {mosaicCells <= 1 && (
-              <p className="mt-1 text-[11px] text-text-light">
-                Stream ini 1×1 — tidak ada potongan.
-              </p>
-            )}
-          </div>
-        </div>
+          {selectedStream && (
+            <CropEditor
+              stream={selectedStream}
+              crop={crop}
+              onChange={(c, w, h) => {
+                setCrop(c);
+                setSrcW(w);
+                setSrcH(h);
+              }}
+            />
+          )}
+        </>
       )}
 
       {kind === "web" && (
