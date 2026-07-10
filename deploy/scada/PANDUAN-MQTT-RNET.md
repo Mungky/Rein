@@ -74,6 +74,13 @@ Pakai layanan broker siap pakai, mis. **HiveMQ Cloud** atau **EMQX Cloud**
 
 ### Opsi 2 — Broker sendiri (Mosquitto) di PC server Anda
 
+> **Cara TERMUDAH (baru):** jalankan `install.ps1` (folder `deploy/scada/`)
+> dan jawab **y** saat ditanya *"Pasang broker MQTT (Mosquitto)?"*. Installer
+> mengunduh Mosquitto resmi, membuat akun + `mosquitto.conf`, membuka port
+> 1883, dan broker ikut **nyala/mati lewat `start-scada.bat` /
+> `stop-scada.bat`** bersama stream — satu saklar untuk semuanya. Langkah
+> manual di bawah hanya untuk yang tidak memakai installer.
+
 Kalau ingin semuanya di dalam kendali sendiri (dan V-Box berada di jaringan yang
 bisa menjangkau server ini):
 

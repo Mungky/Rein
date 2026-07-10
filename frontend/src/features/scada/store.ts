@@ -8,9 +8,10 @@
 import { create } from "zustand";
 import { scadaApi } from "@/lib/api/scada";
 import type {
+  CanvasSize,
   Channel,
   Panel,
-  PanelGridPos,
+  PanelRect,
   Perspective,
   Sheet,
   Site,
@@ -18,6 +19,7 @@ import type {
   Tag,
   WorkbenchColumn,
 } from "./types";
+import { DEFAULT_CANVAS } from "./types";
 
 const LAST_PERSPECTIVE_KEY = "scada:last-perspective";
 const LAST_SHEET_KEY = "scada:last-sheet";
@@ -60,6 +62,8 @@ interface ScadaState {
 
   editMode: boolean;
   draftPanels: Panel[] | null;
+  /** Canvas resolution being edited (layout v2 — OBS-style fixed canvas). */
+  draftCanvas: CanvasSize | null;
 
   showAddPanel: boolean;
   showManageStreams: boolean;
@@ -69,7 +73,12 @@ interface ScadaState {
   selectPerspective: (id: string) => void;
   enterEdit: () => void;
   cancelEdit: () => void;
-  updateGrid: (positions: { id: string; grid: PanelGridPos }[]) => void;
+  /** Move/resize one draft panel (canvas px). */
+  updatePanelRect: (id: string, rect: PanelRect) => void;
+  /** Replace every draft panel's rect at once (quick-split presets). */
+  applyPresetRects: (rects: PanelRect[]) => void;
+  /** Change the draft canvas resolution, scaling rects proportionally. */
+  setDraftCanvas: (canvas: CanvasSize) => void;
   addPanel: (panel: Panel) => void;
   removePanel: (panelId: string) => void;
   /** Merge a patch into one draft panel — used for in-place editing (e.g.
@@ -165,6 +174,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
 
   editMode: false,
   draftPanels: null,
+  draftCanvas: null,
 
   showAddPanel: false,
   showManageStreams: false,
@@ -228,24 +238,58 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     const { perspectives, activePerspectiveId } = get();
     const active = perspectives.find((p) => p.id === activePerspectiveId);
     if (!active) return;
+    // v2 only ("mulai bersih"): legacy grid-only panels are dropped from the
+    // draft — saving writes a clean fixed-canvas layout.
+    const panels = structuredClone(active.layout.panels).filter((p) => p.rect);
     set({
       editMode: true,
-      draftPanels: structuredClone(active.layout.panels),
+      draftPanels: panels,
+      draftCanvas: active.layout.canvas ?? { ...DEFAULT_CANVAS },
       maximizedPanelId: null,
     });
   },
 
-  cancelEdit: () => set({ editMode: false, draftPanels: null }),
+  cancelEdit: () => set({ editMode: false, draftPanels: null, draftCanvas: null }),
 
-  updateGrid: (positions) => {
+  updatePanelRect: (id, rect) => {
     const { draftPanels } = get();
     if (!draftPanels) return;
-    const byId = new Map(positions.map((p) => [p.id, p.grid]));
     set({
-      draftPanels: draftPanels.map((panel) => {
-        const grid = byId.get(panel.id);
-        return grid ? { ...panel, grid } : panel;
-      }),
+      draftPanels: draftPanels.map((p) => (p.id === id ? { ...p, rect } : p)),
+    });
+  },
+
+  applyPresetRects: (rects) => {
+    const { draftPanels } = get();
+    if (!draftPanels) return;
+    set({
+      draftPanels: draftPanels.map((p, i) =>
+        rects[i] ? { ...p, rect: rects[i] } : p
+      ),
+    });
+  },
+
+  setDraftCanvas: (canvas) => {
+    const { draftCanvas, draftPanels } = get();
+    const prev = draftCanvas ?? DEFAULT_CANVAS;
+    const fx = canvas.w / prev.w;
+    const fy = canvas.h / prev.h;
+    set({
+      draftCanvas: canvas,
+      // Keep the layout proportionally identical on the new resolution.
+      draftPanels: (draftPanels ?? []).map((p) =>
+        p.rect
+          ? {
+              ...p,
+              rect: {
+                x: Math.round(p.rect.x * fx),
+                y: Math.round(p.rect.y * fy),
+                w: Math.round(p.rect.w * fx),
+                h: Math.round(p.rect.h * fy),
+              },
+            }
+          : p
+      ),
     });
   },
 
@@ -278,7 +322,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     const panels = active.layout.panels.map((p) =>
       p.id === panelId ? ({ ...p, ...patch } as Panel) : p
     );
-    const layout = { version: 1 as const, panels };
+    const layout = { ...active.layout, panels };
     // Optimistic — reflect the change instantly; a reload resyncs if the PATCH
     // below ever fails.
     set({
@@ -294,7 +338,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   },
 
   save: async () => {
-    const { activePerspectiveId, draftPanels, perspectives } = get();
+    const { activePerspectiveId, draftPanels, draftCanvas, perspectives } = get();
     if (!activePerspectiveId || !draftPanels) return;
     const active = perspectives.find((p) => p.id === activePerspectiveId);
     // The admin default is not the user's to overwrite — save forks it into
@@ -304,7 +348,11 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       return;
     }
     const updated = await scadaApi.updatePerspective(activePerspectiveId, {
-      layout: { version: 1, panels: draftPanels },
+      layout: {
+        version: 2,
+        canvas: draftCanvas ?? DEFAULT_CANVAS,
+        panels: draftPanels,
+      },
     });
     set({
       perspectives: perspectives.map((p) =>
@@ -312,15 +360,19 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       ),
       editMode: false,
       draftPanels: null,
+      draftCanvas: null,
     });
   },
 
   saveAs: async (name) => {
-    const { draftPanels, perspectives, activePerspectiveId } = get();
+    const { draftPanels, draftCanvas, perspectives, activePerspectiveId } = get();
     const active = perspectives.find((p) => p.id === activePerspectiveId);
-    const panels = draftPanels ?? active?.layout.panels ?? [];
+    const panels = (draftPanels ?? active?.layout.panels ?? []).filter(
+      (p) => p.rect
+    );
     const created = await scadaApi.createPerspective(name, {
-      version: 1,
+      version: 2,
+      canvas: draftCanvas ?? active?.layout.canvas ?? DEFAULT_CANVAS,
       panels,
     });
     window.localStorage.setItem(LAST_PERSPECTIVE_KEY, created.id);
@@ -329,12 +381,14 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       activePerspectiveId: created.id,
       editMode: false,
       draftPanels: null,
+      draftCanvas: null,
     });
   },
 
   newPage: async (name) => {
     const created = await scadaApi.createPerspective(name, {
-      version: 1,
+      version: 2,
+      canvas: { ...DEFAULT_CANVAS },
       panels: [],
     });
     window.localStorage.setItem(LAST_PERSPECTIVE_KEY, created.id);
@@ -343,6 +397,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       activePerspectiveId: created.id,
       editMode: true,
       draftPanels: [],
+      draftCanvas: { ...DEFAULT_CANVAS },
     });
   },
 
@@ -469,9 +524,22 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     const { activePerspectiveId, perspectives } = get();
     const active = perspectives.find((p) => p.id === activePerspectiveId);
     if (!active) throw new Error("Tidak ada perspective aktif");
-    const panels = [...active.layout.panels, panel];
+    const canvas = active.layout.canvas ?? DEFAULT_CANVAS;
+    const existing = active.layout.panels.filter((p) => p.rect);
+    // Cascade new panels at half-canvas size so they never hide each other.
+    const n = existing.length;
+    const placed: Panel = {
+      ...panel,
+      rect: panel.rect ?? {
+        x: Math.min(canvas.w / 2, 32 * (n % 10)),
+        y: Math.min(canvas.h / 2, 32 * (n % 10)),
+        w: Math.round(canvas.w / 2),
+        h: Math.round(canvas.h / 2),
+      },
+    };
+    const panels = [...existing, placed];
     const updated = await scadaApi.updatePerspective(active.id, {
-      layout: { version: 1, panels },
+      layout: { version: 2, canvas, panels },
     });
     set({
       perspectives: perspectives.map((p) => (p.id === updated.id ? updated : p)),

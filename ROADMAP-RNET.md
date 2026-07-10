@@ -39,6 +39,21 @@ sekaligus — tidak ada browser/TV yang sanggup, di produk komersial mana pun.
 - [x] Maximize per-channel (tombol di bar judul / hover saat fullscreen; Esc)
 - [x] Web-embed: kontrol Geser Kiri/Atas (px) — buang navbar HMI tanpa fullscreen
 
+### Fase 0.6 — Kanvas Tetap ala OBS ✅ (2026-07-10)
+- [x] Layout v2: kanvas resolusi tetap per halaman (default 1920×1080;
+      1280/2560/4K) + rect piksel per panel → zoom/device apa pun TIDAK reflow
+- [x] Editor OBS-style: drag bebas + snap (tepi/tengah/panel lain) + garis
+      bantu + inspector X/Y/W/H + Susun Cepat (1, 2×2, 3×3, 4×4, 1+2)
+- [x] Channel web punya resolusi native (mis. 1920×1080) — fullscreen milik
+      situs hanya mengisi panelnya (OBS-style), + interact toggle (default
+      click-through) + reload per panel
+- [x] **Keep-alive iframe**: pindah page TIDAK reload web embed → tampilan
+      V-Net tidak menduplikat (alasan terakhir pakai OBS — tumbang)
+- [x] Layar Maintenance/Standby (RePhot orbit) utk channel kosong / error
+      (+ penyebab error); video connecting/error pakai layar yang sama
+- [x] install.ps1: + Mosquitto opsional (akun, conf, port 1883) — satu saklar
+      start/stop-scada utk stream + tunnel + MQTT; STREAM_NAME ditanya
+
 ### Fase 1 — Validasi sumber (SEKARANG — butuh tes lapangan user)
 - [ ] Tes 2 stream dari 2 mesin (STREAM_NAME diisi beda) — tidak saling timpa
 - [ ] **Tes iframe V-Net Wecon** di panel Web-Embed → menentukan arah HMI!

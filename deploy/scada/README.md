@@ -7,10 +7,15 @@ Developer notes. Operator guides (Indonesian):
   `powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1`. It
   downloads MediaMTX + cloudflared from their **official GitHub releases**
   (cloudflared verified by Authenticode signature; MediaMTX zip SHA-256
-  printed), generates `mediamtx.yml` + `config.env`, and drops the
-  start/stop switches into `C:\rein-scada\`. No Python, no REIN repo, no admin
-  rights, no Windows service. Re-runnable; never clobbers existing
-  `mediamtx.yml`/`config.env`.
+  printed), generates `mediamtx.yml` + `config.env` (incl. `STREAM_NAME` so
+  multiple broadcast machines never overwrite each other's stream URL), and
+  **optionally installs Mosquitto** (official mosquitto.org installer:
+  account, `mosquitto.conf`, firewall port 1883). No Python, no REIN repo;
+  only the optional Mosquitto step asks for admin once, and its Windows
+  service is set to Manual — everything starts/stops ONLY via the switches
+  (`start-scada.bat` / `stop-scada.bat` now also cover the MQTT broker).
+  Re-runnable; never clobbers existing
+  `mediamtx.yml`/`config.env`/`mosquitto.conf`.
 - **[PANDUAN-INSTALASI-STREAMING.md](./PANDUAN-INSTALASI-STREAMING.md)** —
   the same install done by hand (for people who prefer step-by-step), plus the
   every-boot routine and stream registration in R-Net.

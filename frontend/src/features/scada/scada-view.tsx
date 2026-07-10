@@ -34,7 +34,9 @@ import { useCan } from "@/components/providers/permissions-provider";
 import type { AppRole } from "@/lib/utils/roles";
 import { useScadaStore } from "./store";
 import type { Panel } from "./types";
-import { GridCanvas } from "./grid/grid-canvas";
+import { DEFAULT_CANVAS } from "./types";
+import { CanvasStage, STAGE_PRESETS, presetRects } from "./grid/canvas-stage";
+import { WebLiveLayer } from "./web-live-layer";
 import { PanelFrame } from "./panels/panel-frame";
 import { renderPanel } from "./panels/panel-registry";
 import { AddPanelDialog } from "./add-panel-dialog";
@@ -56,6 +58,9 @@ export function ScadaView() {
     store.editMode && store.draftPanels
       ? store.draftPanels
       : active?.layout.panels ?? [];
+  // Fixed-canvas (v2) panels only — legacy v1 panels are "mulai bersih":
+  // invisible on the wall, dropped from drafts on the next save.
+  const rectPanelCount = panels.filter((p) => p.rect).length;
 
   // Channel panels get a live title from the registry (nickname can change
   // after the panel was placed); other panels keep their stored title.
@@ -393,6 +398,46 @@ export function ScadaView() {
 
           {store.viewMode !== "monitor" ? null : store.editMode ? (
             <>
+              {/* Canvas resolution (OBS scene size) */}
+              <select
+                className="field-select h-8 w-auto cursor-pointer text-[12px]"
+                value={`${(store.draftCanvas ?? DEFAULT_CANVAS).w}x${(store.draftCanvas ?? DEFAULT_CANVAS).h}`}
+                onChange={(e) => {
+                  const [w, h] = e.target.value.split("x").map(Number);
+                  store.setDraftCanvas({ w, h });
+                }}
+                title="Resolusi kanvas halaman ini"
+              >
+                {["1280x720", "1920x1080", "2560x1440", "3840x2160"].map((r) => (
+                  <option key={r} value={r}>
+                    {r.replace("x", "×")}
+                  </option>
+                ))}
+              </select>
+              {/* Quick split presets */}
+              <select
+                className="field-select h-8 w-auto cursor-pointer text-[12px]"
+                value=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  store.applyPresetRects(
+                    presetRects(
+                      e.target.value,
+                      store.draftPanels?.length ?? 0,
+                      store.draftCanvas ?? DEFAULT_CANVAS
+                    )
+                  );
+                  e.target.value = "";
+                }}
+                title="Susun panel otomatis"
+              >
+                <option value="">Susun Cepat…</option>
+                {STAGE_PRESETS.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
               <button
                 onClick={() => store.setShowAddPanel(true)}
                 className="btn btn-secondary btn-sm gap-1.5"
@@ -515,7 +560,7 @@ export function ScadaView() {
           fullscreen ? "bg-black" : "bg-bg-sidebar"
         )}
       >
-        {panels.length === 0 ? (
+        {rectPanelCount === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <MonitorPlay className="size-10 text-text-light" />
             <p className="text-[13px] font-semibold text-text">
@@ -562,40 +607,42 @@ export function ScadaView() {
             ))}
           </div>
         ) : (
-          <div className={cn("h-full", fullscreen ? "p-0" : "p-2")}>
-            <GridCanvas
-              panels={panels}
-              editMode={store.editMode}
-              fullscreen={fullscreen}
-              onGridChange={store.updateGrid}
-              renderPanelContent={(panel) => (
-                <PanelFrame
-                  title={panelTitle(panel)}
-                  editMode={store.editMode}
-                  fullscreen={fullscreen}
-                  onRemove={() => store.removePanel(panel.id)}
-                  onMaximize={
-                    store.editMode
-                      ? undefined
-                      : () => store.setMaximizedPanel(panel.id)
-                  }
-                >
-                  {renderPanel(panel, store.streams, store.tags, {
-                    channels: store.channels,
-                    editMode: store.editMode,
-                    canInlineEdit: canEdit && !active?.read_only,
-                    onConfigChange: store.editMode
-                      ? (config) => store.updatePanel(panel.id, { config })
-                      : canEdit && !active?.read_only
-                        ? (config) =>
-                            store.updateActivePanelPersist(panel.id, { config })
-                        : undefined,
-                  })}
-                </PanelFrame>
-              )}
-            />
-          </div>
+          /* Fixed canvas (OBS-style): the page scales as ONE unit on every
+             screen/zoom — positions never reflow. */
+          <CanvasStage
+            canvas={
+              store.editMode
+                ? store.draftCanvas ?? DEFAULT_CANVAS
+                : active?.layout.canvas ?? DEFAULT_CANVAS
+            }
+            panels={panels}
+            editMode={store.editMode}
+            fullscreen={fullscreen}
+            panelTitle={panelTitle}
+            renderContent={(panel) =>
+              renderPanel(panel, store.streams, store.tags, {
+                channels: store.channels,
+                webLive: true,
+              })
+            }
+            webChannelIdOf={(panel) => {
+              if (panel.type !== "channel") return null;
+              const ch = store.channels.find(
+                (c) => c.id === panel.config.channel_id
+              );
+              return ch?.kind === "web" ? ch.id : null;
+            }}
+            onRectChange={store.editMode ? store.updatePanelRect : undefined}
+            onRemove={store.editMode ? store.removePanel : undefined}
+            onMaximize={
+              store.editMode ? undefined : (id) => store.setMaximizedPanel(id)
+            }
+          />
         )}
+
+        {/* Keep-alive web embeds — iframes survive page flips (no V-Net
+            duplicate-view reload). Lives inside the wall so fullscreen shows it. */}
+        <WebLiveLayer />
 
         {/* Maximized channel — one panel fills the whole wall (CCTV style).
             Esc, the frame button, or switching pages restores the grid. */}
@@ -610,6 +657,7 @@ export function ScadaView() {
             >
               {renderPanel(maximizedPanel, store.streams, store.tags, {
                 channels: store.channels,
+                webLive: true,
               })}
             </PanelFrame>
           </div>
@@ -703,6 +751,7 @@ export function ScadaView() {
         <AddPanelDialog
           channels={store.channels}
           existingPanels={store.draftPanels}
+          canvas={store.draftCanvas ?? DEFAULT_CANVAS}
           onAdd={store.addPanel}
           onClose={() => store.setShowAddPanel(false)}
         />

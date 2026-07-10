@@ -124,38 +124,16 @@ async def _get_own_perspective(
 
 
 async def _bootstrap_default(db: AsyncSession, owner_id: uuid.UUID) -> ScadaPerspective:
-    """Create a generic starter perspective (one video panel per enabled stream)
-    for a user who has no layouts and when no admin default is published.
+    """Create an empty fixed-canvas starter page (layout v2, 1920×1080) for a
+    user who has no layouts and when no admin default is published.
 
     When an admin default IS published, list_perspectives injects it as a
     read-only entry instead — so we don't bootstrap a private copy here.
     """
-    result = await db.execute(
-        select(ScadaStream)
-        .where(ScadaStream.enabled.is_(True))
-        .order_by(ScadaStream.created_at)
-    )
-    streams = result.scalars().all()
-
-    panels = [
-        {
-            "id": str(uuid.uuid4()),
-            "type": "video",
-            "title": s.name,
-            "grid": {"x": 0, "y": i * 8, "w": 12, "h": 8},
-            "config": {
-                "stream_id": str(s.id),
-                "object_fit": "contain",
-                "muted": True,
-            },
-        }
-        for i, s in enumerate(streams)
-    ]
-
     perspective = ScadaPerspective(
         owner_id=owner_id,
         name="Default",
-        layout={"version": 1, "panels": panels},
+        layout={"version": 2, "canvas": {"w": 1920, "h": 1080}, "panels": []},
         is_default=True,
     )
     db.add(perspective)

@@ -1,6 +1,7 @@
 /** R-Net types — keep the layout contract in sync with
  *  `backend/app/schemas/scada.py`. */
 
+/** Legacy (layout v1) 12-column grid position. */
 export interface PanelGridPos {
   x: number;
   y: number;
@@ -8,10 +9,30 @@ export interface PanelGridPos {
   h: number;
 }
 
+/** Layout v2 (OBS-style): absolute CANVAS-pixel rectangle — the whole canvas
+ *  scales uniformly on every screen/zoom, so rects never reflow. */
+export interface PanelRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Per-page canvas resolution (like an OBS scene). */
+export interface CanvasSize {
+  w: number;
+  h: number;
+}
+
+export const DEFAULT_CANVAS: CanvasSize = { w: 1920, h: 1080 };
+
 interface PanelBase {
   id: string;
   title: string;
-  grid: PanelGridPos;
+  /** v1 placement (legacy pages only). */
+  grid?: PanelGridPos;
+  /** v2 placement — canvas pixels. */
+  rect?: PanelRect;
 }
 
 export interface VideoPanelConfig {
@@ -81,6 +102,11 @@ export interface WebPanelConfig {
    *  embedded site's own navbar/sidebar without fullscreen. */
   offset_x?: number;
   offset_y?: number;
+  /** Native viewport (OBS-style source resolution): the page is laid out at
+   *  exactly this size then scaled into its cell — the embedded site's own
+   *  fullscreen fills this viewport (= its panel). null = fill cell (legacy). */
+  view_w?: number | null;
+  view_h?: number | null;
 }
 
 /** A layout cell that shows one TV-style channel (see Channel below). */
@@ -147,7 +173,9 @@ export interface Channel {
 export type PanelType = Panel["type"];
 
 export interface PerspectiveLayout {
-  version: 1;
+  version: 1 | 2;
+  /** v2 only — canvas resolution this page was designed at. */
+  canvas?: CanvasSize;
   panels: Panel[];
 }
 

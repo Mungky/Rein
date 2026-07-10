@@ -4,7 +4,7 @@
  *  here; nothing else in the grid pipeline needs to change. Unknown types
  *  render a friendly placeholder so old clients never crash on newer layouts. */
 
-import { Blocks, Tv } from "lucide-react";
+import { Blocks } from "lucide-react";
 import type {
   AlarmPanelConfig,
   BarPanelConfig,
@@ -28,18 +28,31 @@ import { WallPanel } from "./wall-panel";
 import { ActivityPanel } from "./activity-panel";
 import { WebPanel } from "./web-panel";
 import { CroppedVideoPanel } from "./cropped-video-panel";
+import { OrbitFallback } from "./orbit-fallback";
+import { WebSlot } from "../web-live-layer";
 
 /** Render a channel's SOURCE (no grid involved) — used by the "channel" panel
- *  case and reusable anywhere a channel preview is needed. */
+ *  case and reusable anywhere a channel preview is needed. `webLive` renders
+ *  web channels through the keep-alive layer (monitor wall) instead of a
+ *  direct iframe (preview/mobile). */
 export function renderChannelContent(
   channel: Channel,
   streams: Stream[],
-  tags: Tag[]
+  tags: Tag[],
+  opts?: { webLive?: boolean }
 ) {
   switch (channel.kind) {
     case "video": {
       const cfg = channel.config as ChannelVideoConfig;
       const stream = streams.find((s) => s.id === cfg.stream_id);
+      if (!stream) {
+        return (
+          <OrbitFallback
+            kind="error"
+            reason={`CH ${channel.number} — sumber stream tidak ditemukan (sudah dihapus?)`}
+          />
+        );
+      }
       if (cfg.cell !== null && cfg.cell !== undefined) {
         return <CroppedVideoPanel stream={stream} cell={cfg.cell} />;
       }
@@ -50,8 +63,19 @@ export function renderChannelContent(
         />
       );
     }
-    case "web":
-      return <WebPanel config={channel.config as WebPanelConfig} />;
+    case "web": {
+      const cfg = channel.config as WebPanelConfig;
+      if (!/^https?:\/\//i.test(cfg.url)) {
+        return (
+          <OrbitFallback
+            kind="error"
+            reason={`CH ${channel.number} — alamat web tidak valid`}
+          />
+        );
+      }
+      if (opts?.webLive) return <WebSlot channelId={channel.id} cfg={cfg} />;
+      return <WebPanel config={cfg} />;
+    }
     case "chart":
       return <ChartPanel config={channel.config as ChartPanelConfig} tags={tags} />;
     case "table":
@@ -87,6 +111,8 @@ export function renderPanel(
     onConfigChange?: (config: Panel["config"]) => void;
     /** TV-style channel registry — required for "channel" panels. */
     channels?: Channel[];
+    /** Web channels go through the keep-alive iframe layer (monitor wall). */
+    webLive?: boolean;
   }
 ) {
   switch (panel.type) {
@@ -95,16 +121,17 @@ export function renderPanel(
         (c) => c.id === panel.config.channel_id
       );
       if (!channel || !channel.enabled) {
+        // "Tidak menampilkan apa-apa" → branded maintenance screen
         return (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg-sidebar text-text-muted">
-            <Tv className="size-6 opacity-50" />
-            <span className="text-[12px]">
-              {channel ? "Channel dinonaktifkan" : "Channel sudah dihapus"}
-            </span>
-          </div>
+          <OrbitFallback
+            kind="idle"
+            reason={channel ? "Channel dinonaktifkan" : "Channel sudah dihapus"}
+          />
         );
       }
-      return renderChannelContent(channel, streams, tags);
+      return renderChannelContent(channel, streams, tags, {
+        webLive: opts?.webLive,
+      });
     }
     case "video":
       return (

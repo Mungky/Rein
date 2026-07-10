@@ -247,7 +247,33 @@ def test_invalid_stream_id_rejected():
 
 def test_wrong_version_rejected():
     with pytest.raises(ValidationError):
-        PerspectiveLayout.model_validate({"version": 2, "panels": []})
+        PerspectiveLayout.model_validate({"version": 3, "panels": []})
+
+
+def test_v2_panel_requires_rect():
+    with pytest.raises(ValidationError):
+        PerspectiveLayout.model_validate(
+            {
+                "version": 2,
+                "canvas": {"w": 1920, "h": 1080},
+                "panels": [
+                    {
+                        "id": "a",
+                        "type": "channel",
+                        "grid": {"x": 0, "y": 0, "w": 6, "h": 8},
+                        "config": {
+                            "channel_id": "00000000-0000-0000-0000-000000000000"
+                        },
+                    }
+                ],
+            }
+        )
+
+
+def test_v2_default_canvas_filled():
+    layout = PerspectiveLayout.model_validate({"version": 2, "panels": []})
+    assert layout.canvas is not None
+    assert (layout.canvas.w, layout.canvas.h) == (1920, 1080)
 
 
 def test_too_many_panels_rejected():

@@ -1,27 +1,31 @@
 # ==========================================================================
-#  install.ps1  -  Pemasang universal pemancar R-Net (MediaMTX + Cloudflare)
+#  install.ps1  -  Pemasang universal server R-Net
+#                  (MediaMTX + Cloudflare Tunnel + Mosquitto MQTT)
 # ==========================================================================
-#  Satu perintah untuk menyiapkan komputer klien mana pun:
+#  Satu perintah untuk menyiapkan komputer server/pemancar mana pun:
 #    powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 #
 #  Yang dilakukan:
-#    1. Membuat folder  C:\rein-scada\  (mediamtx\, cloudflared\)
+#    1. Membuat folder  C:\rein-scada\  (mediamtx\, cloudflared\, mosquitto\)
 #    2. Mengunduh mediamtx.exe & cloudflared.exe versi TERBARU langsung dari
 #       rilis RESMI di GitHub (HTTPS), lalu memverifikasi:
 #         - cloudflared.exe : tanda tangan digital Authenticode = Cloudflare
 #         - mediamtx.exe    : menampilkan hash SHA-256 untuk dicocokkan
 #    3. Membuat mediamtx.yml (menanyakan/meng-generate password)
-#    4. Membuat config.env (menanyakan kredensial Supabase)  - RAHASIA
-#    5. Menyalin start/stop switch ke folder itu
+#    4. Membuat config.env (kredensial Supabase + STREAM_NAME)  - RAHASIA
+#    5. OPSIONAL: memasang Mosquitto (broker MQTT resmi mosquitto.org) +
+#       akun + port 1883 — untuk data sensor V-Box (tab Data R-Net)
+#    6. Menyalin start/stop switch ke folder itu
 #
 #  JAMINAN KEAMANAN:
-#    - Hanya mengunduh dari github.com/bluenviron/mediamtx dan
-#      github.com/cloudflare/cloudflared (sumber resmi, lewat HTTPS).
-#    - Tidak memasang service Windows, tidak menyentuh registry, tidak butuh
-#      Administrator. Uninstall = hapus foldernya.
-#    - TIDAK menimpa mediamtx.yml / config.env yang sudah ada (password &
-#      kredensial lama aman). Unduhan ditulis ke file sementara dulu, baru
-#      dipindah setelah lolos verifikasi -> tidak ada file separuh/corrupt.
+#    - Hanya mengunduh dari github.com/bluenviron/mediamtx,
+#      github.com/cloudflare/cloudflared, dan mosquitto.org (resmi, HTTPS).
+#    - MediaMTX/cloudflared: tanpa service Windows, tanpa registry, tanpa
+#      Administrator. Mosquitto memakai pemasang resminya (sekali izin
+#      Administrator); service bawaannya disetel MANUAL — semua dinyalakan/
+#      dimatikan HANYA oleh saklar start-scada/stop-scada.
+#    - TIDAK menimpa mediamtx.yml / config.env / mosquitto.conf yang sudah
+#      ada. Unduhan ke file sementara dulu, dipindah setelah lolos verifikasi.
 #    - Aman dijalankan berulang (idempoten).
 # ==========================================================================
 
@@ -47,6 +51,8 @@ function Write-TextNoBom($path, $text) {
     $enc = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($path, $text, $enc)
 }
+
+function New-Pass { -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 20 | ForEach-Object { [char]$_ }) }
 
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor White
@@ -128,7 +134,6 @@ if (Test-Path $MtxYml) {
 } else {
     $tpl = Join-Path $Here "mediamtx.yml"
     if (-not (Test-Path $tpl)) { Die "Template mediamtx.yml tidak ada di folder installer." }
-    function New-Pass { -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 20 | ForEach-Object { [char]$_ }) }
 
     Write-Host ""
     Info "Password pemancar (Enter = buat otomatis yang kuat):"
@@ -176,7 +181,91 @@ if (Test-Path $Cfg) {
     Good "config.env dibuat."
 }
 
-# --- 5. Salin saklar (selalu perbarui ke versi terbaru) ------------------
+# --- 5. Mosquitto (broker MQTT) — OPSIONAL, untuk data sensor V-Box ------
+#  Dipasang dari installer RESMI mosquitto.org. Service Windows-nya (jika
+#  terdaftar) disetel Manual — broker dinyalakan/dimatikan oleh saklar
+#  start-scada/stop-scada, konsisten dengan MediaMTX (tanpa autostart).
+$MqDir  = Join-Path $InstallDir "mosquitto"
+$MqConf = Join-Path $MqDir "mosquitto.conf"
+$MqExe  = Join-Path $env:ProgramFiles "mosquitto\mosquitto.exe"
+$MqVer  = "2.0.18"
+$MqUrl  = "https://mosquitto.org/files/binary/win64/mosquitto-$MqVer-install-windows-x64.exe"
+
+Write-Host ""
+$wantMq = Read-Host "Pasang broker MQTT (Mosquitto) di PC ini? Perlu kalau V-Box/sensor kirim data ke PC ini. [y/N]"
+if ($wantMq -match "^[Yy]") {
+    if (-not (Test-Path $MqDir)) { New-Item -ItemType Directory -Path $MqDir -Force | Out-Null }
+
+    if (Test-Path $MqExe) {
+        Good "Mosquitto sudah terpasang (lewati unduhan)."
+    } else {
+        Info "Mengunduh Mosquitto $MqVer dari mosquitto.org (situs resmi) ..."
+        $tmp = Get-ToTemp $MqUrl
+        $sha = (Get-FileHash $tmp -Algorithm SHA256).Hash
+        Info "   SHA-256: $sha"
+        Info "Menjalankan pemasang (butuh persetujuan Administrator sekali) ..."
+        try {
+            Start-Process -FilePath $tmp -ArgumentList "/S" -Verb RunAs -Wait
+        } catch {
+            Warn "Pemasangan dibatalkan/gagal: $($_.Exception.Message)"
+        }
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        if (Test-Path $MqExe) { Good "Mosquitto terpasang." }
+        else { Warn "mosquitto.exe tidak ditemukan - lewati konfigurasi MQTT. Pasang manual dari mosquitto.org lalu jalankan ulang installer ini." }
+    }
+
+    if (Test-Path $MqExe) {
+        # Jangan biarkan service bawaan autostart - saklar kita yang pegang.
+        try { Set-Service mosquitto -StartupType Manual -ErrorAction Stop; Stop-Service mosquitto -ErrorAction SilentlyContinue } catch {}
+
+        if (Test-Path $MqConf) {
+            Good "mosquitto.conf sudah ada - kredensial lama dipertahankan."
+        } else {
+            Write-Host ""
+            Info "Akun MQTT untuk V-Box/bridge (Enter = buat otomatis):"
+            $mqUser = Read-Host "   Username MQTT"
+            if ([string]::IsNullOrWhiteSpace($mqUser)) { $mqUser = "vbox" ; Write-Host "   -> dipakai: vbox" }
+            $mqPass = Read-Host "   Password MQTT"
+            if ([string]::IsNullOrWhiteSpace($mqPass)) { $mqPass = New-Pass; Write-Host "   -> dibuatkan: $mqPass" }
+
+            $MqPasswd = Join-Path $MqDir "passwd"
+            & (Join-Path $env:ProgramFiles "mosquitto\mosquitto_passwd.exe") -b -c $MqPasswd $mqUser $mqPass
+            if ($LASTEXITCODE -ne 0) { Warn "mosquitto_passwd gagal - cek manual." }
+
+            Write-TextNoBom $MqConf (@(
+                "# mosquitto.conf - broker MQTT R-Net (dibuat installer)",
+                "# Dinyalakan oleh start-scada.ps1, dimatikan oleh stop-scada.ps1.",
+                "listener 1883 0.0.0.0",
+                "allow_anonymous false",
+                "password_file $MqPasswd",
+                "persistence false",
+                "log_dest file $(Join-Path $MqDir 'mosquitto.log')",
+                "log_type error",
+                "log_type warning"
+            ) -join "`r`n")
+            Good "mosquitto.conf dibuat (port 1883, wajib login)."
+            Warn "CATAT akun MQTT ini - dipakai di V-Net (publish) & R-Net > Data > Kelola Site."
+        }
+
+        # Buka port 1883 untuk V-Box di jaringan lokal (perlu Administrator).
+        try {
+            $ruleName = "R-Net MQTT 1883"
+            $exists = netsh advfirewall firewall show rule name="$ruleName" 2>$null | Select-String $ruleName
+            if (-not $exists) {
+                Start-Process netsh -ArgumentList "advfirewall firewall add rule name=`"$ruleName`" dir=in action=allow protocol=TCP localport=1883" -Verb RunAs -Wait
+                Good "Firewall: port 1883 dibuka (aturan '$ruleName')."
+            } else {
+                Good "Firewall: aturan port 1883 sudah ada."
+            }
+        } catch {
+            Warn "Gagal membuka firewall otomatis - buka port TCP 1883 manual bila V-Box tidak bisa konek."
+        }
+    }
+} else {
+    Info "Mosquitto dilewati (bisa jalankan ulang installer ini kapan pun)."
+}
+
+# --- 6. Salin saklar (selalu perbarui ke versi terbaru) ------------------
 foreach ($f in @("start-scada.ps1", "stop-scada.ps1", "start-scada.bat", "stop-scada.bat")) {
     $src = Join-Path $Here $f
     if (Test-Path $src) { Copy-Item $src (Join-Path $InstallDir $f) -Force }

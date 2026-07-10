@@ -386,12 +386,9 @@ export function AnalysisView({
     const ids = [...selected];
     const active = store.perspectives.find((p) => p.id === store.activePerspectiveId);
     if (!active) return;
-    const bottomY = active.layout.panels.reduce(
-      (max, p) => Math.max(max, p.grid.y + p.grid.h),
-      0
-    );
     const firstTag = tags.find((t) => t.id === ids[0]);
 
+    // Placement (rect on the fixed canvas) is handled by addPanelToActive.
     let panel: Panel;
     if (kind === "gauge") {
       if (!firstTag) return;
@@ -399,7 +396,6 @@ export function AnalysisView({
         id: crypto.randomUUID(),
         type: "gauge",
         title: firstTag.label,
-        grid: { x: 0, y: bottomY, w: 3, h: 5 },
         config: { tag_id: ids[0], warning: null, critical: null, direction: "above" },
       };
     } else if (kind === "bar") {
@@ -407,7 +403,6 @@ export function AnalysisView({
         id: crypto.randomUUID(),
         type: "bar",
         title: `Perbandingan (${ids.length} tag)`,
-        grid: { x: 0, y: bottomY, w: 6, h: 6 },
         config: { tag_ids: ids, range, metric: "avg" },
       };
     } else {
@@ -418,7 +413,6 @@ export function AnalysisView({
           ids.length === 1 && firstTag
             ? `Tren ${firstTag.label}`
             : `Tren Sensor (${ids.length} tag)`,
-        grid: { x: 0, y: bottomY, w: 6, h: 7 },
         config: { tag_ids: ids, range, show_minmax: ids.length === 1 },
       };
     }

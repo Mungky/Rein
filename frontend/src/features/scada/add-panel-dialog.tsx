@@ -8,16 +8,18 @@ import { useMemo, useState } from "react";
 import { Search, Tv, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CHANNEL_KINDS, channelKindLabel } from "./channel-form";
-import type { Channel, Panel } from "./types";
+import type { CanvasSize, Channel, Panel } from "./types";
 
 export function AddPanelDialog({
   channels,
   existingPanels,
+  canvas,
   onAdd,
   onClose,
 }: {
   channels: Channel[];
   existingPanels: Panel[];
+  canvas: CanvasSize;
   onAdd: (panel: Panel) => void;
   onClose: () => void;
 }) {
@@ -38,20 +40,23 @@ export function AddPanelDialog({
   }, [channels, query]);
 
   function add(channel: Channel) {
-    const bottomY = existingPanels.reduce(
-      (max, p) => Math.max(max, p.grid.y + p.grid.h),
-      0
-    );
+    // First panel fills the canvas; later ones cascade at half size so they
+    // never hide each other — the editor (drag + snap) does the arranging.
+    const n = existingPanels.filter((p) => p.rect).length;
+    const rect =
+      n === 0
+        ? { x: 0, y: 0, w: canvas.w, h: canvas.h }
+        : {
+            x: Math.min(canvas.w / 2, 32 * n),
+            y: Math.min(canvas.h / 2, 32 * n),
+            w: Math.round(canvas.w / 2),
+            h: Math.round(canvas.h / 2),
+          };
     onAdd({
       id: crypto.randomUUID(),
       type: "channel",
       title: `CH ${channel.number} · ${channel.name}`,
-      grid: {
-        x: 0,
-        y: bottomY,
-        w: existingPanels.length === 0 ? 12 : 6,
-        h: 8,
-      },
+      rect,
       config: { channel_id: channel.id },
     });
   }

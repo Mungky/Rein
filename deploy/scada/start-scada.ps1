@@ -52,6 +52,18 @@ $streamName = if ($cfg.STREAM_NAME) { $cfg.STREAM_NAME.Trim() } else { "" }
 $streamPath = if ($cfg.STREAM_PATH) { $cfg.STREAM_PATH.Trim() } else { "scada" }
 if ($streamPath -eq "") { $streamPath = "scada" }
 
+# --- 0.5 Mosquitto (broker MQTT) — hanya jika dikonfigurasi installer -----
+$MqConf = Join-Path $Root "mosquitto\mosquitto.conf"
+$MqExe  = Join-Path $env:ProgramFiles "mosquitto\mosquitto.exe"
+if ((Test-Path $MqConf) -and (Test-Path $MqExe)) {
+    if (-not (Get-Process mosquitto -ErrorAction SilentlyContinue)) {
+        Start-Process -FilePath $MqExe -ArgumentList "-c", "`"$MqConf`"" -WindowStyle Hidden
+        Write-Host "[OK] Mosquitto (MQTT) dinyalakan - port 1883"
+    } else {
+        Write-Host "[OK] Mosquitto sudah jalan"
+    }
+}
+
 # --- 1. MediaMTX (pemancar) ----------------------------------------------
 if (-not (Get-Process mediamtx -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath $MediaMtxExe -WorkingDirectory $MediaMtxDir `

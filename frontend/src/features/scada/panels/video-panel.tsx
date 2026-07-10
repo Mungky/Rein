@@ -11,10 +11,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import Hls, { type ErrorData } from "hls.js";
-import { Loader2, VideoOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useScadaStore } from "../store";
+import { OrbitFallback } from "./orbit-fallback";
 import type { Stream, VideoPanelConfig } from "../types";
 
 const RETRY_BASE_MS = 2000;
@@ -246,12 +246,7 @@ export function VideoPanel({
 
   if (!stream) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-black/90 text-text-inv">
-        <VideoOff className="size-6 opacity-60" />
-        <span className="text-[12px] opacity-80">
-          Stream tidak ditemukan — hubungi admin
-        </span>
-      </div>
+      <OrbitFallback kind="error" reason="Stream tidak ditemukan — hubungi admin" />
     );
   }
 
@@ -271,23 +266,25 @@ export function VideoPanel({
       {/* Network ping meter (ms) — green normal, kuning bila > 70ms, merah bila parah */}
       {status === "live" && pingMs !== null && <PingBadge ms={pingMs} />}
 
-      {/* Reconnect / connecting overlay — never a silent black box, and always
-          show a diagnostic code + cause when something is wrong. */}
+      {/* Reconnect / connecting screens — never a silent black box. Branded
+          orbit pages: maintenance while connecting, standby + CAUSE on error. */}
       {status !== "live" && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 px-4 text-center">
-          <Loader2 className="size-6 animate-spin text-amber-400" />
-          <span className="text-[12px] font-medium text-white">
-            {status === "connecting"
-              ? "Menghubungkan ke stream…"
-              : "Stream terputus — menyambung ulang…"}
-          </span>
-          {errorInfo && (
-            <span className="flex flex-col items-center gap-1">
-              <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-300">
-                {errorInfo.code}
-              </span>
-              <span className="text-[11px] text-white/70">{errorInfo.hint}</span>
-            </span>
+        <div className="absolute inset-0">
+          {errorInfo ? (
+            <OrbitFallback
+              kind="error"
+              reason={`${errorInfo.code} — ${errorInfo.hint} · menyambung ulang otomatis…`}
+            />
+          ) : (
+            <OrbitFallback
+              kind="idle"
+              label="Menghubungkan"
+              reason={
+                status === "connecting"
+                  ? "Menghubungkan ke stream…"
+                  : "Stream terputus — menyambung ulang…"
+              }
+            />
           )}
         </div>
       )}

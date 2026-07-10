@@ -16,12 +16,29 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class PanelGrid(BaseModel):
-    """react-grid-layout cell: 12-column grid coordinates."""
+    """Legacy (layout v1) react-grid-layout cell: 12-column grid coordinates."""
 
     x: int = Field(ge=0, le=11)
     y: int = Field(ge=0)
     w: int = Field(ge=1, le=12)
     h: int = Field(ge=1, le=100)
+
+
+class PanelRect(BaseModel):
+    """Layout v2 (OBS-style fixed canvas): absolute CANVAS-pixel rectangle.
+    The whole canvas scales uniformly on every screen, so these never reflow."""
+
+    x: float = Field(ge=0, le=7680)
+    y: float = Field(ge=0, le=4320)
+    w: float = Field(ge=16, le=7680)
+    h: float = Field(ge=16, le=4320)
+
+
+class CanvasSize(BaseModel):
+    """Per-page canvas resolution (like an OBS scene), e.g. 1920×1080."""
+
+    w: int = Field(ge=640, le=7680)
+    h: int = Field(ge=360, le=4320)
 
 
 class VideoPanelConfig(BaseModel):
@@ -34,7 +51,8 @@ class VideoPanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["video"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: VideoPanelConfig
 
 
@@ -51,7 +69,8 @@ class ChartPanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["chart"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: ChartPanelConfig
 
 
@@ -64,7 +83,8 @@ class TablePanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["table"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: TablePanelConfig
 
 
@@ -82,7 +102,8 @@ class GaugePanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["gauge"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: GaugePanelConfig
 
 
@@ -97,7 +118,8 @@ class BarPanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["bar"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: BarPanelConfig
 
 
@@ -112,7 +134,8 @@ class AlarmPanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["alarm"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: AlarmPanelConfig
 
 
@@ -136,7 +159,8 @@ class WallPanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["wall"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: WallPanelConfig
 
 
@@ -149,7 +173,8 @@ class ActivityPanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["activity"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: ActivityPanelConfig = Field(default_factory=ActivityPanelConfig)
 
 
@@ -162,13 +187,20 @@ class WebPanelConfig(BaseModel):
     # embedded site's own navbar/sidebar without fullscreen.
     offset_x: int = Field(default=0, ge=0, le=4000)
     offset_y: int = Field(default=0, ge=0, le=4000)
+    # Native viewport (OBS-style source resolution): the page is laid out at
+    # exactly this size then scaled into its cell — so the embedded site's own
+    # fullscreen fills this viewport (= its panel), and layouts stay stable.
+    # None = legacy behavior (fill the cell directly).
+    view_w: int | None = Field(default=1920, ge=320, le=7680)
+    view_h: int | None = Field(default=1080, ge=180, le=4320)
 
 
 class WebPanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["web"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: WebPanelConfig
 
 
@@ -181,7 +213,8 @@ class ChannelPanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["channel"]
     title: str = Field(default="", max_length=120)
-    grid: PanelGrid
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
     config: ChannelPanelConfig
 
 
@@ -203,8 +236,26 @@ Panel = Annotated[
 
 
 class PerspectiveLayout(BaseModel):
-    version: Literal[1] = 1
+    """v1 = legacy 12-column grid (grid per panel); v2 = OBS-style fixed canvas
+    (canvas resolution + absolute rect per panel — never reflows with zoom)."""
+
+    version: Literal[1, 2] = 2
+    canvas: CanvasSize | None = None
     panels: list[Panel] = Field(default_factory=list, max_length=24)
+
+    @model_validator(mode="after")
+    def _check_placement(self) -> "PerspectiveLayout":
+        if self.version == 2:
+            if self.canvas is None:
+                self.canvas = CanvasSize(w=1920, h=1080)
+            for p in self.panels:
+                if p.rect is None:
+                    raise ValueError("panel layout v2 wajib punya rect")
+        else:
+            for p in self.panels:
+                if p.grid is None:
+                    raise ValueError("panel layout v1 wajib punya grid")
+        return self
 
 
 # ---------------------------------------------------------------------------

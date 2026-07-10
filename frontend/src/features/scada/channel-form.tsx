@@ -104,6 +104,8 @@ export function ChannelForm({
   const [zoom, setZoom] = useState<number>(webCfg?.zoom ?? 1);
   const [offsetX, setOffsetX] = useState<number>(webCfg?.offset_x ?? 0);
   const [offsetY, setOffsetY] = useState<number>(webCfg?.offset_y ?? 0);
+  const [viewW, setViewW] = useState<number>(webCfg?.view_w ?? 1920);
+  const [viewH, setViewH] = useState<number>(webCfg?.view_h ?? 1080);
 
   const dataCfg =
     init && ["chart", "table", "bar", "alarm"].includes(init.kind)
@@ -173,6 +175,8 @@ export function ChannelForm({
           zoom,
           offset_x: Math.max(0, offsetX || 0),
           offset_y: Math.max(0, offsetY || 0),
+          view_w: Math.min(7680, Math.max(320, viewW || 1920)),
+          view_h: Math.min(4320, Math.max(180, viewH || 1080)),
         };
       case "gauge":
         return {
@@ -406,9 +410,39 @@ export function ChannelForm({
               />
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                Resolusi Halaman — Lebar (px)
+              </label>
+              <input
+                type="number"
+                min={320}
+                max={7680}
+                className="field-input"
+                value={viewW}
+                onChange={(e) => setViewW(Number(e.target.value) || 1920)}
+              />
+            </div>
+            <div>
+              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                Resolusi Halaman — Tinggi (px)
+              </label>
+              <input
+                type="number"
+                min={180}
+                max={4320}
+                className="field-input"
+                value={viewH}
+                onChange={(e) => setViewH(Number(e.target.value) || 1080)}
+              />
+            </div>
+          </div>
           <p className="text-[11px] text-text-light rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2">
-            &ldquo;Geser&rdquo; memotong sisi kiri/atas halaman — pakai untuk
-            membuang navbar/sidebar situs (mis. menu V-Net) tanpa fullscreen.
+            Seperti resolusi source di OBS: halaman dirender pada resolusi ini
+            lalu diskalakan ke kotaknya — fullscreen milik situs hanya mengisi
+            resolusi ini (= panelnya). &ldquo;Geser&rdquo; memotong sisi
+            kiri/atas untuk membuang navbar/sidebar situs.
           </p>
         </>
       )}
