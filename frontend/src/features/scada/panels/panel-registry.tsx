@@ -128,8 +128,18 @@ export function renderPanel(
     channels?: Channel[];
     /** Web channels go through the keep-alive iframe layer (monitor wall). */
     webLive?: boolean;
+    /** Wall hidden (other tab): pause video decode/bandwidth; web stays alive. */
+    videoSuspended?: boolean;
   }
 ) {
+  // Legacy video-ish panels also pause while the wall is hidden.
+  if (opts?.videoSuspended && (panel.type === "video" || panel.type === "wall")) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-black text-[12px] text-white/40">
+        Video dijeda — kembali ke tab Monitor
+      </div>
+    );
+  }
   switch (panel.type) {
     case "channel": {
       const channel = opts?.channels?.find(
@@ -142,6 +152,13 @@ export function renderPanel(
             kind="idle"
             reason={channel ? "Channel dinonaktifkan" : "Channel sudah dihapus"}
           />
+        );
+      }
+      if (opts?.videoSuspended && channel.kind === "video") {
+        return (
+          <div className="flex h-full w-full items-center justify-center bg-black text-[12px] text-white/40">
+            Video dijeda — kembali ke tab Monitor
+          </div>
         );
       }
       return renderChannelContent(channel, streams, tags, {

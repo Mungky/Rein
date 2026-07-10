@@ -25,6 +25,19 @@ interface LiveSlot {
 const slots = new Map<string, LiveSlot>();
 const listeners = new Set<() => void>();
 let version = 0;
+// Edit-mode lock: iframes must never swallow drag gestures while arranging.
+let layerLocked = false;
+// Maximize solo: only this channel's iframe is shown (others would float
+// above the maximize backdrop otherwise).
+let soloChannelId: string | null = null;
+
+export function setWebLayerLock(v: boolean) {
+  layerLocked = v;
+}
+
+export function setWebSolo(channelId: string | null) {
+  soloChannelId = channelId;
+}
 
 function emit() {
   version += 1;
@@ -131,23 +144,31 @@ export function WebLiveLayer() {
           if (!item) continue;
           const el = [...slot.els].reverse().find((e) => e.isConnected);
           const b = el?.getBoundingClientRect();
-          if (!el || !b || b.width < 2 || b.height < 2) {
+          const soloHidden = soloChannelId !== null && id !== soloChannelId;
+          if (!el || !b || b.width < 2 || b.height < 2 || soloHidden) {
             item.style.visibility = "hidden";
             item.style.pointerEvents = "none";
             continue;
           }
           item.style.visibility = "visible";
-          item.style.pointerEvents = slot.interact ? "auto" : "none";
-          item.style.transform = `translate(${b.left - lb.left}px, ${b.top - lb.top}px)`;
-          item.style.width = `${b.width}px`;
-          item.style.height = `${b.height}px`;
-          // Fit the native viewport into the box (contain, centered)
+          item.style.pointerEvents =
+            slot.interact && !layerLocked ? "auto" : "none";
+          item.style.transform = `translate(${Math.round(b.left - lb.left)}px, ${Math.round(b.top - lb.top)}px)`;
+          item.style.width = `${Math.round(b.width)}px`;
+          item.style.height = `${Math.round(b.height)}px`;
+          // Fit the native viewport into the box — CSS `zoom` (not transform):
+          // the browser re-rasterizes at the final size, so HMI text stays
+          // SHARP at any scale instead of looking like a shrunken photo.
           const inner = innerRefs.current.get(id);
           if (inner) {
             const vw = slot.cfg.view_w ?? 1920;
             const vh = slot.cfg.view_h ?? 1080;
             const s = Math.min(b.width / vw, b.height / vh);
-            inner.style.transform = `translate(${(b.width - vw * s) / 2}px, ${(b.height - vh * s) / 2}px) scale(${s})`;
+            inner.style.zoom = String(s);
+            // Offsets are in PRE-zoom (layout) px so the centering stays
+            // correct: layout size seen by the parent = vw*s × vh*s.
+            inner.style.left = `${Math.round((b.width - vw * s) / 2 / s)}px`;
+            inner.style.top = `${Math.round((b.height - vh * s) / 2 / s)}px`;
           }
         }
       }
@@ -160,7 +181,10 @@ export function WebLiveLayer() {
   return (
     <div
       ref={layerRef}
-      className="pointer-events-none absolute inset-0 z-20 overflow-hidden"
+      // z-30: above panel cells (z-10) AND the maximize backdrop (z-20);
+      // chrome/controls live at z-40+. The wall container is `isolate z-0`,
+      // so none of this can ever cover UI outside the wall.
+      className="pointer-events-none absolute inset-0 z-30 overflow-hidden"
     >
       {[...slots.entries()].map(([id, slot]) => {
         const vw = slot.cfg.view_w ?? 1920;
@@ -184,11 +208,7 @@ export function WebLiveLayer() {
                 else innerRefs.current.delete(id);
               }}
               className="absolute left-0 top-0 overflow-hidden"
-              style={{
-                width: vw,
-                height: vh,
-                transformOrigin: "top left",
-              }}
+              style={{ width: vw, height: vh }}
             >
               <iframe
                 key={slot.nonce}

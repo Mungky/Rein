@@ -36,7 +36,7 @@ import { useScadaStore } from "./store";
 import type { Panel } from "./types";
 import { DEFAULT_CANVAS } from "./types";
 import { CanvasStage, STAGE_PRESETS, presetRects } from "./grid/canvas-stage";
-import { WebLiveLayer } from "./web-live-layer";
+import { WebLiveLayer, setWebLayerLock, setWebSolo } from "./web-live-layer";
 import { channelAspect } from "./screen-box";
 import { PanelFrame } from "./panels/panel-frame";
 import { renderPanel } from "./panels/panel-registry";
@@ -80,6 +80,25 @@ export function ScadaView() {
     store.maximizedPanelId !== null
       ? panels.find((p) => p.id === store.maximizedPanelId) ?? null
       : null;
+
+  // Maximize solo-mode: only the maximized web channel's iframe stays visible
+  // (the others would otherwise float above the maximize backdrop).
+  useEffect(() => {
+    let webId: string | null = null;
+    if (maximizedPanel?.type === "channel") {
+      const ch = store.channels.find(
+        (c) => c.id === maximizedPanel.config.channel_id
+      );
+      if (ch?.kind === "web") webId = ch.id;
+    }
+    setWebSolo(webId);
+    return () => setWebSolo(null);
+  }, [maximizedPanel, store.channels]);
+
+  // While arranging the layout, iframes must never swallow drag gestures.
+  useEffect(() => {
+    setWebLayerLock(store.editMode);
+  }, [store.editMode]);
 
   const isMobile = useIsMobile();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -547,18 +566,26 @@ export function ScadaView() {
         </div>
       )}
 
-      {/* Data workbench / Channel registry (fullscreen stays with Monitor) */}
-      {store.viewMode === "analysis" && !fullscreen ? (
+      {/* Data workbench / Channel registry — rendered as overlays; the wall
+          below STAYS MOUNTED so web embeds never reload on tab switches. */}
+      {store.viewMode === "analysis" && !fullscreen && (
         <AnalysisView canEdit={canEdit} canManage={canManage} />
-      ) : store.viewMode === "channels" && !fullscreen ? (
+      )}
+      {store.viewMode === "channels" && !fullscreen && (
         <ChannelsView canManage={canManage} />
-      ) : (
-      /* Monitoring wall */
+      )}
+
+      {/* Monitoring wall — ALWAYS mounted (hidden on other tabs) so the
+          keep-alive web iframes survive tab switches; video is suspended
+          while hidden to save bandwidth. `isolate z-0` fences the whole wall
+          (including the iframe layer) so it can never cover dropdowns/menus
+          outside it. */}
       <div
         ref={wallRef}
         className={cn(
-          "relative min-h-0 flex-1",
-          fullscreen ? "bg-black" : "bg-bg-sidebar"
+          "relative isolate z-0 min-h-0 flex-1",
+          fullscreen ? "bg-black" : "bg-bg-sidebar",
+          store.viewMode !== "monitor" && !fullscreen && "hidden"
         )}
       >
         {rectPanelCount === 0 ? (
@@ -602,6 +629,7 @@ export function ScadaView() {
                 >
                   {renderPanel(panel, store.streams, store.tags, {
                     channels: store.channels,
+                    videoSuspended: store.viewMode !== "monitor",
                   })}
                 </PanelFrame>
               </div>
@@ -624,6 +652,8 @@ export function ScadaView() {
               renderPanel(panel, store.streams, store.tags, {
                 channels: store.channels,
                 webLive: true,
+                // Hidden wall (other tab): web stays alive, video pauses.
+                videoSuspended: store.viewMode !== "monitor",
               })
             }
             webChannelIdOf={(panel) => {
@@ -653,27 +683,41 @@ export function ScadaView() {
         <WebLiveLayer />
 
         {/* Maximized channel — one panel fills the whole wall (CCTV style).
-            Esc, the frame button, or switching pages restores the grid. */}
+            Backdrop sits BELOW the iframe layer (z-20 < z-30) so a maximized
+            web channel stays visible; solo-mode hides the other iframes. */}
         {maximizedPanel && !store.editMode && (
-          <div className={cn("absolute inset-0 z-40", fullscreen ? "bg-black" : "bg-bg-sidebar p-2")}>
-            <PanelFrame
-              title={panelTitle(maximizedPanel)}
-              editMode={false}
-              fullscreen={fullscreen}
-              maximized
-              onMaximize={() => store.setMaximizedPanel(null)}
-            >
-              {renderPanel(maximizedPanel, store.streams, store.tags, {
-                channels: store.channels,
-                webLive: true,
-              })}
-            </PanelFrame>
-          </div>
+          <>
+            <div className={cn("absolute inset-0 z-20", fullscreen ? "bg-black" : "bg-bg-sidebar p-2")}>
+              <PanelFrame
+                title={panelTitle(maximizedPanel)}
+                editMode={false}
+                fullscreen={fullscreen}
+                maximized
+                onMaximize={() => store.setMaximizedPanel(null)}
+              >
+                {renderPanel(maximizedPanel, store.streams, store.tags, {
+                  channels: store.channels,
+                  webLive: true,
+                })}
+              </PanelFrame>
+            </div>
+            {/* Restore control above everything (title bar is hidden in
+                fullscreen, and the iframe would cover an in-frame button) */}
+            {fullscreen && (
+              <button
+                onClick={() => store.setMaximizedPanel(null)}
+                className="absolute left-4 top-4 z-50 flex size-9 items-center justify-center rounded-full bg-black/60 text-white opacity-60 backdrop-blur-sm transition-opacity hover:opacity-100"
+                title="Kembalikan ukuran (Esc)"
+              >
+                <Minimize className="size-4" />
+              </button>
+            )}
+          </>
         )}
 
         {/* Fullscreen page-flipper (each perspective = a page) */}
         {fullscreen && pageCount > 1 && (
-          <div className="group fixed bottom-4 left-1/2 z-30 -translate-x-1/2">
+          <div className="group fixed bottom-4 left-1/2 z-50 -translate-x-1/2">
             <div className="flex items-center gap-1.5 rounded-full bg-black/55 px-2 py-1.5 text-white opacity-40 backdrop-blur-sm transition-opacity group-hover:opacity-100">
               <button
                 onClick={() => gotoPage(pageIndex - 1)}
@@ -745,14 +789,13 @@ export function ScadaView() {
         {fullscreen && (
           <button
             onClick={toggleFullscreen}
-            className="fixed bottom-4 right-4 z-30 flex size-9 items-center justify-center rounded-full bg-black/50 text-white opacity-40 transition-opacity hover:opacity-100"
+            className="fixed bottom-4 right-4 z-50 flex size-9 items-center justify-center rounded-full bg-black/50 text-white opacity-40 transition-opacity hover:opacity-100"
             title="Keluar layar penuh"
           >
             <Minimize className="size-4" />
           </button>
         )}
       </div>
-      )}
 
       {/* Dialogs */}
       {store.showAddPanel && store.draftPanels && (

@@ -394,6 +394,28 @@ export function CanvasStage({
             }}
           />
 
+          {/* CONTENT cells — z-10, purely visual. All interaction/chrome
+              lives in the z-40 layer below so it always floats ABOVE the
+              keep-alive iframes (z-30). */}
+          {shown.map((panel) => {
+            const r = panel.rect!;
+            return (
+              <div
+                key={panel.id}
+                className="absolute z-10 overflow-hidden ring-1 ring-white/15"
+                style={{
+                  left: offX + r.x * scale,
+                  top: offY + r.y * scale,
+                  width: r.w * scale,
+                  height: r.h * scale,
+                }}
+              >
+                {renderContent(panel)}
+              </div>
+            );
+          })}
+
+          {/* CHROME + interaction layer — z-40, above the iframe layer. */}
           {/* eslint-disable-next-line react-hooks/refs -- dragRef/moveImpl are
               only touched inside pointer-event handlers, never during render */}
           {shown.map((panel) => {
@@ -402,13 +424,14 @@ export function CanvasStage({
             const webId = webChannelIdOf?.(panel) ?? null;
             return (
               <div
-                key={panel.id}
+                key={`chrome-${panel.id}`}
                 className={cn(
-                  "group/cell absolute overflow-hidden",
-                  editMode && "cursor-move",
-                  isSel
-                    ? "z-[15] ring-2 ring-primary"
-                    : "z-10 ring-1 ring-white/15"
+                  "group/cell absolute z-40",
+                  editMode
+                    ? "cursor-move"
+                    : "pointer-events-none",
+                  editMode &&
+                    (isSel ? "ring-2 ring-primary" : "ring-1 ring-white/25")
                 )}
                 style={{
                   left: offX + r.x * scale,
@@ -416,22 +439,18 @@ export function CanvasStage({
                   width: r.w * scale,
                   height: r.h * scale,
                 }}
-                onPointerDown={(e) => startDrag(e, panel, "move")}
+                onPointerDown={
+                  editMode ? (e) => startDrag(e, panel, "move") : undefined
+                }
               >
-                <div
-                  className={cn("h-full w-full", editMode && "pointer-events-none")}
-                >
-                  {renderContent(panel)}
-                </div>
-
                 {/* View-mode chrome — buttons stay faintly visible so nobody
                     has to guess they exist; solid on hover. */}
                 {!editMode && (
-                  <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between gap-1 p-1.5">
-                    <span className="max-w-[70%] truncate rounded-full bg-black/60 px-2 py-0.5 text-[10.5px] font-semibold text-white opacity-0 backdrop-blur-sm transition-opacity group-hover/cell:opacity-100">
+                  <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-1 p-1.5">
+                    <span className="max-w-[70%] truncate rounded-full bg-black/60 px-2 py-0.5 text-[10.5px] font-semibold text-white opacity-60 backdrop-blur-sm">
                       {panelTitle(panel)}
                     </span>
-                    <span className="pointer-events-auto flex items-center gap-1 opacity-60 transition-opacity group-hover/cell:opacity-100">
+                    <span className="pointer-events-auto flex items-center gap-1 opacity-60 transition-opacity hover:opacity-100">
                       {webId && <InteractButton channelId={webId} />}
                       {webId && (
                         <ChromeButton
@@ -456,7 +475,7 @@ export function CanvasStage({
                 {/* Edit-mode label + resize handles */}
                 {editMode && (
                   <>
-                    <span className="pointer-events-none absolute left-1 top-1 z-30 max-w-[85%] truncate rounded-[var(--r-xs)] bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                    <span className="pointer-events-none absolute left-1 top-1 max-w-[85%] truncate rounded-[var(--r-xs)] bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                       {panelTitle(panel)}
                     </span>
                     {isSel &&
@@ -464,7 +483,7 @@ export function CanvasStage({
                         <span
                           key={hdl.key}
                           className={cn(
-                            "absolute z-40 size-2.5 rounded-[2px] border border-white bg-primary",
+                            "absolute size-2.5 rounded-[2px] border border-white bg-primary",
                             hdl.className
                           )}
                           style={{ cursor: hdl.cursor }}
@@ -484,7 +503,7 @@ export function CanvasStage({
             guides.xs.map((gx) => (
               <div
                 key={`gx${gx}`}
-                className="pointer-events-none absolute z-40 w-px bg-red-500"
+                className="pointer-events-none absolute z-50 w-px bg-red-500"
                 style={{ left: offX + gx * scale, top: offY, height: canvas.h * scale }}
               />
             ))}
@@ -492,7 +511,7 @@ export function CanvasStage({
             guides.ys.map((gy) => (
               <div
                 key={`gy${gy}`}
-                className="pointer-events-none absolute z-40 h-px bg-red-500"
+                className="pointer-events-none absolute z-50 h-px bg-red-500"
                 style={{ top: offY + gy * scale, left: offX, width: canvas.w * scale }}
               />
             ))}
