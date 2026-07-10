@@ -1,14 +1,18 @@
 "use client";
 
-/** Web-embed panel — a live web page (e.g. Wecon V-Net HMI) inside the grid.
- *  No OBS/MediaMTX: the viewer's browser loads the page directly, so it's
- *  pixel-sharp, real-time, and needs zero streaming infra. The catch: sites
- *  that send X-Frame-Options/CSP deny cannot be embedded — they render blank,
- *  hence the hint overlay. Each embed costs about as much as a browser tab. */
+/** Web-embed panel (DIRECT variant — Channel-page preview & mobile list).
+ *  The page is laid out at the channel's native resolution (view_w×view_h,
+ *  like an OBS source) and scaled to fit its container — so what you see here
+ *  is pixel-identical to the Monitor wall. The monitor wall itself uses the
+ *  keep-alive WebLiveLayer instead (iframes survive page flips).
+ *
+ *  No fullscreen permission: the embedded site's own fullscreen fills its
+ *  viewport (= this panel), never the whole monitor. */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Globe, RefreshCw } from "lucide-react";
 import type { WebPanelConfig } from "../types";
+import { OrbitFallback } from "./orbit-fallback";
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, v));
@@ -16,24 +20,35 @@ function clamp(v: number, lo: number, hi: number) {
 
 export function WebPanel({ config }: { config: WebPanelConfig }) {
   const zoom = clamp(config.zoom ?? 1, 0.25, 3);
-  const ox = clamp(config.offset_x ?? 0, 0, 4000);
-  const oy = clamp(config.offset_y ?? 0, 0, 4000);
+  const ox = Math.max(0, config.offset_x ?? 0);
+  const oy = Math.max(0, config.offset_y ?? 0);
+  const vw = config.view_w ?? 1920;
+  const vh = config.view_h ?? 1080;
   const [nonce, setNonce] = useState(0);
-  const url = /^https?:\/\//i.test(config.url) ? config.url : null;
 
+  const ref = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) setBox({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const url = /^https?:\/\//i.test(config.url) ? config.url : null;
   if (!url) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg-sidebar text-text-muted">
-        <Globe className="size-6 opacity-50" />
-        <span className="text-[12px]">Alamat web tidak valid</span>
-      </div>
-    );
+    return <OrbitFallback kind="error" reason="Alamat web tidak valid" />;
   }
 
+  const s = box.w > 0 && box.h > 0 ? Math.min(box.w / vw, box.h / vh) : 0;
+
   return (
-    <div className="group relative h-full w-full overflow-hidden">
-      {/* Blank-page hint — bottom layer; the iframe covers it whenever the
-          page actually renders. Visible only when the site refuses embedding
+    <div ref={ref} className="group relative h-full w-full overflow-hidden bg-black">
+      {/* Blank-page hint — visible only when the site refuses embedding
           (X-Frame-Options) and the frame stays transparent. */}
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-bg-sidebar text-center text-text-muted">
         <Globe className="size-6 opacity-50" />
@@ -43,30 +58,34 @@ export function WebPanel({ config }: { config: WebPanelConfig }) {
         </span>
       </div>
 
-      <iframe
-        key={nonce}
-        src={url}
-        title={url}
-        className="absolute left-0 top-0 border-0"
-        style={{
-          // Oversize by the offset, then shift pre-scale — offsets crop away
-          // the embedded site's own chrome (navbar/sidebar).
-          width: `calc(${100 / zoom}% + ${ox}px)`,
-          height: `calc(${100 / zoom}% + ${oy}px)`,
-          transform: `scale(${zoom}) translate(-${ox}px, -${oy}px)`,
-          transformOrigin: "top left",
-        }}
-        // Enough for a live HMI session (scripts + login cookies + forms),
-        // but no popups and no navigating REIN itself away.
-        //
-        // Fullscreen permission is deliberately ABSENT: with it, the embedded
-        // site's own fullscreen button would take over the entire monitor.
-        // Without it, well-behaved sites fall back to "fill the viewport" —
-        // and inside an iframe their viewport IS this panel, so their
-        // fullscreen stays contained to the cell (OBS-style layouting).
-        sandbox="allow-scripts allow-same-origin allow-forms"
-        referrerPolicy="no-referrer"
-      />
+      {s > 0 && (
+        <div
+          className="absolute overflow-hidden"
+          style={{
+            left: (box.w - vw * s) / 2,
+            top: (box.h - vh * s) / 2,
+            width: vw,
+            height: vh,
+            transform: `scale(${s})`,
+            transformOrigin: "top left",
+          }}
+        >
+          <iframe
+            key={nonce}
+            src={url}
+            title={url}
+            className="absolute left-0 top-0 border-0"
+            style={{
+              width: `calc(${100 / zoom}% + ${ox}px)`,
+              height: `calc(${100 / zoom}% + ${oy}px)`,
+              transform: `scale(${zoom}) translate(-${ox}px, -${oy}px)`,
+              transformOrigin: "top left",
+            }}
+            sandbox="allow-scripts allow-same-origin allow-forms"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+      )}
 
       {/* Reload — appears on hover so it never covers the HMI while watching */}
       <button

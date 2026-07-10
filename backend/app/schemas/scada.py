@@ -59,7 +59,16 @@ class VideoPanel(BaseModel):
 ChartRange = Literal["1h", "6h", "24h", "7d", "30d"]
 
 
-class ChartPanelConfig(BaseModel):
+class ScreenSize(BaseModel):
+    """Mixin: "Resolusi Layar" — every CHANNEL is a screen with a fixed
+    resolution; the Monitor page only scales it (aspect locked, letterboxed).
+    Optional so legacy panel configs (which share these models) stay valid."""
+
+    view_w: int | None = Field(default=1920, ge=320, le=7680)
+    view_h: int | None = Field(default=1080, ge=180, le=4320)
+
+
+class ChartPanelConfig(ScreenSize):
     tag_ids: list[uuid.UUID] = Field(min_length=1, max_length=4)
     range: ChartRange = "24h"
     show_minmax: bool = False
@@ -74,7 +83,7 @@ class ChartPanel(BaseModel):
     config: ChartPanelConfig
 
 
-class TablePanelConfig(BaseModel):
+class TablePanelConfig(ScreenSize):
     tag_ids: list[uuid.UUID] = Field(min_length=1, max_length=8)
     range: ChartRange = "24h"
 
@@ -88,7 +97,7 @@ class TablePanel(BaseModel):
     config: TablePanelConfig
 
 
-class GaugePanelConfig(BaseModel):
+class GaugePanelConfig(ScreenSize):
     tag_id: uuid.UUID
     # Status thresholds (optional). `direction` says which side is bad:
     # "above" → value ≥ warning is Waspada, ≥ critical is Kritis;
@@ -107,7 +116,7 @@ class GaugePanel(BaseModel):
     config: GaugePanelConfig
 
 
-class BarPanelConfig(BaseModel):
+class BarPanelConfig(ScreenSize):
     # Comparison across tags ("plant 1 vs plant 2") — needs at least two bars
     tag_ids: list[uuid.UUID] = Field(min_length=2, max_length=8)
     range: ChartRange = "24h"
@@ -123,7 +132,7 @@ class BarPanel(BaseModel):
     config: BarPanelConfig
 
 
-class AlarmPanelConfig(BaseModel):
+class AlarmPanelConfig(ScreenSize):
     # Watch a set of tags; thresholds are read from each tag's own
     # config.alarm_min / config.alarm_max (set in Analisis), not here.
     tag_ids: list[uuid.UUID] = Field(min_length=1, max_length=8)
@@ -164,8 +173,9 @@ class WallPanel(BaseModel):
     config: WallPanelConfig
 
 
-class ActivityPanelConfig(BaseModel):
-    # No configuration — the panel always lists everyone currently on REIN.
+class ActivityPanelConfig(ScreenSize):
+    # No source configuration — always lists everyone currently on REIN.
+    # (Screen resolution fields come from the ScreenSize mixin.)
     model_config = {"extra": "forbid"}
 
 
@@ -302,7 +312,7 @@ ChannelKind = Literal[
 ]
 
 
-class ChannelVideoConfig(BaseModel):
+class ChannelVideoConfig(ScreenSize):
     stream_id: uuid.UUID
     # Crop ONE cell of the stream's mosaic (row-major, 0-based). None = whole
     # frame. The mosaic grid itself lives on the stream (mosaic_rows/cols).

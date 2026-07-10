@@ -4,7 +4,7 @@
  *  A channel = number + nickname + one source definition; every field that
  *  used to live in the old "Tambah Panel" popup is configured here instead. */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -59,6 +59,14 @@ const TAG_LIMITS: Record<"chart" | "table" | "bar" | "alarm", { min: number; max
 
 const WEB_ZOOMS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2] as const;
 
+/** Common screen resolutions — a channel IS a screen ("resolusi layar"). */
+const SCREEN_PRESETS = [
+  { label: "HD", w: 1280, h: 720 },
+  { label: "FHD", w: 1920, h: 1080 },
+  { label: "2K", w: 2560, h: 1440 },
+  { label: "4K", w: 3840, h: 2160 },
+] as const;
+
 export function ChannelForm({
   initial,
   channels,
@@ -66,6 +74,7 @@ export function ChannelForm({
   tags,
   onSaved,
   onCancel,
+  onDraftChange,
 }: {
   /** Existing channel when editing; null when creating. */
   initial: Channel | null;
@@ -74,6 +83,9 @@ export function ChannelForm({
   tags: Tag[];
   onSaved: () => Promise<void>;
   onCancel: () => void;
+  /** Live draft — fired on every field change so the preview above updates
+   *  immediately (WYSIWYG editing). */
+  onDraftChange?: (draft: Channel) => void;
 }) {
   const enabledStreams = streams.filter((s) => s.enabled);
   const enabledTags = tags.filter((t) => t.enabled);
@@ -104,8 +116,13 @@ export function ChannelForm({
   const [zoom, setZoom] = useState<number>(webCfg?.zoom ?? 1);
   const [offsetX, setOffsetX] = useState<number>(webCfg?.offset_x ?? 0);
   const [offsetY, setOffsetY] = useState<number>(webCfg?.offset_y ?? 0);
-  const [viewW, setViewW] = useState<number>(webCfg?.view_w ?? 1920);
-  const [viewH, setViewH] = useState<number>(webCfg?.view_h ?? 1080);
+
+  // "Resolusi Layar" — universal: every channel is a screen (any kind)
+  const initScreen = init?.config as
+    | { view_w?: number | null; view_h?: number | null }
+    | undefined;
+  const [viewW, setViewW] = useState<number>(initScreen?.view_w ?? 1920);
+  const [viewH, setViewH] = useState<number>(initScreen?.view_h ?? 1080);
 
   const dataCfg =
     init && ["chart", "table", "bar", "alarm"].includes(init.kind)
@@ -166,35 +183,64 @@ export function ChannelForm({
             : limits !== null && tagIds.length >= limits.min);
 
   function buildConfig(): Record<string, unknown> {
+    // Every channel is a screen — resolution rides along on all kinds.
+    const screen = {
+      view_w: Math.min(7680, Math.max(320, viewW || 1920)),
+      view_h: Math.min(4320, Math.max(180, viewH || 1080)),
+    };
     switch (kind) {
       case "video":
-        return { stream_id: streamId, cell };
+        return { ...screen, stream_id: streamId, cell };
       case "web":
         return {
+          ...screen,
           url: url.trim(),
           zoom,
           offset_x: Math.max(0, offsetX || 0),
           offset_y: Math.max(0, offsetY || 0),
-          view_w: Math.min(7680, Math.max(320, viewW || 1920)),
-          view_h: Math.min(4320, Math.max(180, viewH || 1080)),
         };
       case "gauge":
         return {
+          ...screen,
           tag_id: gaugeTagId,
           warning: warning.trim() === "" ? null : Number(warning),
           critical: critical.trim() === "" ? null : Number(critical),
           direction,
         };
       case "activity":
-        return {};
+        return { ...screen };
       case "chart":
-        return { tag_ids: tagIds, range, show_minmax: tagIds.length === 1 };
+        return {
+          ...screen,
+          tag_ids: tagIds,
+          range,
+          show_minmax: tagIds.length === 1,
+        };
       case "bar":
-        return { tag_ids: tagIds, range, metric: "avg" };
+        return { ...screen, tag_ids: tagIds, range, metric: "avg" };
       default: // table, alarm
-        return { tag_ids: tagIds, range };
+        return { ...screen, tag_ids: tagIds, range };
     }
   }
+
+  // Live draft → the preview above updates as you type (WYSIWYG)
+  const draftKey = JSON.stringify([
+    number, name, kind, enabled, streamId, cell, url, zoom, offsetX, offsetY,
+    viewW, viewH, tagIds, range, gaugeTagId, warning, critical, direction,
+  ]);
+  useEffect(() => {
+    onDraftChange?.({
+      id: init?.id ?? "draft",
+      number,
+      name: name || "(belum diberi nama)",
+      kind,
+      config: buildConfig(),
+      enabled,
+      created_at: null,
+      updated_at: null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -410,42 +456,76 @@ export function ChannelForm({
               />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                Resolusi Halaman — Lebar (px)
-              </label>
-              <input
-                type="number"
-                min={320}
-                max={7680}
-                className="field-input"
-                value={viewW}
-                onChange={(e) => setViewW(Number(e.target.value) || 1920)}
-              />
-            </div>
-            <div>
-              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                Resolusi Halaman — Tinggi (px)
-              </label>
-              <input
-                type="number"
-                min={180}
-                max={4320}
-                className="field-input"
-                value={viewH}
-                onChange={(e) => setViewH(Number(e.target.value) || 1080)}
-              />
-            </div>
-          </div>
           <p className="text-[11px] text-text-light rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2">
-            Seperti resolusi source di OBS: halaman dirender pada resolusi ini
-            lalu diskalakan ke kotaknya — fullscreen milik situs hanya mengisi
-            resolusi ini (= panelnya). &ldquo;Geser&rdquo; memotong sisi
-            kiri/atas untuk membuang navbar/sidebar situs.
+            &ldquo;Geser&rdquo; memotong sisi kiri/atas halaman — pakai untuk
+            membuang navbar/sidebar situs (mis. menu V-Net) tanpa fullscreen.
           </p>
         </>
       )}
+
+      {/* Resolusi Layar — universal: channel = monitor dengan resolusi tetap */}
+      <div className="rounded-[var(--r)] border border-border-soft bg-bg p-3">
+        <div className="text-[12px] font-semibold text-text mb-0.5">
+          Resolusi Layar
+        </div>
+        <p className="text-[11px] text-text-light mb-2.5">
+          Seperti resolusi source di OBS: channel ini adalah &ldquo;layar&rdquo;
+          dengan bentuk tetap. Di Monitor dia hanya diperbesar/diperkecil utuh —
+          tidak pernah gepeng. Fullscreen milik situs web juga hanya mengisi
+          layar ini.
+        </p>
+        <div className="mb-2 flex gap-1.5">
+          {SCREEN_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              type="button"
+              onClick={() => {
+                setViewW(p.w);
+                setViewH(p.h);
+              }}
+              className={cn(
+                "flex-1 rounded-[var(--r)] border px-1 py-1.5 text-[11px] font-semibold",
+                viewW === p.w && viewH === p.h
+                  ? "border-primary bg-primary/5 text-text"
+                  : "border-border-soft text-text-muted cursor-pointer hover:border-border"
+              )}
+            >
+              {p.label}
+              <span className="block text-[9.5px] font-normal text-text-light">
+                {p.w}×{p.h}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-2.5">
+          <div>
+            <label className="text-[11px] font-semibold text-text-muted mb-1 block">
+              Lebar (px)
+            </label>
+            <input
+              type="number"
+              min={320}
+              max={7680}
+              className="field-input"
+              value={viewW}
+              onChange={(e) => setViewW(Number(e.target.value) || 1920)}
+            />
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-text-muted mb-1 block">
+              Tinggi (px)
+            </label>
+            <input
+              type="number"
+              min={180}
+              max={4320}
+              className="field-input"
+              value={viewH}
+              onChange={(e) => setViewH(Number(e.target.value) || 1080)}
+            />
+          </div>
+        </div>
+      </div>
 
       {isTagKind && (
         <>

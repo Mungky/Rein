@@ -37,6 +37,7 @@ import type { Panel } from "./types";
 import { DEFAULT_CANVAS } from "./types";
 import { CanvasStage, STAGE_PRESETS, presetRects } from "./grid/canvas-stage";
 import { WebLiveLayer } from "./web-live-layer";
+import { channelAspect } from "./screen-box";
 import { PanelFrame } from "./panels/panel-frame";
 import { renderPanel } from "./panels/panel-registry";
 import { AddPanelDialog } from "./add-panel-dialog";
@@ -631,6 +632,13 @@ export function ScadaView() {
                 (c) => c.id === panel.config.channel_id
               );
               return ch?.kind === "web" ? ch.id : null;
+            }}
+            panelAspect={(panel) => {
+              if (panel.type !== "channel") return null;
+              const ch = store.channels.find(
+                (c) => c.id === panel.config.channel_id
+              );
+              return ch ? channelAspect(ch) : null;
             }}
             onRectChange={store.editMode ? store.updatePanelRect : undefined}
             onRemove={store.editMode ? store.removePanel : undefined}

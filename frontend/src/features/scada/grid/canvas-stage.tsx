@@ -93,6 +93,8 @@ interface DragState {
   startX: number; // pointer, screen px
   startY: number;
   orig: PanelRect;
+  /** Screen aspect (w/h) — resize keeps it locked (OBS-style). null = free. */
+  aspect: number | null;
 }
 
 export function CanvasStage({
@@ -103,6 +105,7 @@ export function CanvasStage({
   panelTitle,
   renderContent,
   webChannelIdOf,
+  panelAspect,
   onRectChange,
   onRemove,
   onMaximize,
@@ -115,6 +118,8 @@ export function CanvasStage({
   renderContent: (panel: Panel) => React.ReactNode;
   /** channel_id when the panel is a live web channel (interact/reload chrome). */
   webChannelIdOf?: (panel: Panel) => string | null;
+  /** Screen aspect (w/h) per panel — resize keeps it locked. null = free. */
+  panelAspect?: (panel: Panel) => number | null;
   onRectChange?: (id: string, rect: PanelRect) => void;
   onRemove?: (id: string) => void;
   onMaximize?: (id: string) => void;
@@ -224,8 +229,34 @@ export function CanvasStage({
         }
         x = Math.min(Math.max(x, 0), canvas.w - w);
         y = Math.min(Math.max(y, 0), canvas.h - h);
+      } else if (drag.aspect !== null) {
+        // Aspect-locked resize (OBS-style): width drives, height follows;
+        // the opposite corner stays anchored — the screen can never squish.
+        const a = drag.aspect;
+        const anchorX = drag.edges.l ? drag.orig.x + drag.orig.w : drag.orig.x;
+        const anchorY = drag.edges.t ? drag.orig.y + drag.orig.h : drag.orig.y;
+        let newW = drag.edges.r ? drag.orig.w + dx : drag.orig.w - dx;
+        // Snap the moving vertical edge
+        const movingX = drag.edges.r ? anchorX + newW : anchorX - newW;
+        const sx = snap1(movingX, cand.xs);
+        if (sx !== null) {
+          newW = Math.abs(sx - anchorX);
+          gx.push(sx);
+        }
+        // Clamp: min size + stay inside the canvas on BOTH axes
+        const maxWx = drag.edges.r ? canvas.w - anchorX : anchorX;
+        const maxHy = drag.edges.b ? canvas.h - anchorY : anchorY;
+        newW = Math.max(
+          Math.max(MIN_SIZE, MIN_SIZE * a),
+          Math.min(newW, maxWx, maxHy * a)
+        );
+        const newH = newW / a;
+        x = drag.edges.l ? anchorX - newW : anchorX;
+        y = drag.edges.t ? anchorY - newH : anchorY;
+        w = newW;
+        h = newH;
       } else {
-        // resize by active edges
+        // Free resize by active edges (legacy panels without a screen aspect)
         let l = drag.orig.x;
         let t = drag.orig.y;
         let r = drag.orig.x + drag.orig.w;
@@ -299,6 +330,7 @@ export function CanvasStage({
       startX: e.clientX,
       startY: e.clientY,
       orig: { ...panel.rect },
+      aspect: mode === "resize" ? panelAspect?.(panel) ?? null : null,
     };
     const onMove = (ev: PointerEvent) => moveImpl.current(ev);
     const onUp = () => {
@@ -392,20 +424,21 @@ export function CanvasStage({
                   {renderContent(panel)}
                 </div>
 
-                {/* View-mode hover chrome */}
+                {/* View-mode chrome — buttons stay faintly visible so nobody
+                    has to guess they exist; solid on hover. */}
                 {!editMode && (
-                  <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between gap-1 p-1.5 opacity-0 transition-opacity group-hover/cell:opacity-100">
-                    <span className="max-w-[70%] truncate rounded-full bg-black/60 px-2 py-0.5 text-[10.5px] font-semibold text-white backdrop-blur-sm">
+                  <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between gap-1 p-1.5">
+                    <span className="max-w-[70%] truncate rounded-full bg-black/60 px-2 py-0.5 text-[10.5px] font-semibold text-white opacity-0 backdrop-blur-sm transition-opacity group-hover/cell:opacity-100">
                       {panelTitle(panel)}
                     </span>
-                    <span className="pointer-events-auto flex items-center gap-1">
+                    <span className="pointer-events-auto flex items-center gap-1 opacity-60 transition-opacity group-hover/cell:opacity-100">
                       {webId && <InteractButton channelId={webId} />}
                       {webId && (
                         <ChromeButton
                           title="Muat ulang halaman"
                           onClick={() => reloadWebSlot(webId)}
                         >
-                          <RefreshCw className="size-3" />
+                          <RefreshCw className="size-3.5" />
                         </ChromeButton>
                       )}
                       {onMaximize && (
@@ -413,7 +446,7 @@ export function CanvasStage({
                           title="Perbesar channel ini"
                           onClick={() => onMaximize(panel.id)}
                         >
-                          <Maximize2 className="size-3" />
+                          <Maximize2 className="size-3.5" />
                         </ChromeButton>
                       )}
                     </span>
@@ -527,9 +560,9 @@ function ChromeButton({
       title={title}
       onClick={onClick}
       className={cn(
-        "flex size-6 items-center justify-center rounded-full backdrop-blur-sm",
+        "flex size-7 items-center justify-center rounded-full backdrop-blur-sm",
         active
-          ? "bg-primary text-white"
+          ? "bg-primary text-white ring-2 ring-primary/50"
           : "bg-black/60 text-white hover:bg-black/80"
       )}
     >
@@ -548,7 +581,7 @@ function InteractButton({ channelId }: { channelId: string }) {
       active={interact}
       onClick={() => setWebInteract(channelId, !interact)}
     >
-      <MousePointer2 className="size-3" />
+      <MousePointer2 className="size-3.5" />
     </ChromeButton>
   );
 }

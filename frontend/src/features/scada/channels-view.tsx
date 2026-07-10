@@ -23,6 +23,7 @@ import { scadaApi } from "@/lib/api/scada";
 import { useScadaStore } from "./store";
 import { ChannelForm, CHANNEL_KINDS, channelKindLabel } from "./channel-form";
 import { renderChannelContent } from "./panels/panel-registry";
+import { channelScreen } from "./screen-box";
 import type { Channel, ChannelVideoConfig, WebPanelConfig } from "./types";
 
 export function ChannelsView({ canManage }: { canManage: boolean }) {
@@ -30,6 +31,8 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Live WYSIWYG: while the form below is open, the preview shows ITS draft.
+  const [draft, setDraft] = useState<Channel | null>(null);
 
   const sorted = useMemo(
     () => [...store.channels].sort((a, b) => a.number - b.number),
@@ -115,12 +118,17 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
   async function onSaved() {
     await store.refreshChannels();
     setEditingId(null);
+    setDraft(null);
   }
 
   const editingChannel =
     editingId !== null && editingId !== "new"
       ? sorted.find((c) => c.id === editingId) ?? null
       : null;
+
+  // What the preview canvas shows: the live draft while editing, else the
+  // selected channel. Preview is ALWAYS on top; the form sits below it.
+  const previewChannel = editingId !== null ? draft : selected;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
@@ -258,57 +266,87 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
           )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          {editingId === "new" ? (
-            <ChannelForm
-              initial={null}
-              channels={store.channels}
-              streams={store.streams}
-              tags={store.tags}
-              onSaved={onSaved}
-              onCancel={() => setEditingId(null)}
-            />
-          ) : editingChannel ? (
-            <ChannelForm
-              initial={editingChannel}
-              channels={store.channels}
-              streams={store.streams}
-              tags={store.tags}
-              onSaved={onSaved}
-              onCancel={() => setEditingId(null)}
-            />
-          ) : selected ? (
-            <div className="flex flex-col gap-3">
-              <div className="aspect-video w-full overflow-hidden rounded-[var(--r-lg)] border border-border bg-black shadow-[var(--shadow-sm)]">
-                {renderChannelContent(selected, store.streams, store.tags)}
-              </div>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-text-muted">
-                <span>
-                  Jenis:{" "}
-                  <span className="font-semibold text-text">
-                    {channelKindLabel(selected.kind)}
+          <div className="flex flex-col gap-3">
+            {/* Preview — ALWAYS on top, on the channel's own screen canvas
+                (letterboxed at its resolusi layar). Live-updates while the
+                form below is being edited (WYSIWYG). */}
+            {previewChannel ? (
+              <div className="flex flex-col gap-2">
+                <div className="aspect-video w-full overflow-hidden rounded-[var(--r-lg)] border border-border bg-black shadow-[var(--shadow-sm)]">
+                  {renderChannelContent(previewChannel, store.streams, store.tags)}
+                </div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-text-muted">
+                  <span>
+                    Jenis:{" "}
+                    <span className="font-semibold text-text">
+                      {channelKindLabel(previewChannel.kind)}
+                    </span>
                   </span>
-                </span>
-                <span>
-                  Status:{" "}
-                  <span
-                    className={cn(
-                      "font-semibold",
-                      selected.enabled ? "text-green-600" : "text-text-light"
-                    )}
-                  >
-                    {selected.enabled ? "Aktif" : "Nonaktif"}
+                  <span>
+                    Layar:{" "}
+                    <span className="font-semibold text-text">
+                      {channelScreen(previewChannel).w}×
+                      {channelScreen(previewChannel).h}
+                    </span>
                   </span>
-                </span>
+                  <span>
+                    Status:{" "}
+                    <span
+                      className={cn(
+                        "font-semibold",
+                        previewChannel.enabled
+                          ? "text-green-600"
+                          : "text-text-light"
+                      )}
+                    >
+                      {previewChannel.enabled ? "Aktif" : "Nonaktif"}
+                    </span>
+                  </span>
+                  {editingId !== null && (
+                    <span className="text-[11px] text-primary">
+                      preview langsung — berubah saat form diisi
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-              <Eye className="size-7 text-text-light" />
-              <p className="text-[12px] text-text-muted">
-                Pilih channel di kiri untuk melihat preview.
-              </p>
-            </div>
-          )}
+            ) : editingId === null ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+                <Eye className="size-7 text-text-light" />
+                <p className="text-[12px] text-text-muted">
+                  Pilih channel di kiri untuk melihat preview.
+                </p>
+              </div>
+            ) : null}
+
+            {/* Form — BELOW the preview so changes are visible immediately */}
+            {editingId === "new" ? (
+              <ChannelForm
+                initial={null}
+                channels={store.channels}
+                streams={store.streams}
+                tags={store.tags}
+                onSaved={onSaved}
+                onCancel={() => {
+                  setEditingId(null);
+                  setDraft(null);
+                }}
+                onDraftChange={setDraft}
+              />
+            ) : editingChannel ? (
+              <ChannelForm
+                initial={editingChannel}
+                channels={store.channels}
+                streams={store.streams}
+                tags={store.tags}
+                onSaved={onSaved}
+                onCancel={() => {
+                  setEditingId(null);
+                  setDraft(null);
+                }}
+                onDraftChange={setDraft}
+              />
+            ) : null}
+          </div>
         </div>
       </section>
 

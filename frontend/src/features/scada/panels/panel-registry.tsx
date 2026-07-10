@@ -30,12 +30,27 @@ import { WebPanel } from "./web-panel";
 import { CroppedVideoPanel } from "./cropped-video-panel";
 import { OrbitFallback } from "./orbit-fallback";
 import { WebSlot } from "../web-live-layer";
+import { ScreenBox, channelScreen } from "../screen-box";
 
-/** Render a channel's SOURCE (no grid involved) — used by the "channel" panel
- *  case and reusable anywhere a channel preview is needed. `webLive` renders
- *  web channels through the keep-alive layer (monitor wall) instead of a
- *  direct iframe (preview/mobile). */
+/** Render a channel's SOURCE inside its fixed-resolution ScreenBox — the
+ *  channel is a "monitor" (resolusi layar tetap); every placement (Monitor
+ *  wall, preview, mobile, maximize) shows the SAME screen, only scaled.
+ *  `webLive` routes web channels through the keep-alive layer (monitor wall)
+ *  instead of a direct iframe (preview/mobile). */
 export function renderChannelContent(
+  channel: Channel,
+  streams: Stream[],
+  tags: Tag[],
+  opts?: { webLive?: boolean }
+) {
+  return (
+    <ScreenBox screen={channelScreen(channel)}>
+      {renderChannelSource(channel, streams, tags, opts)}
+    </ScreenBox>
+  );
+}
+
+function renderChannelSource(
   channel: Channel,
   streams: Stream[],
   tags: Tag[],
