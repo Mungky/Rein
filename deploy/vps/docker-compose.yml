@@ -1,0 +1,117 @@
+# ==========================================================================
+#  R-Net Relay Pusat — MediaMTX + Mosquitto di VPS (via Coolify)
+# ==========================================================================
+#  Cara pakai (detail di PANDUAN-VPS-RELAY.md):
+#    Coolify → + New → Docker Compose → paste seluruh file ini →
+#    ganti semua "GANTI_..." → set Environment Variable MQTT_PASS →
+#    domain https://stream.remula-inti.com dipetakan ke service mediamtx
+#    port 8888 → Deploy.
+#
+#  Arsitektur:
+#    OBS site ──RTMP push (1935)──▶ mediamtx ──LL-HLS (8888)──▶ Coolify/Traefik
+#                                                                (HTTPS domain tetap)
+#    V-Box    ──MQTT (1883)──▶ mosquitto ◀── bridge historian (resource terpisah)
+#
+#  Site meng-upload SEKALI; VPS yang melayani semua penonton.
+# ==========================================================================
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    restart: unless-stopped
+    ports:
+      - "1935:1935"        # RTMP ingest dari OBS tiap site
+      # - "8890:8890/udp"  # SRT (opsional: jaringan site jelek/butuh enkripsi)
+    expose:
+      - "8888"             # LL-HLS — dipetakan ke domain lewat Coolify (JANGAN publish langsung)
+    configs:
+      - source: mediamtx-config
+        target: /mediamtx.yml
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"        # MQTT dari V-Box (batasi via firewall bila bisa)
+    environment:
+      MQTT_USER: ${MQTT_USER:-vbox}
+      MQTT_PASS: ${MQTT_PASS:?set MQTT_PASS di Environment Variables Coolify}
+    configs:
+      - source: mosquitto-config
+        target: /mosquitto/config/mosquitto.conf
+    # Buat file password dari env saat start, lalu jalankan broker.
+    entrypoint:
+      - sh
+      - -c
+      - >
+        mosquitto_passwd -c -b /mosquitto/config/passwd "$$MQTT_USER" "$$MQTT_PASS"
+        && exec mosquitto -c /mosquitto/config/mosquitto.conf
+
+configs:
+  mosquitto-config:
+    content: |
+      listener 1883 0.0.0.0
+      allow_anonymous false
+      password_file /mosquitto/config/passwd
+      persistence false
+      log_dest stdout
+      log_type error
+      log_type warning
+
+  mediamtx-config:
+    content: |
+      # ── MediaMTX relay pusat R-Net ──
+      logLevel: info
+      api: no
+      rtsp: no
+      webrtcDisable: no
+
+      rtmp: yes
+      rtmpAddress: :1935
+
+      srt: no                       # nyalakan + buka port 8890/udp bila perlu
+
+      hls: yes
+      hlsAddress: :8888
+      hlsVariant: lowLatency
+      hlsSegmentDuration: 1s        # HARUS = Keyframe Interval OBS (1 detik)
+      hlsPartDuration: 200ms
+      hlsSegmentCount: 7
+      hlsAllowOrigins: ["https://rein.remula-inti.com"]
+
+      # WebRTC (latensi <1 dtk) — uji coba SETELAH HLS stabil:
+      # butuh publish port 8889/tcp + 8189/udp dan webrtcAdditionalHosts: [IP VPS]
+      webrtc: no
+
+      authMethod: internal
+      authInternalUsers:
+        # ── PENONTON: dipakai R-Net > Channel > Sumber Stream (user/pass read).
+        #    Boleh membaca SEMUA stream.
+        - user: rein-viewer
+          pass: GANTI_PASSWORD_VIEWER
+          permissions:
+            - action: read
+
+        # ── PEMANCAR per site: hanya boleh mengisi path miliknya sendiri.
+        #    (site Lombok tidak mungkin menimpa stream site lain)
+        - user: site-server
+          pass: GANTI_PASSWORD_SITE_SERVER
+          permissions:
+            - action: publish
+              path: server
+        - user: site-lombok
+          pass: GANTI_PASSWORD_SITE_LOMBOK
+          permissions:
+            - action: publish
+              path: lombok
+        # Tambah site baru: salin blok di atas + tambah path di bawah.
+
+      paths:
+        server:
+          source: publisher
+        lombok:
+          source: publisher
+        # Kamera RTSP langsung (TANPA OBS) — VPS menarik sendiri dari kamera:
+        # cctv-gudang:
+        #   source: rtsp://user:pass@ip-kamera:554/stream1
+        #   sourceOnDemand: yes    # hanya ditarik saat ada yang menonton (hemat)

@@ -75,11 +75,18 @@ sekaligus — tidak ada browser/TV yang sanggup, di produk komersial mana pun.
 - [ ] USER: repo GitHub → private; cek CORS_ORIGINS server; firewall VPS
 
 ### Fase 3 — Infrastruktur streaming serius (untuk 137 layar)
-- [ ] MediaMTX pusat di VPS/server (bukan laptop) + domain tetap
-      (named tunnel / reverse proxy — URL tidak ganti tiap restart)
-- [ ] Auth per stream rapi; per-site publisher
-- [ ] Evaluasi WebRTC (latensi <1 dtk) vs LL-HLS utk ruang kontrol
-- [ ] Draggable crop-lines mosaic (kalibrasi geser garis di Kelola Stream)
+- [x] Paket relay pusat SIAP: `deploy/vps/docker-compose.yml` (MediaMTX +
+      Mosquitto via Coolify, domain tetap stream.remula-inti.com) +
+      `deploy/vps/PANDUAN-VPS-RELAY.md` + Dockerfile bridge
+- [x] Auth per-site publisher (tiap site hanya boleh mengisi path sendiri);
+      viewer terpisah
+- [x] Crop manual bebas menggantikan rencana draggable crop-lines (selesai
+      lebih dulu di halaman Channel)
+- [ ] USER: DNS A record `stream` → IP VPS; firewall 1935+1883; deploy compose
+      di Coolify; pindahkan OBS site ke RTMP VPS; tes §9 panduan
+- [ ] Setelah stabil: uji WebRTC (latensi <1 dtk) di satu stream
+- [ ] Token stream per-sesi (kredensial viewer tak lagi dibagikan ke browser)
+- [ ] MQTT TLS 8883 / pembatasan IP
 
 ### Fase 4 — Data & alarm matang
 - [ ] Bridge MQTT jalan sebagai service di server + tes V-Box asli
