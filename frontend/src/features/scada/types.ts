@@ -63,10 +63,21 @@ export interface WallPanelConfig {
   rows: number; // 1–6
   cols: number; // 1–6
   cells: (WallCell | null)[]; // row-major, length = rows×cols; null = empty
+  /** How each channel fills its cell. "cover" (default) crops to fill; contain
+   *  shows the whole camera letterboxed (nothing cut off). */
+  fit?: "cover" | "contain";
 }
 
 /** Activity panel has no config — it always shows everyone currently on REIN. */
 export type ActivityPanelConfig = Record<string, never>;
+
+/** Web-embed panel: a live web page (e.g. Wecon V-Net HMI) inside the grid.
+ *  No OBS/MediaMTX involved — the viewer's browser loads the page directly. */
+export interface WebPanelConfig {
+  url: string;
+  /** Visual zoom, 1 = 100%. Lets you tighten an HMI to fit the cell. */
+  zoom?: number;
+}
 
 /** Discriminated union on `type`. Implemented: "video", "chart", "table",
  *  "gauge", "bar", "alarm", "wall", "activity". The backend rejects unknown
@@ -79,7 +90,8 @@ export type Panel =
   | (PanelBase & { type: "bar"; config: BarPanelConfig })
   | (PanelBase & { type: "alarm"; config: AlarmPanelConfig })
   | (PanelBase & { type: "wall"; config: WallPanelConfig })
-  | (PanelBase & { type: "activity"; config: ActivityPanelConfig });
+  | (PanelBase & { type: "activity"; config: ActivityPanelConfig })
+  | (PanelBase & { type: "web"; config: WebPanelConfig });
 
 export type PanelType = Panel["type"];
 

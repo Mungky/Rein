@@ -71,6 +71,13 @@ interface ScadaState {
     panelId: string,
     patch: { title?: string; config?: Panel["config"] }
   ) => void;
+  /** Persist one panel's change straight to the ACTIVE perspective (no draft,
+   *  no Simpan) — used to tweak a Video Wall outside layout edit-mode. Silently
+   *  no-ops on the read-only admin default. */
+  updateActivePanelPersist: (
+    panelId: string,
+    patch: { title?: string; config?: Panel["config"] }
+  ) => Promise<void>;
   save: () => Promise<void>;
   saveAs: (name: string) => Promise<void>;
   /** Create a fresh, empty page (perspective) and drop straight into edit mode. */
@@ -242,6 +249,28 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
         p.id === panelId ? ({ ...p, ...patch } as Panel) : p
       ),
     });
+  },
+
+  updateActivePanelPersist: async (panelId, patch) => {
+    const { activePerspectiveId, perspectives } = get();
+    const active = perspectives.find((p) => p.id === activePerspectiveId);
+    if (!active || active.read_only) return;
+    const panels = active.layout.panels.map((p) =>
+      p.id === panelId ? ({ ...p, ...patch } as Panel) : p
+    );
+    const layout = { version: 1 as const, panels };
+    // Optimistic — reflect the change instantly; a reload resyncs if the PATCH
+    // below ever fails.
+    set({
+      perspectives: perspectives.map((p) =>
+        p.id === active.id ? { ...p, layout } : p
+      ),
+    });
+    try {
+      await scadaApi.updatePerspective(active.id, { layout });
+    } catch {
+      /* best-effort */
+    }
   },
 
   save: async () => {

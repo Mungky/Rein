@@ -295,26 +295,16 @@ export function VideoPanel({
   );
 }
 
-/** Game-style network ping meter: three signal bars + ms.
- *  < 70ms hijau · 70–150ms kuning · > 150ms merah. */
+/** Game-style ping readout: just the number, colored by health.
+ *  < 70ms hijau · 70–120ms kuning · > 120ms merah. */
 function PingBadge({ ms }: { ms: number }) {
-  const tier = ms < 70 ? 3 : ms < 150 ? 2 : 1;
-  const barColor =
-    tier === 3 ? "bg-green-500" : tier === 2 ? "bg-amber-400" : "bg-red-500";
   const textColor =
-    tier === 3 ? "text-green-400" : tier === 2 ? "text-amber-300" : "text-red-400";
-  const heights = [5, 8, 11];
+    ms < 70 ? "text-green-400" : ms <= 120 ? "text-amber-300" : "text-red-400";
+  const dotColor =
+    ms < 70 ? "bg-green-500" : ms <= 120 ? "bg-amber-400" : "bg-red-500";
   return (
     <div className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-black/55 px-1.5 py-0.5">
-      <span className="flex items-end gap-[1.5px]">
-        {heights.map((h, i) => (
-          <span
-            key={i}
-            className={cn("w-[3px] rounded-[1px]", i < tier ? barColor : "bg-white/25")}
-            style={{ height: h }}
-          />
-        ))}
-      </span>
+      <span className={cn("size-1.5 rounded-full", dotColor)} />
       <span className={cn("text-[10px] font-bold tabular-nums", textColor)}>{ms}ms</span>
     </div>
   );

@@ -128,6 +128,8 @@ class WallPanelConfig(BaseModel):
     cols: int = Field(ge=1, le=6)
     # Row-major cells; null = empty slot. Length should equal rows×cols.
     cells: list[WallCell | None] = Field(default_factory=list, max_length=36)
+    # How each channel fills its cell: crop-to-fill or whole-camera-letterboxed.
+    fit: Literal["cover", "contain"] = "cover"
 
 
 class WallPanel(BaseModel):
@@ -151,6 +153,21 @@ class ActivityPanel(BaseModel):
     config: ActivityPanelConfig = Field(default_factory=ActivityPanelConfig)
 
 
+class WebPanelConfig(BaseModel):
+    # Live web page (e.g. Wecon V-Net HMI) embedded in the grid. http(s) only —
+    # never javascript:/data: URLs.
+    url: str = Field(min_length=8, max_length=2048, pattern=r"^https?://")
+    zoom: float = Field(default=1.0, ge=0.25, le=3.0)
+
+
+class WebPanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["web"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid
+    config: WebPanelConfig
+
+
 Panel = Annotated[
     Union[
         VideoPanel,
@@ -161,6 +178,7 @@ Panel = Annotated[
         AlarmPanel,
         WallPanel,
         ActivityPanel,
+        WebPanel,
     ],
     Field(discriminator="type"),
 ]

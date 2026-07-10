@@ -14,14 +14,20 @@ import { BarPanel } from "./bar-panel";
 import { AlarmPanel } from "./alarm-panel";
 import { WallPanel } from "./wall-panel";
 import { ActivityPanel } from "./activity-panel";
+import { WebPanel } from "./web-panel";
 
-/** `edit` is passed only in layout edit-mode; panels that support in-place
- *  editing (currently the Video Wall) use it to persist config changes. */
+/** `opts` carries editing context. `editMode` = the global layout edit-mode
+ *  (draft). `canInlineEdit` lets the Video Wall be tweaked anytime via its own
+ *  gear (persists straight to the active perspective through onConfigChange). */
 export function renderPanel(
   panel: Panel,
   streams: Stream[],
   tags: Tag[],
-  edit?: { onConfigChange: (config: Panel["config"]) => void }
+  opts?: {
+    editMode?: boolean;
+    canInlineEdit?: boolean;
+    onConfigChange?: (config: Panel["config"]) => void;
+  }
 ) {
   switch (panel.type) {
     case "video":
@@ -36,8 +42,9 @@ export function renderPanel(
         <WallPanel
           config={panel.config}
           streams={streams}
-          editMode={!!edit}
-          onConfigChange={edit?.onConfigChange}
+          editMode={!!opts?.editMode}
+          canInlineEdit={!!opts?.canInlineEdit}
+          onConfigChange={opts?.onConfigChange}
         />
       );
     case "chart":
@@ -52,6 +59,8 @@ export function renderPanel(
       return <AlarmPanel config={panel.config} tags={tags} />;
     case "activity":
       return <ActivityPanel />;
+    case "web":
+      return <WebPanel config={panel.config} />;
     default:
       return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg-sidebar text-text-muted">

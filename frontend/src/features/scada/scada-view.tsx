@@ -270,33 +270,8 @@ export function ScadaView() {
             R-Net
           </span>
 
-          {/* Monitor | Analisis toggle */}
-          {!store.editMode && (
-            <div className="flex items-center rounded-[var(--r)] border border-border-soft bg-bg-sidebar p-0.5">
-              {(
-                [
-                  { mode: "monitor", label: "Monitor" },
-                  { mode: "analysis", label: "Analisis" },
-                ] as const
-              ).map(({ mode, label }) => (
-                <button
-                  key={mode}
-                  onClick={() => store.setViewMode(mode)}
-                  className={cn(
-                    "cursor-pointer rounded-[var(--r-sm)] px-2.5 py-1 text-[11.5px] font-semibold transition-colors",
-                    store.viewMode === mode
-                      ? "bg-bg text-text shadow-[var(--shadow-xs)]"
-                      : "text-text-muted hover:text-text"
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Halaman (page) dropdown — switch, create & rename pages. Each page
-              is a perspective; in fullscreen you flip between them. */}
+          {/* Halaman (page) dropdown — sits by the R-Net logo. Switch, create &
+              rename pages. Each page is a perspective; fullscreen flips them. */}
           {store.viewMode === "monitor" && !store.editMode && (
             <div className="relative">
               <button
@@ -356,6 +331,31 @@ export function ScadaView() {
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {/* Monitor | Analisis toggle */}
+          {!store.editMode && (
+            <div className="flex items-center rounded-[var(--r)] border border-border-soft bg-bg-sidebar p-0.5">
+              {(
+                [
+                  { mode: "monitor", label: "Monitor" },
+                  { mode: "analysis", label: "Analisis" },
+                ] as const
+              ).map(({ mode, label }) => (
+                <button
+                  key={mode}
+                  onClick={() => store.setViewMode(mode)}
+                  className={cn(
+                    "cursor-pointer rounded-[var(--r-sm)] px-2.5 py-1 text-[11.5px] font-semibold transition-colors",
+                    store.viewMode === mode
+                      ? "bg-bg text-text shadow-[var(--shadow-xs)]"
+                      : "text-text-muted hover:text-text"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           )}
 
@@ -546,17 +546,16 @@ export function ScadaView() {
                   fullscreen={fullscreen}
                   onRemove={() => store.removePanel(panel.id)}
                 >
-                  {renderPanel(
-                    panel,
-                    store.streams,
-                    store.tags,
-                    store.editMode
-                      ? {
-                          onConfigChange: (config) =>
-                            store.updatePanel(panel.id, { config }),
-                        }
-                      : undefined
-                  )}
+                  {renderPanel(panel, store.streams, store.tags, {
+                    editMode: store.editMode,
+                    canInlineEdit: canEdit && !active?.read_only,
+                    onConfigChange: store.editMode
+                      ? (config) => store.updatePanel(panel.id, { config })
+                      : canEdit && !active?.read_only
+                        ? (config) =>
+                            store.updateActivePanelPersist(panel.id, { config })
+                        : undefined,
+                  })}
                 </PanelFrame>
               )}
             />

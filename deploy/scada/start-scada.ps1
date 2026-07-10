@@ -46,6 +46,12 @@ $cfg = Read-Config $ConfigFile
 $hasCreds = $cfg.SUPABASE_URL -and $cfg.SUPABASE_SERVICE_KEY `
     -and ($cfg.SUPABASE_URL -notmatch "GANTI") -and ($cfg.SUPABASE_SERVICE_KEY -notmatch "GANTI")
 
+# Stream yang di-update mesin ini. STREAM_NAME kosong = mode lama (menimpa
+# SEMUA stream) — hanya aman kalau cuma ada satu sumber siaran.
+$streamName = if ($cfg.STREAM_NAME) { $cfg.STREAM_NAME.Trim() } else { "" }
+$streamPath = if ($cfg.STREAM_PATH) { $cfg.STREAM_PATH.Trim() } else { "scada" }
+if ($streamPath -eq "") { $streamPath = "scada" }
+
 # --- 1. MediaMTX (pemancar) ----------------------------------------------
 if (-not (Get-Process mediamtx -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath $MediaMtxExe -WorkingDirectory $MediaMtxDir `
@@ -73,11 +79,23 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 if (-not $url) { Fail "URL tunnel tidak muncul dalam 30 dtk. Cek internet, jalankan ulang." }
 Write-Host "[OK] Tunnel hidup: $url"
-$streamUrl = "$url/scada/index.m3u8"
+$streamUrl = "$url/$streamPath/index.m3u8"
+if ($streamName -ne "") {
+    Write-Host "[OK] Target: stream '$streamName' (path '$streamPath')"
+} else {
+    Write-Host "[!] STREAM_NAME kosong -> menimpa SEMUA stream (mode 1 sumber)." -ForegroundColor Yellow
+}
 
 # --- 3. Update alamat stream di Supabase (REST, tanpa Python) ------------
-function Update-StreamUrl($supabaseUrl, $serviceKey, $newUrl) {
-    $uri = "$supabaseUrl/rest/v1/scada_streams?id=not.is.null"
+# Kalau STREAM_NAME diisi, hanya baris dengan nama itu yang di-update — jadi
+# beberapa mesin siaran tidak saling menimpa. Kalau kosong, semua baris.
+function Update-StreamUrl($supabaseUrl, $serviceKey, $newUrl, $name) {
+    if ($name -ne "") {
+        $filter = "name=eq.$([uri]::EscapeDataString($name))"
+    } else {
+        $filter = "id=not.is.null"
+    }
+    $uri = "$supabaseUrl/rest/v1/scada_streams?$filter"
     $headers = @{
         apikey        = $serviceKey
         Authorization = "Bearer $serviceKey"
@@ -93,10 +111,15 @@ if ($hasCreds) {
     $ok = $false
     for ($i = 0; $i -lt 3; $i++) {
         try {
-            $rows = Update-StreamUrl $cfg.SUPABASE_URL $cfg.SUPABASE_SERVICE_KEY $streamUrl
+            $rows = Update-StreamUrl $cfg.SUPABASE_URL $cfg.SUPABASE_SERVICE_KEY $streamUrl $streamName
             if (-not $rows) {
-                Write-Host "[INFO] Belum ada stream terdaftar di R-Net." -ForegroundColor Yellow
-                Write-Host "       Buka Kelola Stream di R-Net, tambahkan 1 stream, lalu jalankan ulang." -ForegroundColor Yellow
+                if ($streamName -ne "") {
+                    Write-Host "[INFO] Belum ada stream bernama '$streamName' di R-Net." -ForegroundColor Yellow
+                    Write-Host "       Buka Kelola Stream, buat stream dgn nama PERSIS itu, lalu jalankan ulang." -ForegroundColor Yellow
+                } else {
+                    Write-Host "[INFO] Belum ada stream terdaftar di R-Net." -ForegroundColor Yellow
+                    Write-Host "       Buka Kelola Stream, tambahkan 1 stream, lalu jalankan ulang." -ForegroundColor Yellow
+                }
             } else {
                 foreach ($r in $rows) { Write-Host ("   {0}  ->  {1}" -f $r.name, $streamUrl) }
             }

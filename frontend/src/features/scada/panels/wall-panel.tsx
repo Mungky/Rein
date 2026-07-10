@@ -8,8 +8,8 @@
  *  one mosaic costs one decode, not nine. Cells from different streams each get
  *  their own decoder. This is the multiviewer technique; no server-side split. */
 
-import { useEffect, useMemo, useRef } from "react";
-import { MonitorPlay } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, MonitorPlay, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Stream, WallCell, WallPanelConfig } from "../types";
 import { useScadaStore } from "../store";
@@ -23,16 +23,23 @@ export function WallPanel({
   config,
   streams,
   editMode = false,
+  canInlineEdit = false,
   onConfigChange,
 }: {
   config: WallPanelConfig;
   streams: Stream[];
   editMode?: boolean;
+  /** Show the gear that lets the wall be edited outside layout edit-mode. */
+  canInlineEdit?: boolean;
   onConfigChange?: (config: WallPanelConfig) => void;
 }) {
+  // Inline edit (gear) — independent of the global layout edit-mode.
+  const [inlineEdit, setInlineEdit] = useState(false);
+  const showEditor = (editMode || inlineEdit) && !!onConfigChange;
   const rows = Math.max(1, Math.min(6, config.rows));
   const cols = Math.max(1, Math.min(6, config.cols));
   const cellCount = rows * cols;
+  const fit = config.fit ?? "cover";
 
   const cells = useMemo(
     () => Array.from({ length: cellCount }, (_, i) => config.cells[i] ?? null),
@@ -103,17 +110,25 @@ export function WallPanel({
         const sh = vh / R;
         const sx = (cell.cell % C) * sw;
         const sy = Math.floor(cell.cell / C) * sh;
-        // object-fit: cover — scale the source cell to fill, cropping overflow
-        const scale = Math.max(cw / sw, ch / sh);
+        // "cover" fills the cell and crops overflow; "contain" fits the whole
+        // camera (letterboxed) so nothing is cut off.
+        const scale =
+          fit === "contain"
+            ? Math.min(cw / sw, ch / sh)
+            : Math.max(cw / sw, ch / sh);
         const dw = sw * scale;
         const dh = sh * scale;
+        if (fit === "contain") {
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, cw, ch);
+        }
         ctx.drawImage(video, sx, sy, sw, sh, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
       }
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [cells, streamById]);
+  }, [cells, streamById, fit]);
 
   // Edit-mode: channel catalogue + live config mutators (fully controlled —
   // every change flows straight into the draft panel via onConfigChange).
@@ -122,7 +137,7 @@ export function WallPanel({
   function setSize(n: number) {
     if (!onConfigChange) return;
     const next = Array.from({ length: n * n }, (_, i) => cells[i] ?? null);
-    onConfigChange({ rows: n, cols: n, cells: next });
+    onConfigChange({ rows: n, cols: n, cells: next, fit });
   }
 
   function setCellChannel(i: number, channelNumber: string) {
@@ -133,7 +148,12 @@ export function WallPanel({
         : channels.find((c) => c.number === Number(channelNumber));
     const ref: WallCell | null = ch ? { stream_id: ch.stream_id, cell: ch.cell } : null;
     const next = cells.map((c, idx) => (idx === i ? ref : c));
-    onConfigChange({ rows, cols, cells: next });
+    onConfigChange({ rows, cols, cells: next, fit });
+  }
+
+  function setFit(next: "cover" | "contain") {
+    if (!onConfigChange) return;
+    onConfigChange({ rows, cols, cells, fit: next });
   }
 
   return (
@@ -192,8 +212,28 @@ export function WallPanel({
         })}
       </div>
 
+      {/* Inline-edit gear — only outside layout edit-mode (there the whole
+          panel is already editable). Lets you change channels/grid anytime. */}
+      {!editMode && canInlineEdit && onConfigChange && (
+        <button
+          type="button"
+          onClick={() => setInlineEdit((v) => !v)}
+          className={cn(
+            "absolute right-2 top-2 z-30 flex size-7 items-center justify-center rounded-full text-white backdrop-blur-sm transition-opacity",
+            inlineEdit ? "bg-primary" : "bg-black/55 hover:bg-black/75"
+          )}
+          title={inlineEdit ? "Selesai atur" : "Atur channel & grid"}
+        >
+          {inlineEdit ? (
+            <Check className="size-3.5" />
+          ) : (
+            <SlidersHorizontal className="size-3.5" />
+          )}
+        </button>
+      )}
+
       {/* Edit overlay — change grid size & channels live, no delete/re-add */}
-      {editMode && onConfigChange && (
+      {showEditor && (
         <div className="pointer-events-none absolute inset-0 z-20 flex flex-col">
           <div className="pointer-events-auto flex items-center gap-1 bg-black/70 px-2 py-1 backdrop-blur-sm">
             <span className="mr-0.5 text-[10px] font-semibold text-white/60">
@@ -213,6 +253,29 @@ export function WallPanel({
                 )}
               >
                 {n}×{n}
+              </button>
+            ))}
+            <div className="mx-0.5 h-4 w-px bg-white/20" />
+            <span className="text-[10px] font-semibold text-white/60">Isi</span>
+            {(["cover", "contain"] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => setFit(f)}
+                title={
+                  f === "cover"
+                    ? "Penuhi kotak (boleh terpotong)"
+                    : "Tampilkan utuh (ada bingkai hitam)"
+                }
+                className={cn(
+                  "rounded-[var(--r-xs)] px-1.5 py-0.5 text-[10px] font-semibold",
+                  fit === f
+                    ? "bg-primary text-white"
+                    : "cursor-pointer bg-white/10 text-white/70 hover:bg-white/20"
+                )}
+              >
+                {f === "cover" ? "Penuh" : "Utuh"}
               </button>
             ))}
             {streams.length === 0 && (

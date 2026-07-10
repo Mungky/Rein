@@ -9,6 +9,7 @@ import {
   BarChart3,
   Bell,
   Gauge,
+  Globe,
   LayoutGrid,
   MonitorPlay,
   Table2,
@@ -29,11 +30,13 @@ type ActiveType =
   | "bar"
   | "alarm"
   | "wall"
-  | "activity";
+  | "activity"
+  | "web";
 
 const PANEL_TYPES = [
   { type: "video", label: "Video Stream", icon: MonitorPlay, available: true },
   { type: "wall", label: "Video Wall", icon: LayoutGrid, available: true },
+  { type: "web", label: "Halaman Web / HMI", icon: Globe, available: true },
   { type: "chart", label: "Grafik Sensor", icon: TrendingUp, available: true },
   { type: "table", label: "Tabel Sensor", icon: Table2, available: true },
   { type: "gauge", label: "Angka / Status", icon: Gauge, available: true },
@@ -41,6 +44,8 @@ const PANEL_TYPES = [
   { type: "alarm", label: "Alarm", icon: Bell, available: true },
   { type: "activity", label: "Aktivitas", icon: Activity, available: true },
 ] as const;
+
+const WEB_ZOOMS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2] as const;
 
 const WALL_SIZES = [1, 2, 3, 4] as const;
 
@@ -89,6 +94,11 @@ export function AddPanelDialog({
   );
   const channels = useMemo(() => listChannels(enabledStreams), [enabledStreams]);
 
+  // Web-embed panel (halaman HMI / situs lain)
+  const [webUrl, setWebUrl] = useState("");
+  const [webZoom, setWebZoom] = useState<number>(1);
+  const webUrlOk = /^https?:\/\/.{4,}/i.test(webUrl.trim());
+
   function setWallSize(n: number) {
     setWallN(n);
     setWallCells((prev) => Array.from({ length: n * n }, (_, i) => prev[i] ?? null));
@@ -133,7 +143,9 @@ export function AddPanelDialog({
       ? enabledStreams.length > 0
       : panelType === "activity"
         ? true
-        : panelType === "wall"
+        : panelType === "web"
+          ? webUrlOk
+          : panelType === "wall"
           ? wallCells.some((c) => c !== null)
           : panelType === "gauge"
             ? gaugeTagId !== ""
@@ -192,6 +204,24 @@ export function AddPanelDialog({
         title: `Video Wall ${wallN}×${wallN}`,
         grid: { x: 0, y: bottomY, w: 12, h: 8 },
         config: { rows: wallN, cols: wallN, cells: wallCells },
+      });
+      return;
+    }
+
+    if (panelType === "web") {
+      if (!webUrlOk) return;
+      let host = "Halaman Web";
+      try {
+        host = new URL(webUrl.trim()).hostname;
+      } catch {
+        /* keep default title */
+      }
+      onAdd({
+        id,
+        type: "web",
+        title: host,
+        grid: baseGrid,
+        config: { url: webUrl.trim(), zoom: webZoom },
       });
       return;
     }
@@ -401,6 +431,45 @@ export function AddPanelDialog({
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {panelType === "web" && (
+            <div className="flex flex-col gap-3">
+              <div>
+                <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                  Alamat Halaman <span className="text-red">*</span>
+                </label>
+                <input
+                  className="field-input font-mono"
+                  placeholder="https://vnet.wecon.com.cn/..."
+                  value={webUrl}
+                  onChange={(e) => setWebUrl(e.target.value)}
+                  maxLength={2048}
+                />
+              </div>
+              <div>
+                <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                  Zoom
+                </label>
+                <select
+                  className="field-select cursor-pointer"
+                  value={webZoom}
+                  onChange={(e) => setWebZoom(Number(e.target.value))}
+                >
+                  {WEB_ZOOMS.map((z) => (
+                    <option key={z} value={z}>
+                      {Math.round(z * 100)}%
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="text-[11px] text-text-light rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2">
+                Halaman dimuat langsung di browser Anda — tajam & real-time,
+                tanpa OBS. Catatan: sebagian situs menolak ditampilkan di dalam
+                aplikasi lain; kalau panel kosong, itu sebabnya. Login situs
+                (mis. V-Net) mengikuti sesi browser masing-masing penonton.
+              </p>
             </div>
           )}
 
