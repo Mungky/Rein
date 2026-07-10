@@ -37,7 +37,7 @@ import type { Panel } from "./types";
 import { DEFAULT_CANVAS } from "./types";
 import { CanvasStage, STAGE_PRESETS, presetRects } from "./grid/canvas-stage";
 import { WebLiveLayer, setWebLayerLock, setWebSolo } from "./web-live-layer";
-import { channelAspect } from "./screen-box";
+import { channelAspect, channelScreen } from "./screen-box";
 import { PanelFrame } from "./panels/panel-frame";
 import { renderPanel } from "./panels/panel-registry";
 import { AddPanelDialog } from "./add-panel-dialog";
@@ -318,7 +318,7 @@ export function ScadaView() {
     <div className="flex h-full flex-col overflow-hidden">
       {/* Toolbar */}
       {!fullscreen && (
-        <div className="flex h-[52px] min-h-[52px] shrink-0 items-center gap-2 border-b border-border-soft bg-bg px-4">
+        <div className="flex h-[52px] min-h-[52px] shrink-0 items-center gap-2 overflow-x-auto border-b border-border-soft bg-bg px-4 [&>*]:shrink-0">
           <MonitorPlay className="size-4 shrink-0 text-primary" />
           <span className="hidden text-[14px] font-bold text-text sm:block">
             R-Net
@@ -613,27 +613,47 @@ export function ScadaView() {
             )}
           </div>
         ) : isMobile ? (
-          /* Mobile: simple stacked list, view-only */
+          /* Mobile: stacked list, view-only — ordered like the layout
+             (top-left first), each item shaped by its channel's screen. */
           <div
             className={cn(
               "flex h-full flex-col overflow-y-auto",
               fullscreen ? "gap-1 p-0" : "gap-3 p-3"
             )}
           >
-            {panels.map((panel) => (
-              <div key={panel.id} className="aspect-video w-full shrink-0">
-                <PanelFrame
-                  title={panelTitle(panel)}
-                  editMode={false}
-                  fullscreen={fullscreen}
-                >
-                  {renderPanel(panel, store.streams, store.tags, {
-                    channels: store.channels,
-                    videoSuspended: store.viewMode !== "monitor",
-                  })}
-                </PanelFrame>
-              </div>
-            ))}
+            {[...panels]
+              .sort(
+                (a, b) =>
+                  (a.rect ? a.rect.y * 10000 + a.rect.x : Number.MAX_SAFE_INTEGER) -
+                  (b.rect ? b.rect.y * 10000 + b.rect.x : Number.MAX_SAFE_INTEGER)
+              )
+              .map((panel) => {
+                let screen = { w: 16, h: 9 };
+                if (panel.type === "channel") {
+                  const ch = store.channels.find(
+                    (c) => c.id === panel.config.channel_id
+                  );
+                  if (ch) screen = channelScreen(ch);
+                }
+                return (
+                  <div
+                    key={panel.id}
+                    className="w-full shrink-0"
+                    style={{ aspectRatio: `${screen.w} / ${screen.h}` }}
+                  >
+                    <PanelFrame
+                      title={panelTitle(panel)}
+                      editMode={false}
+                      fullscreen={fullscreen}
+                    >
+                      {renderPanel(panel, store.streams, store.tags, {
+                        channels: store.channels,
+                        videoSuspended: store.viewMode !== "monitor",
+                      })}
+                    </PanelFrame>
+                  </div>
+                );
+              })}
           </div>
         ) : (
           /* Fixed canvas (OBS-style): the page scales as ONE unit on every
@@ -670,6 +690,7 @@ export function ScadaView() {
               );
               return ch ? channelAspect(ch) : null;
             }}
+            hideChrome={maximizedPanel !== null && !store.editMode}
             onRectChange={store.editMode ? store.updatePanelRect : undefined}
             onRemove={store.editMode ? store.removePanel : undefined}
             onMaximize={

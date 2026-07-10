@@ -421,11 +421,10 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
 
   publishLayout: async (id) => {
     const updated = await scadaApi.publishPerspective(id);
-    // Exactly one perspective is published project-wide — clear it from all
-    // others locally so the badge only ever shows on the published one.
+    // Multi-page bawaan admin: any number of pages can be published at once.
     set({
       perspectives: get().perspectives.map((p) =>
-        p.id === updated.id ? updated : { ...p, is_published: false }
+        p.id === updated.id ? updated : p
       ),
       publishedExists: true,
     });
@@ -433,11 +432,12 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
 
   unpublishLayout: async (id) => {
     const updated = await scadaApi.unpublishPerspective(id);
+    const perspectives = get().perspectives.map((p) =>
+      p.id === updated.id ? updated : p
+    );
     set({
-      perspectives: get().perspectives.map((p) =>
-        p.id === updated.id ? updated : p
-      ),
-      publishedExists: false,
+      perspectives,
+      publishedExists: perspectives.some((p) => p.is_published || p.read_only),
     });
   },
 

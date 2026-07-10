@@ -106,6 +106,7 @@ export function CanvasStage({
   renderContent,
   webChannelIdOf,
   panelAspect,
+  hideChrome = false,
   onRectChange,
   onRemove,
   onMaximize,
@@ -120,6 +121,9 @@ export function CanvasStage({
   webChannelIdOf?: (panel: Panel) => string | null;
   /** Screen aspect (w/h) per panel — resize keeps it locked. null = free. */
   panelAspect?: (panel: Panel) => number | null;
+  /** Hide per-panel chrome (titles/buttons) — e.g. while a channel is
+   *  maximized, so nothing floats above the maximize backdrop. */
+  hideChrome?: boolean;
   onRectChange?: (id: string, rect: PanelRect) => void;
   onRemove?: (id: string) => void;
   onMaximize?: (id: string) => void;
@@ -415,10 +419,12 @@ export function CanvasStage({
             );
           })}
 
-          {/* CHROME + interaction layer — z-40, above the iframe layer. */}
+          {/* CHROME + interaction layer — z-40, above the iframe layer.
+              Hidden entirely while a channel is maximized (nothing may float
+              above the maximize backdrop). */}
           {/* eslint-disable-next-line react-hooks/refs -- dragRef/moveImpl are
               only touched inside pointer-event handlers, never during render */}
-          {shown.map((panel) => {
+          {!hideChrome && shown.map((panel) => {
             const r = panel.rect!;
             const isSel = editMode && selectedId === panel.id;
             const webId = webChannelIdOf?.(panel) ?? null;

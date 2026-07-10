@@ -96,10 +96,10 @@ class ScadaPerspective(UUIDMixin, TimestampMixin, Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, server_default="false", nullable=False
     )
-    # The single admin-published "default layout" every user starts from and can
-    # reset to (Masalah D, opsi b). At most one row project-wide is published;
-    # only scada:manage holders can set it. A fresh user's bootstrap copies this
-    # layout instead of the generic per-stream one.
+    # Admin-published "default pages" (Masalah D). Any NUMBER of perspectives
+    # may be published; every user sees each of them injected read-only into
+    # their page list — publish 4 pages, everyone has those 4 pages. Only
+    # scada:manage holders can publish/unpublish.
     is_published: Mapped[bool] = mapped_column(
         Boolean, server_default="false", nullable=False
     )
@@ -112,13 +112,6 @@ class ScadaPerspective(UUIDMixin, TimestampMixin, Base):
             "owner_id",
             unique=True,
             postgresql_where=text("is_default"),
-        ),
-        # At most one published (admin-default) perspective project-wide
-        Index(
-            "uq_scada_perspectives_published",
-            "is_published",
-            unique=True,
-            postgresql_where=text("is_published"),
         ),
     )
 

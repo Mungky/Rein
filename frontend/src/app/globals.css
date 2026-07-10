@@ -367,6 +367,20 @@
   box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
 }
 
+/* Native controls must follow the theme: without this the browser paints
+   <select> popups (and scrollbars) LIGHT while the text inherits the dark
+   theme's light color → white-on-white dropdowns. */
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+[data-theme="light"] {
+  color-scheme: light;
+}
+[data-theme="dark"] select option {
+  background-color: var(--rein-bg-ctrl);
+  color: var(--rein-text);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

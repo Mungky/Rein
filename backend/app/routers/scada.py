@@ -90,12 +90,14 @@ def _perspective_dict(p: ScadaPerspective) -> dict:
     }
 
 
-async def _get_published(db: AsyncSession) -> ScadaPerspective | None:
-    """The single admin-published default layout, or None if none is set."""
+async def _get_published(db: AsyncSession) -> list[ScadaPerspective]:
+    """All admin-published default pages, oldest first (stable page order)."""
     result = await db.execute(
-        select(ScadaPerspective).where(ScadaPerspective.is_published.is_(True)).limit(1)
+        select(ScadaPerspective)
+        .where(ScadaPerspective.is_published.is_(True))
+        .order_by(ScadaPerspective.created_at)
     )
-    return result.scalars().first()
+    return list(result.scalars().all())
 
 
 def _stream_dict(s: ScadaStream) -> dict:
@@ -152,10 +154,10 @@ async def list_perspectives(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
-    """List the caller's own perspectives, plus the admin-published default
-    layout (Masalah D) injected as a read-only entry so EVERY user sees the
-    admin's layout — not just brand-new accounts. Bootstraps a generic starter
-    only when the user has nothing and nothing is published."""
+    """List the caller's own perspectives, plus EVERY admin-published default
+    page (Masalah D, multi-page) injected as read-only entries — publish 4
+    pages and every user has those 4 pages. Bootstraps a starter only when the
+    user has nothing and nothing is published."""
     result = await db.execute(
         select(ScadaPerspective)
         .where(ScadaPerspective.owner_id == profile.id)
@@ -165,10 +167,14 @@ async def list_perspectives(
     items = [{**_perspective_dict(p), "read_only": False} for p in own]
 
     published = await _get_published(db)
-    if published is not None and published.owner_id != profile.id:
-        # Show the admin default to everyone (view-only; forked on edit). Put it
-        # first so it's the natural landing layout.
-        items.insert(0, {**_perspective_dict(published), "read_only": True})
+    injected = [
+        {**_perspective_dict(p), "read_only": True}
+        for p in published
+        if p.owner_id != profile.id
+    ]
+    # Admin pages come first, in their stable (creation) order — the natural
+    # landing pages for everyone; view-only, forked into a copy on edit.
+    items = injected + items
 
     if not items:
         boot = await _bootstrap_default(db, profile.id)
@@ -182,12 +188,13 @@ async def get_published_perspective(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
-    """The admin-published default layout (for the 'reset to admin default'
-    action). Any viewer may read it; returns exists=False when none is set."""
+    """First admin-published default page (compat shape; multiple pages may be
+    published — the full set is injected by list_perspectives). exists=False
+    when nothing is published."""
     published = await _get_published(db)
-    if published is None:
+    if not published:
         return {"exists": False, "name": None, "layout": None}
-    return {"exists": True, "name": published.name, "layout": published.layout}
+    return {"exists": True, "name": published[0].name, "layout": published[0].layout}
 
 
 @router.post("/perspectives", response_model=PerspectiveOut, status_code=201)
@@ -298,22 +305,10 @@ async def publish_perspective(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
-    """Publish one of the caller's own perspectives as THE admin default layout
-    (Masalah D, opsi b). New users start from a copy of it; existing users can
-    reset to it. Clears any previously published one first so the partial unique
-    index never trips."""
+    """Publish one of the caller's own perspectives as an admin default page.
+    Multiple pages may be published (multi-page bawaan admin): every published
+    page appears read-only in EVERY user's page list."""
     perspective = await _get_own_perspective(db, perspective_id, profile.id)
-
-    result = await db.execute(
-        select(ScadaPerspective).where(
-            ScadaPerspective.is_published.is_(True),
-            ScadaPerspective.id != perspective.id,
-        )
-    )
-    for old in result.scalars().all():
-        old.is_published = False
-    await db.flush()
-
     perspective.is_published = True
     await db.flush()
     await db.refresh(perspective)
@@ -342,16 +337,18 @@ async def reset_perspective_to_published(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
-    """Overwrite the caller's own perspective with the current admin-published
-    layout ('Kembalikan ke Bawaan Admin'). Available to any viewer so they can
-    always sync to the latest admin default. 409 when nothing is published."""
+    """Overwrite the caller's own perspective with the FIRST admin-published
+    page ('Kembalikan ke Bawaan Admin'). With multi-page defaults every
+    published page is already visible read-only, so this remains only as a
+    quick way to stamp the primary default onto an own page. 409 when nothing
+    is published."""
     perspective = await _get_own_perspective(db, perspective_id, profile.id)
     published = await _get_published(db)
-    if published is None:
+    if not published:
         raise HTTPException(
             status_code=409, detail="Belum ada layout bawaan admin yang diterbitkan"
         )
-    perspective.layout = published.layout
+    perspective.layout = published[0].layout
     await db.flush()
     await db.refresh(perspective)
     return _perspective_dict(perspective)
