@@ -141,6 +141,17 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Baseline hardening (audit Fase 2): an API has no business being framed,
+    MIME-sniffed, or leaking referrers."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
+
+@app.middleware("http")
 async def log_server_errors(request: Request, call_next):
     """Server errors must never be silent — log path + traceback for every 5xx.
 

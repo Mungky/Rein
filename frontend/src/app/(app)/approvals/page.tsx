@@ -131,13 +131,6 @@ function formatDate(iso: string): string {
   });
 }
 
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString("id-ID", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export default function ApprovalsPage() {
   const { role } = useAuth();

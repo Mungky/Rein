@@ -621,12 +621,9 @@ export function ScadaView() {
               fullscreen ? "gap-1 p-0" : "gap-3 p-3"
             )}
           >
-            {[...panels]
-              .sort(
-                (a, b) =>
-                  (a.rect ? a.rect.y * 10000 + a.rect.x : Number.MAX_SAFE_INTEGER) -
-                  (b.rect ? b.rect.y * 10000 + b.rect.x : Number.MAX_SAFE_INTEGER)
-              )
+            {panels
+              .filter((p) => p.rect)
+              .sort((a, b) => a.rect!.y * 10000 + a.rect!.x - (b.rect!.y * 10000 + b.rect!.x))
               .map((panel) => {
                 let screen = { w: 16, h: 9 };
                 if (panel.type === "channel") {

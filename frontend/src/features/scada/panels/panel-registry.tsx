@@ -24,7 +24,6 @@ import { TablePanel } from "./table-panel";
 import { GaugePanel } from "./gauge-panel";
 import { BarPanel } from "./bar-panel";
 import { AlarmPanel } from "./alarm-panel";
-import { WallPanel } from "./wall-panel";
 import { ActivityPanel } from "./activity-panel";
 import { WebPanel } from "./web-panel";
 import { CroppedVideoPanel } from "./cropped-video-panel";
@@ -174,13 +173,12 @@ export function renderPanel(
         />
       );
     case "wall":
+      // Legacy (pre-channel era) — superseded by video channels with manual
+      // crops; old v1 layouts are "mulai bersih" and never render anyway.
       return (
-        <WallPanel
-          config={panel.config}
-          streams={streams}
-          editMode={!!opts?.editMode}
-          canInlineEdit={!!opts?.canInlineEdit}
-          onConfigChange={opts?.onConfigChange}
+        <OrbitFallback
+          kind="idle"
+          reason="Panel lama — buat ulang sebagai channel (crop) di tab Channel"
         />
       );
     case "chart":

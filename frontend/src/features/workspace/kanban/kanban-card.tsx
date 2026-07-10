@@ -31,7 +31,7 @@ function relativeDeadline(iso: string): { label: string; tone: "ok" | "warn" | "
 }
 
 export function KanbanCard({
-  id, title, subtitle, status,
+  id, title, subtitle,
   rpoNumber, location, assigneeName,
   progress, deadline, onClick, draggable,
 }: KanbanCardProps) {

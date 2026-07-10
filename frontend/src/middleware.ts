@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createMiddlewareClient } from "@/lib/supabase/server";
 
-const PUBLIC_PATHS = ["/login", "/callback"];
 
-function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some(
-    (p) => pathname === p || pathname.startsWith(p + "/")
-  );
-}
 
 function isProtectedPath(pathname: string): boolean {
   const protectedPrefixes = ["/dashboard", "/dcc", "/approvals", "/admin", "/workspace"];

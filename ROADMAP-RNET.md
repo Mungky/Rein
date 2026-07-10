@@ -62,13 +62,17 @@ sekaligus — tidak ada browser/TV yang sanggup, di produk komersial mana pun.
 - [ ] Tes kamera RTSP langsung ke MediaMTX (tanpa OBS)
 - [ ] Tes 1 halaman berisi 9 sel hidup di PC ruang monitor — ukur CPU/RAM
 
-### Fase 2 — Audit besar (performa + keamanan + codebase + UI)
-- [ ] Ukur & dokumentasikan batas nyata: maks sel hidup per halaman, maks user
-- [ ] Security sweep: kredensial stream di API (read_pass terlihat semua user
-      scada:view — perlu dipersempit?), rate-limit, header, RLS ulang, repo→private
-- [ ] Codebase: rapikan duplikasi, komponen dropdown seragam (keluhan "AI generik")
-- [ ] UI polish menyeluruh (dropdown custom, empty-state, dark mode konsisten)
-- [ ] Laporan bahasa awam: apa yang aman, apa batasnya, apa risikonya
+### Fase 2 — Audit besar ✅ (2026-07-10 — lihat LAPORAN-AUDIT-RNET.md)
+- [x] Batas nyata terdokumentasi (≤6 stream & ≤4-6 embed per halaman; leher
+      botol = upload pemancar × penonton → alasan utama Fase 3)
+- [x] Security sweep: 37 endpoint berpagar ✓; header keamanan FE+BE dipasang;
+      temuan tersisa berlabel (repo→PRIVATE = tindakan USER; kredensial viewer
+      diterima sementara, token per-sesi di Fase 3)
+- [x] Codebase: kode mati era mosaic dibuang (±700 baris); lint 0 warning;
+      17 error pola lama terdaftar utk dicicil per-modul
+- [x] Dropdown white-on-white fix akar (color-scheme); sisa polish dicatat
+- [x] Laporan bahasa awam: **LAPORAN-AUDIT-RNET.md**
+- [ ] USER: repo GitHub → private; cek CORS_ORIGINS server; firewall VPS
 
 ### Fase 3 — Infrastruktur streaming serius (untuk 137 layar)
 - [ ] MediaMTX pusat di VPS/server (bukan laptop) + domain tetap

@@ -94,12 +94,6 @@ class ApiClient {
     return res.json();
   }
 
-  /** Stream chat messages using SSE */
-  streamChat(path: string, body: unknown): EventSource {
-    // For SSE, we need to use EventSource or fetch with streaming
-    // This will be implemented with the actual chat streaming logic
-    throw new Error("Not implemented — use useChatStream hook instead");
-  }
 }
 
 class ApiError extends Error {

@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  const { supabase, response } = createMiddlewareClient(request);
+  const { supabase } = createMiddlewareClient(request);
 
   const { error } = await supabase.auth.exchangeCodeForSession(code);
 
