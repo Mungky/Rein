@@ -27,8 +27,9 @@ Buat **A record**: `stream` → IP VPS.
 ## 2. Firewall VPS (panel Hostinger)
 
 Port yang harus terbuka: **80, 443** (sudah, untuk Coolify), tambah
-**1935/TCP** (RTMP dari site), **1883/TCP** (MQTT dari V-Box), dan
-**8189/UDP** (media WebRTC — delay <1 detik). Selain itu tutup.
+**1935/TCP** (RTMP dari site), **1883/TCP** (MQTT dari V-Box),
+**8189/UDP** (media WebRTC — delay <1 detik), dan **8890/UDP** (SRT —
+jalur kirim anti-jaringan-goyang, lihat §11). Selain itu tutup.
 
 ## 3. Pasang relay di Coolify (±5 menit)
 
@@ -154,17 +155,30 @@ pernah memperburuk apa pun.
 > Catatan: WebRTC memakai bandwidth per penonton yang sama dengan HLS.
 > Kalau kuota menipis, cukup kosongkan kolom URL WebRTC → semua kembali HLS.
 
-## 11. Stream putus-nyambung di OBS?
+## 11. Stream putus-nyambung / kualitas turun di OBS?
 
-Urutan cek: (1) **Stream Key** OBS terisi benar
-(`server?user=site-server&pass=...` — bukan kosong); (2) log mediamtx di
-Coolify saat OBS connect (`authentication failed` = password salah,
-`path not configured` = nama path salah, dua IP bergantian = dua OBS rebutan
-path yang sama); (3) dropped frames di OBS naik = upload site keteteran →
-turunkan bitrate + centang "Dynamically change bitrate"; (4) jaringan site
-memang labil → pakai **SRT**: server OBS diganti
-`srt://stream.remula-inti.com:8890?streamid=publish:server:site-server:PASSWORD`
-(stream key dikosongkan; password sebaiknya huruf+angka saja).
+**Konteks penting:** di sistem lama (start-scada lokal), OBS mengirim ke
+MediaMTX di PC yang sama — tidak lewat internet, jadi selalu stabil.
+Sekarang jalur kirim melewati internet site; kalau site pakai **WiFi**,
+micro-drop WiFi membuat RTMP tersendat → OBS menurunkan bitrate (kualitas
+terlihat turun — itu fitur "Dynamically change bitrate" bekerja) atau putus.
+
+Urutan penanganan:
+1. **Kabelkan (LAN) PC pemancar** — obat paling ampuh; WiFi adalah penyebab
+   #1 kirim tidak stabil.
+2. **Stream Key** OBS terisi benar (`server?user=site-server&pass=...` —
+   bukan kosong).
+3. Log mediamtx di Coolify saat OBS connect: `authentication failed` =
+   password salah; `path not configured` = nama path salah; dua IP
+   bergantian = dua OBS rebutan path yang sama (matikan pemancar lama!).
+4. Dropped frames OBS naik = upload keteteran → bitrate 1500 CBR.
+5. Jaringan site memang labil / tetap WiFi → ganti jalur kirim ke **SRT**
+   (anti-jaringan-goyang, kualitas tidak diturunkan):
+   - Firewall VPS: port **8890/UDP** terbuka (§2).
+   - OBS → Server:
+     `srt://stream.remula-inti.com:8890?streamid=publish:server:site-server:PASSWORD&latency=500000`
+   - Stream Key: **dikosongkan**. Password sebaiknya huruf+angka saja.
+   - `latency=500000` = penyangga 0,5 dtk untuk koreksi paket hilang.
 
 ## 12. Rollback
 
