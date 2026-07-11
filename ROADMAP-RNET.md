@@ -82,9 +82,13 @@ sekaligus — tidak ada browser/TV yang sanggup, di produk komersial mana pun.
       viewer terpisah
 - [x] Crop manual bebas menggantikan rencana draggable crop-lines (selesai
       lebih dulu di halaman Channel)
-- [ ] USER: DNS A record `stream` → IP VPS; firewall 1935+1883; deploy compose
-      di Coolify; pindahkan OBS site ke RTMP VPS; tes §9 panduan
-- [ ] Setelah stabil: uji WebRTC (latensi <1 dtk) di satu stream
+- [x] Relay VPS DIUJI lapangan (2026-07-11): jalan, delay turun — tapi jalur
+      kirim site (WiFi) membuat OBS menurunkan bitrate → kualitas turun.
+      **Keputusan: mode tunnel lokal kembali jadi jalur UTAMA** (kualitas
+      penuh, delay 3-5 dtk); paket relay VPS tersimpan di `deploy/vps/` —
+      layak dicoba lagi saat PC site dikabel LAN / pakai SRT
+- [ ] (saat relay dipakai lagi) WebRTC <1 dtk — pemutar R-Net sudah siap
+      (kolom URL WebRTC + fallback otomatis)
 - [ ] Token stream per-sesi (kredensial viewer tak lagi dibagikan ke browser)
 - [ ] MQTT TLS 8883 / pembatasan IP
 

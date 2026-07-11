@@ -66,6 +66,7 @@ configs:
       logLevel: info
       api: no
       rtsp: no
+      moq: no    # fitur eksperimental (Media over QUIC) — tidak dipakai R-Net
 
       rtmp: yes
       rtmpAddress: :1935

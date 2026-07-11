@@ -318,7 +318,9 @@ export function ScadaView() {
     <div className="flex h-full flex-col overflow-hidden">
       {/* Toolbar */}
       {!fullscreen && (
-        <div className="flex h-[52px] min-h-[52px] shrink-0 items-center gap-2 overflow-x-auto border-b border-border-soft bg-bg px-4 [&>*]:shrink-0">
+        // NOTE: no overflow-x on this bar — it would clip the floating
+        // dropdowns (Halaman / menu ⋮) rendered inside it.
+        <div className="flex h-[52px] min-h-[52px] shrink-0 items-center gap-2 border-b border-border-soft bg-bg px-4">
           <MonitorPlay className="size-4 shrink-0 text-primary" />
           <span className="hidden text-[14px] font-bold text-text sm:block">
             R-Net
