@@ -71,15 +71,21 @@ export function CropEditor({
             : { w: video.videoWidth, h: video.videoHeight }
         );
         if (canvas) {
-          const cw = canvas.clientWidth;
-          const ch = canvas.clientHeight;
+          // Physical pixels — same anti-blur treatment as CroppedVideoPanel.
+          const dpr = Math.min(window.devicePixelRatio || 1, 3);
+          const cw = Math.round(canvas.clientWidth * dpr);
+          const ch = Math.round(canvas.clientHeight * dpr);
           if (cw && ch) {
             if (canvas.width !== cw || canvas.height !== ch) {
               canvas.width = cw;
               canvas.height = ch;
             }
             const ctx = canvas.getContext("2d");
-            if (ctx) ctx.drawImage(video, 0, 0, cw, ch);
+            if (ctx) {
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = "high";
+              ctx.drawImage(video, 0, 0, cw, ch);
+            }
           }
         }
       }

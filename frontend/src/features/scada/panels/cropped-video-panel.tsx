@@ -48,8 +48,12 @@ export function CroppedVideoPanel({
       if (video && canvas && video.readyState >= 2) {
         const vw = video.videoWidth;
         const vh = video.videoHeight;
-        const cw = canvas.clientWidth;
-        const ch = canvas.clientHeight;
+        // Draw in PHYSICAL pixels: on scaled displays (Windows 125–200%,
+        // 4K TVs) a CSS-pixel canvas renders at a fraction of the panel's
+        // real resolution and gets stretched → systemic blur.
+        const dpr = Math.min(window.devicePixelRatio || 1, 3);
+        const cw = Math.round(canvas.clientWidth * dpr);
+        const ch = Math.round(canvas.clientHeight * dpr);
         if (vw && vh && cw && ch) {
           if (canvas.width !== cw || canvas.height !== ch) {
             canvas.width = cw;
@@ -57,6 +61,8 @@ export function CroppedVideoPanel({
           }
           const ctx = canvas.getContext("2d");
           if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
             // Source region: manual crop (scaled from its reference
             // resolution) > legacy mosaic cell > whole frame.
             let sx = 0;
