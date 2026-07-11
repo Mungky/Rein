@@ -32,15 +32,23 @@ Selain itu tutup.
 
 ## 3. Pasang relay di Coolify (±5 menit)
 
-1. Coolify → **+ New → Docker Compose (empty)**.
+> ⚠️ **Pilih tipe "Docker Compose Empty" — JANGAN "Dockerfile".**
+> File ini adalah docker-compose (mulai dengan `services:`); kalau ditempel
+> ke tipe Dockerfile akan gagal dengan error
+> `unknown instruction: services:`. Tipe "Dockerfile" baru dipakai nanti di
+> §4 untuk bridge — itu pun lewat pilihan repository, bukan paste.
+
+1. Coolify → **+ New → Docker Compose Empty**.
 2. Paste seluruh isi **`deploy/vps/docker-compose.yml`**.
 3. Di editor compose, ganti semua **`GANTI_...`** dengan password kuat
    (viewer + satu per site). **CATAT** — viewer dipakai di R-Net, site
    dipakai di OBS.
 4. Tab **Environment Variables**: tambah `MQTT_PASS` (dan `MQTT_USER` bila
    tidak mau default `vbox`).
-5. Service **mediamtx** → **Domains**: `https://stream.remula-inti.com`,
-   port **8888**. (Coolify/Traefik otomatis mengurus sertifikat HTTPS.)
+5. Service **mediamtx** → kolom **Domains**: isi
+   `https://stream.remula-inti.com:8888` — angka `:8888` di belakang
+   memberi tahu Coolify port container yang dipetakan ke domain.
+   (Coolify/Traefik otomatis mengurus sertifikat HTTPS.)
 6. **Deploy**. Cek log: `[HLS] listener opened on :8888` berarti hidup.
 
 > Catatan: compose ini memakai `configs.content` (butuh Docker Compose
