@@ -59,6 +59,7 @@ export const scadaApi = {
   createStream: (data: {
     name: string;
     hls_url: string;
+    webrtc_url?: string | null;
     read_user?: string | null;
     read_pass?: string | null;
     enabled?: boolean;
@@ -72,6 +73,7 @@ export const scadaApi = {
     data: {
       name?: string;
       hls_url?: string;
+      webrtc_url?: string | null;
       read_user?: string | null;
       read_pass?: string | null;
       enabled?: boolean;

@@ -220,6 +220,9 @@ export interface Stream {
   id: string;
   name: string;
   hls_url: string;
+  /** Optional WHEP endpoint — players try WebRTC (sub-second) first, then
+   *  fall back to LL-HLS automatically. */
+  webrtc_url: string | null;
   read_user: string | null;
   read_pass: string | null;
   enabled: boolean;

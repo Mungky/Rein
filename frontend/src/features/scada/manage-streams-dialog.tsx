@@ -13,6 +13,7 @@ import type { Stream } from "./types";
 interface StreamForm {
   name: string;
   hls_url: string;
+  webrtc_url: string;
   read_user: string;
   read_pass: string;
   enabled: boolean;
@@ -24,6 +25,7 @@ interface StreamForm {
 const EMPTY_FORM: StreamForm = {
   name: "",
   hls_url: "",
+  webrtc_url: "",
   read_user: "",
   read_pass: "",
   enabled: true,
@@ -69,6 +71,7 @@ export function ManageStreamsDialog({
       setForm({
         name: stream.name,
         hls_url: stream.hls_url,
+        webrtc_url: stream.webrtc_url ?? "",
         read_user: stream.read_user ?? "",
         read_pass: stream.read_pass ?? "",
         enabled: stream.enabled,
@@ -90,6 +93,7 @@ export function ManageStreamsDialog({
       const payload = {
         name: form.name.trim(),
         hls_url: form.hls_url.trim(),
+        webrtc_url: form.webrtc_url.trim() || null,
         read_user: form.read_user.trim() || null,
         read_pass: form.read_pass.trim() || null,
         enabled: form.enabled,
@@ -162,10 +166,25 @@ export function ManageStreamsDialog({
         <input
           required
           className="field-input font-mono"
-          placeholder="https://scada-stream.domain.com/scada/index.m3u8"
+          placeholder="https://stream.domain.com/server/index.m3u8"
           value={form.hls_url}
           onChange={(e) => setForm({ ...form, hls_url: e.target.value })}
         />
+      </div>
+      <div>
+        <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+          URL WebRTC (opsional — delay &lt;1 detik)
+        </label>
+        <input
+          className="field-input font-mono"
+          placeholder="https://webrtc.domain.com/server/whep"
+          value={form.webrtc_url}
+          onChange={(e) => setForm({ ...form, webrtc_url: e.target.value })}
+        />
+        <p className="mt-1 text-[11px] text-text-light">
+          Diisi = pemutar mencoba WebRTC dulu (nyaris tanpa delay), otomatis
+          balik ke HLS bila jaringan penonton memblokirnya.
+        </p>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>

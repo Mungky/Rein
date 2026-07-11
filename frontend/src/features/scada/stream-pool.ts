@@ -4,11 +4,11 @@
  *  the decoder tears down when the last user releases it. */
 
 import type { Stream } from "./types";
-import { attachHls, type HlsHandle } from "./panels/hls-attach";
+import { attachPlayback, type PlaybackHandle } from "./playback";
 
 interface Entry {
   video: HTMLVideoElement;
-  handle: HlsHandle;
+  handle: PlaybackHandle;
   refs: number;
   sig: string;
 }
@@ -33,7 +33,7 @@ export function acquireStreamVideo(
   stream: Stream,
   nonce: number
 ): { video: HTMLVideoElement; release: () => void } {
-  const sig = `${stream.hls_url}|${stream.read_user}|${stream.read_pass}|${nonce}`;
+  const sig = `${stream.hls_url}|${stream.webrtc_url}|${stream.read_user}|${stream.read_pass}|${nonce}`;
   let entry = entries.get(stream.id);
   if (entry && entry.sig !== sig) {
     // URL/creds rotated or manual reconnect — rebuild for everyone.
@@ -47,7 +47,7 @@ export function acquireStreamVideo(
     video.muted = true;
     video.playsInline = true;
     ensureHost().appendChild(video);
-    const handle = attachHls(video, stream);
+    const handle = attachPlayback(video, stream);
     entry = { video, handle, refs: 0, sig };
     entries.set(stream.id, entry);
   }

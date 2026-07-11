@@ -22,8 +22,10 @@ services:
     ports:
       - "1935:1935"        # RTMP ingest dari OBS tiap site
       - "8890:8890/udp"    # SRT ingest — tahan jaringan jelek (lihat panduan §11)
+      - "8189:8189/udp"    # WebRTC media (ICE) — wajib utk delay <1 dtk
     expose:
-      - "8888"             # LL-HLS — dipetakan ke domain lewat Coolify (JANGAN publish langsung)
+      - "8888"             # LL-HLS   — domain Coolify: stream.remula-inti.com:8888
+      - "8889"             # WebRTC/WHEP — domain Coolify: webrtc.remula-inti.com:8889
     configs:
       - source: mediamtx-config
         target: /mediamtx.yml
@@ -64,7 +66,6 @@ configs:
       logLevel: info
       api: no
       rtsp: no
-      webrtcDisable: no
 
       rtmp: yes
       rtmpAddress: :1935
@@ -82,9 +83,16 @@ configs:
       hlsSegmentCount: 7
       hlsAllowOrigins: ["https://rein.remula-inti.com"]
 
-      # WebRTC (latensi <1 dtk) — uji coba SETELAH HLS stabil:
-      # butuh publish port 8889/tcp + 8189/udp dan webrtcAdditionalHosts: [IP VPS]
-      webrtc: no
+      # ── WebRTC (WHEP) — jalur real-time <1 detik. Sinyal lewat domain HTTPS
+      # (webrtc.remula-inti.com → port 8889 via Coolify), media lewat UDP 8189
+      # langsung ke IP VPS. Browser R-Net mencoba jalur ini dulu bila kolom
+      # "URL WebRTC" stream diisi, lalu otomatis balik ke HLS bila gagal.
+      webrtc: yes
+      webrtcAddress: :8889
+      webrtcEncryption: no          # TLS sinyal diurus Traefik; media selalu terenkripsi (SRTP)
+      webrtcLocalUDPAddress: :8189
+      webrtcIPsFromInterfaces: no   # jangan iklankan IP internal docker
+      webrtcAdditionalHosts: [stream.remula-inti.com]  # alamat publik utk media
 
       authMethod: internal
       authInternalUsers:

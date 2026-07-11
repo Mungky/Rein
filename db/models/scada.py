@@ -35,6 +35,10 @@ class ScadaStream(UUIDMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     # Full HLS playlist URL, e.g. https://scada-stream.example.com/scada/index.m3u8
     hls_url: Mapped[str] = mapped_column(Text, nullable=False)
+    # Optional WebRTC (WHEP) endpoint for sub-second playback, e.g.
+    # https://webrtc.example.com/server/whep — players try it first and fall
+    # back to LL-HLS automatically (viewers behind UDP-blocking networks).
+    webrtc_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     # MediaMTX read-only credentials; the browser player sends them as an
     # `Authorization: Basic` header via hls.js xhrSetup (query params are NOT
     # accepted for HLS reads by MediaMTX ≥1.12).

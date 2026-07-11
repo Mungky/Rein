@@ -27,8 +27,8 @@ Buat **A record**: `stream` → IP VPS.
 ## 2. Firewall VPS (panel Hostinger)
 
 Port yang harus terbuka: **80, 443** (sudah, untuk Coolify), tambah
-**1935/TCP** (RTMP dari site) dan **1883/TCP** (MQTT dari V-Box).
-Selain itu tutup.
+**1935/TCP** (RTMP dari site), **1883/TCP** (MQTT dari V-Box), dan
+**8189/UDP** (media WebRTC — delay <1 detik). Selain itu tutup.
 
 ## 3. Pasang relay di Coolify (±5 menit)
 
@@ -131,7 +131,42 @@ kerja saja → `sourceOnDemand` untuk kamera → upgrade plan / Cloudflare proxy
    task manager PC site).
 4. V-Box publish → angka muncul di tab Data.
 
-## 10. Rollback
+## 10. WebRTC — delay <1 detik (opsional, setelah HLS stabil)
+
+HLS punya jeda bawaan ±4 detik. WebRTC (teknologi video call) menurunkannya
+ke bawah 1 detik. Pemutar R-Net **mencoba WebRTC dulu lalu otomatis balik ke
+HLS** bila jaringan penonton memblokirnya — jadi mengaktifkan ini tidak
+pernah memperburuk apa pun.
+
+1. **DNS**: tambah A record `webrtc` → IP VPS (DNS-only juga).
+2. **Firewall**: pastikan **8189/UDP** terbuka (§2).
+3. **Coolify**: compose versi terbaru sudah `webrtc: yes`. Di service
+   mediamtx → **Domains**, tambahkan domain kedua:
+   `https://webrtc.remula-inti.com:8889`
+   (dipisah koma dari domain stream yang sudah ada). Redeploy.
+4. **R-Net → Channel → Sumber Stream** → Ubah stream → isi kolom
+   **URL WebRTC**: `https://webrtc.remula-inti.com/server/whep`
+   (ganti `server` dengan nama path stream itu).
+5. Buka Monitor: panel video menampilkan badge **RT** hijau = jalur
+   real-time aktif. Tidak muncul / balik ke angka ms = penonton itu jatuh ke
+   HLS (biasanya jaringan kantor memblokir UDP — bukan kerusakan).
+
+> Catatan: WebRTC memakai bandwidth per penonton yang sama dengan HLS.
+> Kalau kuota menipis, cukup kosongkan kolom URL WebRTC → semua kembali HLS.
+
+## 11. Stream putus-nyambung di OBS?
+
+Urutan cek: (1) **Stream Key** OBS terisi benar
+(`server?user=site-server&pass=...` — bukan kosong); (2) log mediamtx di
+Coolify saat OBS connect (`authentication failed` = password salah,
+`path not configured` = nama path salah, dua IP bergantian = dua OBS rebutan
+path yang sama); (3) dropped frames di OBS naik = upload site keteteran →
+turunkan bitrate + centang "Dynamically change bitrate"; (4) jaringan site
+memang labil → pakai **SRT**: server OBS diganti
+`srt://stream.remula-inti.com:8890?streamid=publish:server:site-server:PASSWORD`
+(stream key dikosongkan; password sebaiknya huruf+angka saja).
+
+## 12. Rollback
 
 Ada masalah? Sistem lama masih utuh: jalankan `start-scada.bat` di site
 (tunnel + auto-update URL) dan stream kembali lewat jalur lama, tanpa

@@ -286,6 +286,7 @@ class PerspectiveUpdateRequest(BaseModel):
 class StreamCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     hls_url: str = Field(min_length=1)
+    webrtc_url: str | None = Field(default=None, max_length=2048)
     read_user: str | None = Field(default=None, max_length=64)
     read_pass: str | None = Field(default=None, max_length=128)
     enabled: bool = True
@@ -297,6 +298,7 @@ class StreamCreateRequest(BaseModel):
 class StreamUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     hls_url: str | None = Field(default=None, min_length=1)
+    webrtc_url: str | None = Field(default=None, max_length=2048)
     read_user: str | None = Field(default=None, max_length=64)
     read_pass: str | None = Field(default=None, max_length=128)
     enabled: bool | None = None
@@ -516,6 +518,7 @@ class StreamOut(BaseModel):
     id: str
     name: str
     hls_url: str
+    webrtc_url: str | None
     # Read credentials are intentionally part of the payload — the endpoint is
     # gated behind scada:view and the browser player needs them (query params).
     read_user: str | None

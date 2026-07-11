@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useScadaStore } from "../store";
 import { OrbitFallback } from "./orbit-fallback";
+import { attachPlayback, type PlaybackMode } from "../playback";
 import type { Stream, VideoPanelConfig } from "../types";
 
 const RETRY_BASE_MS = 2000;
@@ -67,6 +68,8 @@ export function VideoPanel({
   const [pingMs, setPingMs] = useState<number | null>(null);
   // Last diagnostic while not live — {code, hint} so operators know why.
   const [errorInfo, setErrorInfo] = useState<{ code: string; hint: string } | null>(null);
+  // "webrtc" when the sub-second WHEP path is active (RT badge).
+  const [mode, setMode] = useState<PlaybackMode>("hls");
   const isMobile = useIsMobile();
   // Bumped by "Segarkan Stream" in Kelola Stream — forces a fresh reconnect.
   const reconnectNonce = useScadaStore((s) => s.streamReconnectNonce);
@@ -74,6 +77,23 @@ export function VideoPanel({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !stream) return;
+
+    // WebRTC-enabled stream → unified playback (WHEP first, HLS fallback with
+    // its own resilience). The HLS-specific machinery below stays for pure-HLS
+    // streams, where its diagnostics/ping are the better experience.
+    if (stream.webrtc_url) {
+      const handle = attachPlayback(video, stream, {
+        onLive: (live) => {
+          setStatus(live ? "live" : "reconnecting");
+          if (live) setErrorInfo(null);
+        },
+        onMode: (m) => {
+          setMode(m);
+          if (m === "webrtc") setPingMs(null);
+        },
+      });
+      return () => handle.destroy();
+    }
 
     let hls: Hls | null = null;
     let retries = 0;
@@ -221,7 +241,8 @@ export function VideoPanel({
     };
     document.addEventListener("visibilitychange", onVisible);
 
-    setStatus("connecting");
+    // Status starts as "connecting" (initial state); on re-runs the first
+    // FRAG_BUFFERED/scheduleRestart callback corrects it — no sync setState.
     start();
 
     return () => {
@@ -265,6 +286,14 @@ export function VideoPanel({
 
       {/* Network ping meter (ms) — green normal, kuning bila > 70ms, merah bila parah */}
       {status === "live" && pingMs !== null && <PingBadge ms={pingMs} />}
+
+      {/* WebRTC aktif — jalur real-time (<1 dtk), tanpa angka ping HLS */}
+      {status === "live" && mode === "webrtc" && stream.webrtc_url && (
+        <div className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-black/55 px-1.5 py-0.5">
+          <span className="size-1.5 rounded-full bg-green-500" />
+          <span className="text-[10px] font-bold text-green-400">RT</span>
+        </div>
+      )}
 
       {/* Reconnect / connecting screens — never a silent black box. Branded
           orbit pages: maintenance while connecting, standby + CAUSE on error. */}

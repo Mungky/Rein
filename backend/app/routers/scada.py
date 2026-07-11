@@ -105,6 +105,7 @@ def _stream_dict(s: ScadaStream) -> dict:
         "id": str(s.id),
         "name": s.name,
         "hls_url": s.hls_url,
+        "webrtc_url": s.webrtc_url,
         "read_user": s.read_user,
         "read_pass": s.read_pass,
         "enabled": s.enabled,
@@ -384,6 +385,7 @@ async def create_stream(
     stream = ScadaStream(
         name=body.name,
         hls_url=body.hls_url,
+        webrtc_url=body.webrtc_url or None,
         read_user=body.read_user,
         read_pass=body.read_pass,
         enabled=body.enabled,
@@ -412,6 +414,8 @@ async def update_stream(
         stream.name = body.name
     if body.hls_url is not None:
         stream.hls_url = body.hls_url
+    if body.webrtc_url is not None:
+        stream.webrtc_url = body.webrtc_url or None
     if body.read_user is not None:
         stream.read_user = body.read_user or None
     if body.read_pass is not None:
