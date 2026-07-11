@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
     ports:
       - "1935:1935"        # RTMP ingest dari OBS tiap site
-      # - "8890:8890/udp"  # SRT (opsional: jaringan site jelek/butuh enkripsi)
+      - "8890:8890/udp"    # SRT ingest — tahan jaringan jelek (lihat panduan §11)
     expose:
       - "8888"             # LL-HLS — dipetakan ke domain lewat Coolify (JANGAN publish langsung)
     configs:
@@ -69,7 +69,10 @@ configs:
       rtmp: yes
       rtmpAddress: :1935
 
-      srt: no                       # nyalakan + buka port 8890/udp bila perlu
+      # SRT — jalur alternatif yang TAHAN jaringan jelek (UDP + koreksi paket
+      # hilang). Pakai ini bila RTMP putus-nyambung. Akun & path sama.
+      srt: yes
+      srtAddress: :8890
 
       hls: yes
       hlsAddress: :8888
