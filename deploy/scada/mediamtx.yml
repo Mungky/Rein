@@ -36,7 +36,7 @@ rtmpAddress: 127.0.0.1:1935
 #   Kalau delay masih 6-10 detik, penyebabnya BUKAN di sini, melainkan:
 #     1) Setelan encoder OBS (B-frames/Look-ahead nyala) — perbaiki di OBS dulu.
 #     2) Cloudflare Tunnel menahan potongan LL-HLS — batas bawaan tunnel gratis.
-#   Cara memisahkan kedua penyebab: lihat PANDUAN-SERVER-SCADA.md bagian 8.
+#   Cara memisahkan kedua penyebab: lihat PANDUAN-RNET.md bagian Troubleshooting.
 #   Menurunkan hlsPartDuration/hlsSegmentCount di bawah nilai ini TIDAK membantu
 #   (justru menambah request lewat tunnel = lebih patah-patah).
 hls: yes
