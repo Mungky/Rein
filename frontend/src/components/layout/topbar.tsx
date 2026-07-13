@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/shared/theme-toggle";
 import {
   ChevronDown,
+  Clock,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
@@ -36,6 +37,43 @@ export interface TopbarProps {
   sidebarOpen?: boolean;
   onMenuClick?: () => void;
   onLogout?: () => void;
+}
+
+const DAY_NAMES = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+const MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
+  "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+];
+
+/** Jam RTC + timestamp live — dipakai sebagai judul halaman R-Net
+ *  (menggantikan label "scada"). Nilai server vs klien bisa beda sedetik,
+ *  jadi hydration warning ditekan (terkoreksi pada tick berikutnya). */
+function RtcClock() {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const p = (n: number) => String(n).padStart(2, "0");
+  const time = `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
+  const date = `${DAY_NAMES[now.getDay()]}, ${now.getDate()} ${MONTH_NAMES[now.getMonth()]} ${now.getFullYear()}`;
+
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-[var(--r)] bg-primary-soft px-2.5 py-1 text-[12px] font-semibold text-primary">
+      <Clock className="size-3.5 shrink-0" />
+      <span className="tabular-nums tracking-tight" suppressHydrationWarning>
+        {time}
+      </span>
+      <span
+        className="hidden font-medium text-primary/70 md:inline"
+        suppressHydrationWarning
+      >
+        · {date}
+      </span>
+    </span>
+  );
 }
 
 function ReinLogo() {
@@ -127,14 +165,21 @@ export function Topbar({
         >
           {sidebarOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
         </button>
-        {/* Screen pill */}
+        {/* Screen pill — halaman R-Net menampilkan RTC + timestamp,
+            bukan nama layar */}
         <div className="flex items-center gap-2">
-          <span className="hidden sm:inline-flex items-center gap-1.5 rounded-[var(--r)] bg-primary-soft px-2.5 py-1 text-[12px] font-semibold text-primary">
-            {screenLabel}
-          </span>
-          <span className="sm:hidden text-[13px] font-semibold text-text">
-            {screenLabel}
-          </span>
+          {screen === "scada" ? (
+            <RtcClock />
+          ) : (
+            <>
+              <span className="hidden sm:inline-flex items-center gap-1.5 rounded-[var(--r)] bg-primary-soft px-2.5 py-1 text-[12px] font-semibold text-primary">
+                {screenLabel}
+              </span>
+              <span className="sm:hidden text-[13px] font-semibold text-text">
+                {screenLabel}
+              </span>
+            </>
+          )}
         </div>
 
         <div className="flex-1" />

@@ -45,6 +45,10 @@ import { ManageStreamsDialog } from "./manage-streams-dialog";
 import { AnalysisView } from "./analysis/analysis-view";
 import { ChannelsView } from "./channels-view";
 
+// Tab "Data" (workbench analisis) disembunyikan sementara — fitur belum
+// matang untuk presentasi. Set true untuk memunculkannya kembali.
+const SHOW_DATA_TAB = false;
+
 export function ScadaView() {
   const { role } = useAuthDisplay();
   const canEdit = useCan(role as AppRole, "scada:edit_layout");
@@ -399,7 +403,9 @@ export function ScadaView() {
                   { mode: "channels", label: "Channel" },
                   { mode: "analysis", label: "Data" },
                 ] as const
-              ).map(({ mode, label }) => (
+              )
+                .filter(({ mode }) => SHOW_DATA_TAB || mode !== "analysis")
+                .map(({ mode, label }) => (
                 <button
                   key={mode}
                   onClick={() => store.setViewMode(mode)}
@@ -570,7 +576,7 @@ export function ScadaView() {
 
       {/* Data workbench / Channel registry — rendered as overlays; the wall
           below STAYS MOUNTED so web embeds never reload on tab switches. */}
-      {store.viewMode === "analysis" && !fullscreen && (
+      {SHOW_DATA_TAB && store.viewMode === "analysis" && !fullscreen && (
         <AnalysisView canEdit={canEdit} canManage={canManage} />
       )}
       {store.viewMode === "channels" && !fullscreen && (
