@@ -13,6 +13,7 @@ import {
   Globe,
   Loader2,
   MonitorPlay,
+  ScreenShare,
   Table2,
   TrendingUp,
 } from "lucide-react";
@@ -23,13 +24,13 @@ import { RANGE_LABELS } from "./panels/chart-panel";
 import type {
   Channel,
   ChannelKind,
-  ChannelVideoConfig,
   ChartRange,
   CropRect,
   GaugePanelConfig,
+  ScreenChannelConfig,
+  SourceType,
   Stream,
   Tag,
-  WebPanelConfig,
 } from "./types";
 import { CropEditor } from "./crop-editor";
 
@@ -38,8 +39,7 @@ export const CHANNEL_KINDS: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 }[] = [
-  { kind: "video", label: "Video Stream", icon: MonitorPlay },
-  { kind: "web", label: "Halaman Web / HMI", icon: Globe },
+  { kind: "screen", label: "Video Screen", icon: MonitorPlay },
   { kind: "chart", label: "Grafik Sensor", icon: TrendingUp },
   { kind: "table", label: "Tabel Sensor", icon: Table2 },
   { kind: "gauge", label: "Angka / Status", icon: Gauge },
@@ -47,6 +47,17 @@ export const CHANNEL_KINDS: {
   { kind: "alarm", label: "Alarm", icon: Bell },
   { kind: "activity", label: "Aktivitas", icon: Activity },
 ];
+
+/** Icon + short label for a source's type — shown in the picker so it's clear
+ *  whether a Screen is a video stream, a web page, or a VNC mirror. */
+const SOURCE_TYPE_META: Record<
+  SourceType,
+  { label: string; icon: React.ComponentType<{ className?: string }> }
+> = {
+  stream: { label: "Video Stream", icon: MonitorPlay },
+  web: { label: "Halaman Web", icon: Globe },
+  vnc: { label: "VNC (Layar PC)", icon: ScreenShare },
+};
 
 export function channelKindLabel(kind: ChannelKind): string {
   return CHANNEL_KINDS.find((k) => k.kind === kind)?.label ?? kind;
@@ -58,8 +69,6 @@ const TAG_LIMITS: Record<"chart" | "table" | "bar" | "alarm", { min: number; max
   bar: { min: 2, max: 8 },
   alarm: { min: 1, max: 8 },
 };
-
-const WEB_ZOOMS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2] as const;
 
 /** Common screen resolutions — a channel IS a screen ("resolusi layar"). */
 const SCREEN_PRESETS = [
@@ -102,26 +111,20 @@ export function ChannelForm({
   const init = initial;
   const [number, setNumber] = useState<number>(init?.number ?? nextFreeNumber);
   const [name, setName] = useState(init?.name ?? "");
-  const [kind, setKind] = useState<ChannelKind>(init?.kind ?? "video");
+  const [kind, setKind] = useState<ChannelKind>(init?.kind ?? "screen");
   const [enabled, setEnabled] = useState(init?.enabled ?? true);
   const [saving, setSaving] = useState(false);
 
-  // --- kind-specific state, seeded from the existing config when editing ---
-  const vidCfg = init?.kind === "video" ? (init.config as ChannelVideoConfig) : null;
+  // --- "screen" state: a Source (any type) + optional crop ---
+  const screenCfg =
+    init?.kind === "screen" ? (init.config as ScreenChannelConfig) : null;
   const [streamId, setStreamId] = useState(
-    vidCfg?.stream_id ?? enabledStreams[0]?.id ?? ""
+    screenCfg?.stream_id ?? enabledStreams[0]?.id ?? ""
   );
-  // Manual free crop (null = whole frame); legacy `cell` is preserved on save
-  // only while no crop is drawn.
-  const [crop, setCrop] = useState<CropRect | null>(vidCfg?.crop ?? null);
-  const [srcW, setSrcW] = useState<number | null>(vidCfg?.src_w ?? null);
-  const [srcH, setSrcH] = useState<number | null>(vidCfg?.src_h ?? null);
-
-  const webCfg = init?.kind === "web" ? (init.config as WebPanelConfig) : null;
-  const [url, setUrl] = useState(webCfg?.url ?? "");
-  const [zoom, setZoom] = useState<number>(webCfg?.zoom ?? 1);
-  const [offsetX, setOffsetX] = useState<number>(webCfg?.offset_x ?? 0);
-  const [offsetY, setOffsetY] = useState<number>(webCfg?.offset_y ?? 0);
+  // Manual free crop (null = whole frame).
+  const [crop, setCrop] = useState<CropRect | null>(screenCfg?.crop ?? null);
+  const [srcW, setSrcW] = useState<number | null>(screenCfg?.src_w ?? null);
+  const [srcH, setSrcH] = useState<number | null>(screenCfg?.src_h ?? null);
 
   // "Resolusi Layar" — universal: every channel is a screen (any kind)
   const initScreen = init?.config as
@@ -157,6 +160,15 @@ export function ChannelForm({
     kind === "chart" || kind === "table" || kind === "bar" || kind === "alarm";
   const limits = isTagKind ? TAG_LIMITS[kind] : null;
 
+  // Reset the crop when the chosen source changes — a crop drawn against one
+  // source's resolution is meaningless on another.
+  function pickSource(id: string) {
+    setStreamId(id);
+    setCrop(null);
+    setSrcW(null);
+    setSrcH(null);
+  }
+
   function toggleTag(id: string) {
     setTagIds((prev) =>
       prev.includes(id)
@@ -170,20 +182,17 @@ export function ChannelForm({
   const numberTaken = channels.some(
     (c) => c.number === number && c.id !== init?.id
   );
-  const webUrlOk = /^https?:\/\/.{4,}/i.test(url.trim());
   const canSubmit =
     !numberTaken &&
     number >= 1 &&
     name.trim() !== "" &&
-    (kind === "video"
+    (kind === "screen"
       ? streamId !== ""
-      : kind === "web"
-        ? webUrlOk
-        : kind === "gauge"
-          ? gaugeTagId !== ""
-          : kind === "activity"
-            ? true
-            : limits !== null && tagIds.length >= limits.min);
+      : kind === "gauge"
+        ? gaugeTagId !== ""
+        : kind === "activity"
+          ? true
+          : limits !== null && tagIds.length >= limits.min);
 
   function buildConfig(): Record<string, unknown> {
     // Every channel is a screen — resolution rides along on all kinds.
@@ -192,22 +201,13 @@ export function ChannelForm({
       view_h: Math.min(4320, Math.max(180, viewH || 1080)),
     };
     switch (kind) {
-      case "video":
+      case "screen":
         return {
           ...screen,
           stream_id: streamId,
-          cell: crop ? null : vidCfg?.cell ?? null,
           crop,
           src_w: srcW,
           src_h: srcH,
-        };
-      case "web":
-        return {
-          ...screen,
-          url: url.trim(),
-          zoom,
-          offset_x: Math.max(0, offsetX || 0),
-          offset_y: Math.max(0, offsetY || 0),
         };
       case "gauge":
         return {
@@ -235,9 +235,8 @@ export function ChannelForm({
 
   // Live draft → the preview above updates as you type (WYSIWYG)
   const draftKey = JSON.stringify([
-    number, name, kind, enabled, streamId, crop, srcW, srcH, url, zoom,
-    offsetX, offsetY, viewW, viewH, tagIds, range, gaugeTagId, warning,
-    critical, direction,
+    number, name, kind, enabled, streamId, crop, srcW, srcH,
+    viewW, viewH, tagIds, range, gaugeTagId, warning, critical, direction,
   ]);
   useEffect(() => {
     onDraftChange?.({
@@ -352,41 +351,52 @@ export function ChannelForm({
         </div>
       </div>
 
-      {/* ── Kind-specific source fields ── */}
+      {/* ── Screen source: pick a Source (any type) + crop ── */}
 
-      {kind === "video" && (
+      {kind === "screen" && (
         <>
           <div>
             <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-              Sumber Stream <span className="text-red">*</span>
+              Sumber (Screen) <span className="text-red">*</span>
             </label>
             {enabledStreams.length === 0 ? (
-              <p className="text-[11.5px] text-text-muted">
-                Belum ada stream — tambah lewat &ldquo;Sumber Stream (HLS)&rdquo;.
+              <p className="text-[11.5px] text-text-muted rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2">
+                Belum ada sumber. Tambah dulu lewat tombol{" "}
+                <b>Kelola Screen</b> (Video Stream, Halaman Web, atau VNC).
               </p>
             ) : (
               <select
                 className="field-select cursor-pointer"
                 value={streamId}
-                onChange={(e) => {
-                  setStreamId(e.target.value);
-                  setCrop(null);
-                  setSrcW(null);
-                  setSrcH(null);
-                }}
+                onChange={(e) => pickSource(e.target.value)}
               >
                 {enabledStreams.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name}
+                    {s.name} · {SOURCE_TYPE_META[s.source_type].label}
                   </option>
                 ))}
               </select>
             )}
+            {selectedStream && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-text-light">
+                {(() => {
+                  const Icon = SOURCE_TYPE_META[selectedStream.source_type].icon;
+                  return <Icon className="size-3.5" />;
+                })()}
+                {selectedStream.source_type === "vnc"
+                  ? "Layar PC (VNC) — selalu tonton saja; pastikan server VNC juga view-only."
+                  : selectedStream.source_type === "web"
+                    ? "Halaman web / HMI — dimuat langsung di browser penonton."
+                    : "Video stream (HLS/WebRTC) dari MediaMTX."}
+              </p>
+            )}
           </div>
           {selectedStream && (
             <CropEditor
-              stream={selectedStream}
+              source={selectedStream}
               crop={crop}
+              viewW={viewW}
+              viewH={viewH}
               onChange={(c, w, h) => {
                 setCrop(c);
                 setSrcW(w);
@@ -394,71 +404,6 @@ export function ChannelForm({
               }}
             />
           )}
-        </>
-      )}
-
-      {kind === "web" && (
-        <>
-          <div>
-            <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-              Alamat Halaman <span className="text-red">*</span>
-            </label>
-            <input
-              className="field-input font-mono"
-              placeholder="https://vnet.wecon.com.cn/..."
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              maxLength={2048}
-            />
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                Zoom
-              </label>
-              <select
-                className="field-select cursor-pointer"
-                value={zoom}
-                onChange={(e) => setZoom(Number(e.target.value))}
-              >
-                {WEB_ZOOMS.map((z) => (
-                  <option key={z} value={z}>
-                    {Math.round(z * 100)}%
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                Geser Kiri (px)
-              </label>
-              <input
-                type="number"
-                min={0}
-                max={4000}
-                className="field-input"
-                value={offsetX}
-                onChange={(e) => setOffsetX(Number(e.target.value) || 0)}
-              />
-            </div>
-            <div>
-              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                Geser Atas (px)
-              </label>
-              <input
-                type="number"
-                min={0}
-                max={4000}
-                className="field-input"
-                value={offsetY}
-                onChange={(e) => setOffsetY(Number(e.target.value) || 0)}
-              />
-            </div>
-          </div>
-          <p className="text-[11px] text-text-light rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2">
-            &ldquo;Geser&rdquo; memotong sisi kiri/atas halaman — pakai untuk
-            membuang navbar/sidebar situs (mis. menu V-Net) tanpa fullscreen.
-          </p>
         </>
       )}
 

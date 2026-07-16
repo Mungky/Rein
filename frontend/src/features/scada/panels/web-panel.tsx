@@ -11,14 +11,23 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Globe, RefreshCw } from "lucide-react";
-import type { WebPanelConfig } from "../types";
+import type { CropRect, WebPanelConfig } from "../types";
 import { OrbitFallback } from "./orbit-fallback";
+import { CropFrame } from "./crop-frame";
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, v));
 }
 
-export function WebPanel({ config }: { config: WebPanelConfig }) {
+export function WebPanel({
+  config,
+  crop,
+}: {
+  config: WebPanelConfig;
+  /** Screen-channel crop (in view_w×view_h pixels). When set, the page is
+   *  cropped via CropFrame instead of the legacy zoom/offset box. */
+  crop?: CropRect | null;
+}) {
   const zoom = clamp(config.zoom ?? 1, 0.25, 3);
   const ox = Math.max(0, config.offset_x ?? 0);
   const oy = Math.max(0, config.offset_y ?? 0);
@@ -46,17 +55,46 @@ export function WebPanel({ config }: { config: WebPanelConfig }) {
 
   const s = box.w > 0 && box.h > 0 ? Math.min(box.w / vw, box.h / vh) : 0;
 
+  const blankHint = (
+    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-bg-sidebar text-center text-text-muted">
+      <Globe className="size-6 opacity-50" />
+      <span className="px-4 text-[11.5px]">
+        Kalau area ini tetap kosong, situs tersebut menolak ditampilkan di
+        dalam REIN (X-Frame-Options).
+      </span>
+    </div>
+  );
+
+  const frame = (
+    <iframe
+      key={nonce}
+      src={url}
+      title={url}
+      className="absolute left-0 top-0 h-full w-full border-0"
+      sandbox="allow-scripts allow-same-origin allow-forms"
+      referrerPolicy="no-referrer"
+    />
+  );
+
+  // Screen-channel crop path: the page is laid out at its native viewport and
+  // CropFrame scales/positions it so only the crop region shows.
+  if (crop) {
+    return (
+      <div className="group relative h-full w-full overflow-hidden bg-black">
+        {blankHint}
+        <CropFrame srcW={vw} srcH={vh} crop={crop}>
+          {frame}
+        </CropFrame>
+        <ReloadButton onClick={() => setNonce((n) => n + 1)} />
+      </div>
+    );
+  }
+
   return (
     <div ref={ref} className="group relative h-full w-full overflow-hidden bg-black">
       {/* Blank-page hint — visible only when the site refuses embedding
           (X-Frame-Options) and the frame stays transparent. */}
-      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-bg-sidebar text-center text-text-muted">
-        <Globe className="size-6 opacity-50" />
-        <span className="px-4 text-[11.5px]">
-          Kalau area ini tetap kosong, situs tersebut menolak ditampilkan di
-          dalam REIN (X-Frame-Options).
-        </span>
-      </div>
+      {blankHint}
 
       {s > 0 && (
         <div
@@ -88,14 +126,21 @@ export function WebPanel({ config }: { config: WebPanelConfig }) {
       )}
 
       {/* Reload — appears on hover so it never covers the HMI while watching */}
-      <button
-        type="button"
-        onClick={() => setNonce((n) => n + 1)}
-        className="absolute right-2 top-2 z-10 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity hover:bg-black/75 group-hover:opacity-100"
-        title="Muat ulang halaman"
-      >
-        <RefreshCw className="size-3.5" />
-      </button>
+      <ReloadButton onClick={() => setNonce((n) => n + 1)} />
     </div>
+  );
+}
+
+/** Hover-only reload button (shared by the crop & legacy render paths). */
+function ReloadButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="absolute right-2 top-2 z-10 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity hover:bg-black/75 group-hover:opacity-100"
+      title="Muat ulang halaman"
+    >
+      <RefreshCw className="size-3.5" />
+    </button>
   );
 }

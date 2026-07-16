@@ -39,7 +39,7 @@ import { CanvasStage, STAGE_PRESETS, presetRects } from "./grid/canvas-stage";
 import { WebLiveLayer, setWebLayerLock, setWebSolo } from "./web-live-layer";
 import { channelAspect, channelScreen } from "./screen-box";
 import { PanelFrame } from "./panels/panel-frame";
-import { renderPanel } from "./panels/panel-registry";
+import { renderPanel, isWebScreenChannel } from "./panels/panel-registry";
 import { AddPanelDialog } from "./add-panel-dialog";
 import { ManageStreamsDialog } from "./manage-streams-dialog";
 import { AnalysisView } from "./analysis/analysis-view";
@@ -93,11 +93,11 @@ export function ScadaView() {
       const ch = store.channels.find(
         (c) => c.id === maximizedPanel.config.channel_id
       );
-      if (ch?.kind === "web") webId = ch.id;
+      if (ch && isWebScreenChannel(ch, store.streams)) webId = ch.id;
     }
     setWebSolo(webId);
     return () => setWebSolo(null);
-  }, [maximizedPanel, store.channels]);
+  }, [maximizedPanel, store.channels, store.streams]);
 
   // While arranging the layout, iframes must never swallow drag gestures.
   useEffect(() => {
@@ -686,7 +686,7 @@ export function ScadaView() {
               const ch = store.channels.find(
                 (c) => c.id === panel.config.channel_id
               );
-              return ch?.kind === "web" ? ch.id : null;
+              return ch && isWebScreenChannel(ch, store.streams) ? ch.id : null;
             }}
             panelAspect={(panel) => {
               if (panel.type !== "channel") return null;

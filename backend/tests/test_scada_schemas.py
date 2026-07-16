@@ -10,9 +10,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.scada import (
+    ChannelCreateRequest,
     PerspectiveLayout,
     SheetCreateRequest,
     SiteCreateRequest,
+    StreamCreateRequest,
     TagCreateRequest,
     WorkbenchColumnCreateRequest,
 )
@@ -280,6 +282,100 @@ def test_too_many_panels_rejected():
     panels = [_video_panel(id=f"p{i}") for i in range(25)]
     with pytest.raises(ValidationError):
         PerspectiveLayout.model_validate({"version": 1, "panels": panels})
+
+
+# ── Channel kind "screen" (references a Source: stream/web/vnc) ──────────────
+
+
+def _screen_channel(**overrides) -> dict:
+    body = {
+        "number": 42,
+        "name": "Cloud SCADA",
+        "kind": "screen",
+        "config": {"stream_id": str(uuid.uuid4())},
+    }
+    body.update(overrides)
+    return body
+
+
+def test_valid_screen_channel_passes():
+    ch = ChannelCreateRequest.model_validate(_screen_channel())
+    assert ch.config["crop"] is None  # whole frame by default
+    assert ch.config["view_w"] == 1920  # ScreenSize default rides along
+
+
+def test_screen_channel_requires_stream_id():
+    with pytest.raises(ValidationError):
+        ChannelCreateRequest.model_validate(_screen_channel(config={}))
+
+
+def test_screen_channel_rejects_bad_stream_id():
+    with pytest.raises(ValidationError):
+        ChannelCreateRequest.model_validate(
+            _screen_channel(config={"stream_id": "bukan-uuid"})
+        )
+
+
+def test_screen_channel_accepts_crop():
+    ch = ChannelCreateRequest.model_validate(
+        _screen_channel(
+            config={
+                "stream_id": str(uuid.uuid4()),
+                "crop": {"x": 0, "y": 0, "w": 960, "h": 540},
+                "src_w": 1920,
+                "src_h": 1080,
+            }
+        )
+    )
+    assert ch.config["crop"]["w"] == 960
+
+
+def test_old_video_kind_rejected():
+    # "video" is no longer a channel kind — only "screen" + data kinds.
+    with pytest.raises(ValidationError):
+        ChannelCreateRequest.model_validate(
+            _screen_channel(kind="video", config={"stream_id": str(uuid.uuid4())})
+        )
+
+
+# ── Sources (unified stream/web/vnc) ────────────────────────────────────────
+
+
+def test_stream_source_requires_hls():
+    StreamCreateRequest.model_validate(
+        {"name": "Line A", "hls_url": "https://s.contoh.com/scada/index.m3u8"}
+    )
+    with pytest.raises(ValidationError):  # source_type stream but no hls_url
+        StreamCreateRequest.model_validate({"name": "Line A"})
+
+
+def test_web_source_requires_valid_url():
+    src = StreamCreateRequest.model_validate(
+        {"name": "HMI Lombok", "source_type": "web", "url": "https://vnet.wecon.com"}
+    )
+    assert src.source_type == "web"
+    with pytest.raises(ValidationError):  # missing url
+        StreamCreateRequest.model_validate({"name": "HMI", "source_type": "web"})
+    with pytest.raises(ValidationError):  # bad scheme
+        StreamCreateRequest.model_validate(
+            {"name": "HMI", "source_type": "web", "url": "javascript:alert(1)"}
+        )
+
+
+def test_vnc_source_accepts_wss_and_password():
+    src = StreamCreateRequest.model_validate(
+        {
+            "name": "PC SCADA",
+            "source_type": "vnc",
+            "url": "wss://vnc.contoh.com/websockify",
+            "secret": "lihat123",
+        }
+    )
+    assert src.secret == "lihat123"
+    with pytest.raises(ValidationError):  # bad scheme
+        StreamCreateRequest.model_validate(
+            {"name": "PC", "source_type": "vnc", "url": "vnc://192.168.1.10:5900"}
+        )
 
 
 # ── Workbench v2: sheets, tags, column kinds ────────────────────────────────

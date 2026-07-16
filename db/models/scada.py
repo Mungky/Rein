@@ -30,11 +30,23 @@ from .base import Base, TimestampMixin, UUIDMixin
 
 
 class ScadaStream(UUIDMixin, TimestampMixin, Base):
+    """One "Screen" source a channel can show — despite the table name it now
+    holds THREE kinds (`source_type`): "stream" (HLS/WebRTC video via MediaMTX),
+    "web" (an embedded page/HMI), and "vnc" (view-only noVNC mirror of a PC).
+    A channel of kind "screen" references one of these by id and crops it; the
+    old mosaic columns are gone (cropping is per-channel now)."""
+
     __tablename__ = "scada_streams"
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    # Full HLS playlist URL, e.g. https://scada-stream.example.com/scada/index.m3u8
-    hls_url: Mapped[str] = mapped_column(Text, nullable=False)
+    # "stream" | "web" | "vnc" — which set of fields below is meaningful.
+    source_type: Mapped[str] = mapped_column(
+        String(10), server_default="stream", nullable=False
+    )
+    # --- stream fields ---
+    # HLS playlist URL, e.g. https://scada-stream.example.com/scada/index.m3u8
+    # (nullable now: web/vnc sources leave it empty).
+    hls_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Optional WebRTC (WHEP) endpoint for sub-second playback, e.g.
     # https://webrtc.example.com/server/whep — players try it first and fall
     # back to LL-HLS automatically (viewers behind UDP-blocking networks).
@@ -44,29 +56,23 @@ class ScadaStream(UUIDMixin, TimestampMixin, Base):
     # accepted for HLS reads by MediaMTX ≥1.12).
     read_user: Mapped[str | None] = mapped_column(String(64), nullable=True)
     read_pass: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # --- web / vnc fields ---
+    # web: the page URL; vnc: the noVNC/websockify endpoint (https→wss client-side)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # vnc VIEW-ONLY password (readable by every scada:view user, like read_pass —
+    # the viewer's browser connects directly and needs it).
+    secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
     enabled: Mapped[bool] = mapped_column(
         Boolean, server_default="true", nullable=False
-    )
-    # Video-wall support: one OBS output can carry an R×C mosaic of cameras.
-    # Each cell is an addressable "channel"; the browser crops the single decoded
-    # stream into cells (no server-side splitting). channel_start is the global
-    # number of cell 0, so a 3×3 stream starting at 1 owns channels 1..9.
-    mosaic_rows: Mapped[int] = mapped_column(
-        Integer, server_default="1", nullable=False
-    )
-    mosaic_cols: Mapped[int] = mapped_column(
-        Integer, server_default="1", nullable=False
-    )
-    channel_start: Mapped[int] = mapped_column(
-        Integer, server_default="1", nullable=False
     )
 
 
 class ScadaChannel(UUIDMixin, TimestampMixin, Base):
     """One TV-style channel — the single addressable unit shown on the Monitor
     wall. A channel binds a number + nickname to ONE source definition:
-    kind "video" (a stream, optionally one mosaic cell), "web" (embedded page),
-    or a historian visual ("chart"/"table"/"gauge"/"bar"/"alarm"/"activity").
+    kind "screen" (references a Source — stream/web/vnc — by id, with an
+    optional crop) or a historian visual
+    ("chart"/"table"/"gauge"/"bar"/"alarm"/"activity").
     Layouts reference channels by id; the source is defined once, here."""
 
     __tablename__ = "scada_channels"
@@ -75,8 +81,8 @@ class ScadaChannel(UUIDMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     # Kind-specific config, validated by backend/app/schemas/scada.py:
-    #   video → {stream_id, cell?}   web → {url, zoom, offset_x, offset_y}
-    #   chart/table/bar/alarm → {tag_ids, range, ...}   gauge → {tag_id, ...}
+    #   screen → {stream_id, crop?, src_w?, src_h?}   gauge → {tag_id, ...}
+    #   chart/table/bar/alarm → {tag_ids, range, ...}
     config: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

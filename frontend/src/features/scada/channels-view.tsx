@@ -10,10 +10,12 @@ import { useMemo, useState } from "react";
 import {
   Eye,
   Globe,
+  MonitorPlay,
   Pencil,
   Plus,
   Radio,
   RefreshCw,
+  ScreenShare,
   Trash2,
   Tv,
 } from "lucide-react";
@@ -24,7 +26,13 @@ import { useScadaStore } from "./store";
 import { ChannelForm, CHANNEL_KINDS, channelKindLabel } from "./channel-form";
 import { renderChannelContent } from "./panels/panel-registry";
 import { channelScreen } from "./screen-box";
-import type { Channel, ChannelVideoConfig, WebPanelConfig } from "./types";
+import type { Channel, ScreenChannelConfig, SourceType } from "./types";
+
+const SOURCE_TYPE_LABEL: Record<SourceType, string> = {
+  stream: "Video Stream",
+  web: "Halaman Web",
+  vnc: "VNC",
+};
 
 export function ChannelsView({ canManage }: { canManage: boolean }) {
   const store = useScadaStore();
@@ -41,53 +49,23 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
   const selected =
     sorted.find((c) => c.id === selectedId) ?? sorted[0] ?? null;
 
-  // ── Sources: every HLS stream + every distinct URL, with usage map ──
+  // ── Sources: one row per registered Source, with the channels using it ──
   const sources = useMemo(() => {
-    const rows: {
-      key: string;
-      label: string;
-      detail: string;
-      type: "HLS Stream" | "URL";
-      usedBy: number[];
-    }[] = [];
-    for (const s of store.streams) {
-      rows.push({
-        key: `stream:${s.id}`,
-        label: s.name,
-        detail: s.hls_url,
-        type: "HLS Stream",
-        usedBy: store.channels
-          .filter(
-            (c) =>
-              c.kind === "video" &&
-              (c.config as ChannelVideoConfig).stream_id === s.id
-          )
-          .map((c) => c.number)
-          .sort((a, b) => a - b),
-      });
-    }
-    const byUrl = new Map<string, number[]>();
-    for (const c of store.channels) {
-      if (c.kind !== "web") continue;
-      const url = (c.config as WebPanelConfig).url;
-      byUrl.set(url, [...(byUrl.get(url) ?? []), c.number]);
-    }
-    for (const [url, numbers] of byUrl) {
-      let label = url;
-      try {
-        label = new URL(url).hostname;
-      } catch {
-        /* keep raw */
-      }
-      rows.push({
-        key: `url:${url}`,
-        label,
-        detail: url,
-        type: "URL",
-        usedBy: numbers.sort((a, b) => a - b),
-      });
-    }
-    return rows;
+    return store.streams.map((s) => ({
+      key: `src:${s.id}`,
+      label: s.name,
+      detail:
+        (s.source_type === "stream" ? s.hls_url : s.url) ?? "(tanpa alamat)",
+      type: SOURCE_TYPE_LABEL[s.source_type],
+      usedBy: store.channels
+        .filter(
+          (c) =>
+            c.kind === "screen" &&
+            (c.config as ScreenChannelConfig).stream_id === s.id
+        )
+        .map((c) => c.number)
+        .sort((a, b) => a - b),
+    }));
   }, [store.streams, store.channels]);
 
   async function refresh() {
@@ -360,16 +338,17 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
               type="button"
               onClick={() => store.setShowManageStreams(true)}
               className="btn btn-ghost btn-sm gap-1.5"
-              title="Kelola sumber video HLS (alamat di-update otomatis oleh start-scada)"
+              title="Kelola sumber: Video Stream, Halaman Web, VNC"
             >
-              <Radio className="size-3" /> HLS
+              <MonitorPlay className="size-3" /> Kelola
             </button>
           )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {sources.length === 0 ? (
             <p className="px-2 py-6 text-center text-[12px] text-text-muted">
-              Belum ada source — tambah stream HLS atau buat channel web.
+              Belum ada source — buka Kelola untuk menambah Video Stream,
+              Halaman Web, atau VNC.
             </p>
           ) : (
             <div className="flex flex-col gap-1.5">
@@ -379,8 +358,10 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
                   className="rounded-[var(--r)] border border-border-soft px-2.5 py-2"
                 >
                   <div className="flex items-center gap-1.5">
-                    {s.type === "HLS Stream" ? (
-                      <Radio className="size-3 shrink-0 text-primary" />
+                    {s.type === "Video Stream" ? (
+                      <MonitorPlay className="size-3 shrink-0 text-primary" />
+                    ) : s.type === "VNC" ? (
+                      <ScreenShare className="size-3 shrink-0 text-primary" />
                     ) : (
                       <Globe className="size-3 shrink-0 text-primary" />
                     )}

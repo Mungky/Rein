@@ -9,6 +9,7 @@ save time so garbage can never be persisted.
 Keep in sync with `frontend/src/features/scada/types.ts`.
 """
 
+import re
 import uuid
 from typing import Annotated, Literal, Union
 
@@ -205,6 +206,19 @@ class WebPanelConfig(BaseModel):
     view_h: int | None = Field(default=1080, ge=180, le=4320)
 
 
+class VncPanelConfig(ScreenSize):
+    # Live VNC source (noVNC/websockify) — a dedicated PC mirrored view-only
+    # (e.g. browser showing a cloud SCADA). `url` is the websockify endpoint;
+    # http(s) is accepted and normalized to ws(s) client-side. R-Net always
+    # connects viewOnly — but the REAL guard is the VNC server's own
+    # view-only/input-block setting (client flags can be bypassed).
+    url: str = Field(min_length=8, max_length=2048, pattern=r"^(https?|wss?)://")
+    # VNC password embedded so the wall auto-connects 24/7. Readable by every
+    # scada:view user (the browser needs it to connect) — use a dedicated
+    # VIEW-ONLY password, never the control password.
+    password: str | None = Field(default=None, max_length=128)
+
+
 class WebPanel(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: Literal["web"]
@@ -283,34 +297,80 @@ class PerspectiveUpdateRequest(BaseModel):
     layout: PerspectiveLayout | None = None
 
 
+# A "Screen" source — one addressable place a channel can show. Three kinds:
+#   stream → HLS/WebRTC video (MediaMTX)   web → an embedded web page/HMI
+#   vnc    → a view-only noVNC mirror of a PC
+# All three live in one table (scada_streams) so the channel form and the
+# "Kelola Screen" dialog treat them uniformly; a channel just picks a source
+# by id and crops it. `mosaic` is gone — cropping is per-channel now.
+SourceType = Literal["stream", "web", "vnc"]
+
+# URL scheme allowed per source type (web = http(s); vnc = http(s)/ws(s),
+# normalized to ws(s) client-side; stream URL is the HLS playlist).
+_WEB_SCHEME = re.compile(r"^https?://", re.IGNORECASE)
+_VNC_SCHEME = re.compile(r"^(https?|wss?)://", re.IGNORECASE)
+
+
 class StreamCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    hls_url: str = Field(min_length=1)
+    source_type: SourceType = "stream"
+    # stream only — the HLS playlist + optional WebRTC + read credentials.
+    hls_url: str | None = Field(default=None, max_length=2048)
     webrtc_url: str | None = Field(default=None, max_length=2048)
     read_user: str | None = Field(default=None, max_length=64)
     read_pass: str | None = Field(default=None, max_length=128)
+    # web / vnc — the page URL or the noVNC/websockify endpoint.
+    url: str | None = Field(default=None, max_length=2048)
+    # vnc only — the VIEW-ONLY password (readable by every scada:view user,
+    # exactly like read_pass; the browser needs it to auto-connect the wall).
+    secret: str | None = Field(default=None, max_length=128)
     enabled: bool = True
-    mosaic_rows: int = Field(default=1, ge=1, le=6)
-    mosaic_cols: int = Field(default=1, ge=1, le=6)
-    channel_start: int = Field(default=1, ge=1, le=100000)
+
+    @model_validator(mode="after")
+    def _check_source(self) -> "StreamCreateRequest":
+        return _validate_source_fields(self)  # type: ignore[return-value]
 
 
 class StreamUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    hls_url: str | None = Field(default=None, min_length=1)
+    source_type: SourceType | None = None
+    hls_url: str | None = Field(default=None, max_length=2048)
     webrtc_url: str | None = Field(default=None, max_length=2048)
     read_user: str | None = Field(default=None, max_length=64)
     read_pass: str | None = Field(default=None, max_length=128)
+    url: str | None = Field(default=None, max_length=2048)
+    secret: str | None = Field(default=None, max_length=128)
     enabled: bool | None = None
-    mosaic_rows: int | None = Field(default=None, ge=1, le=6)
-    mosaic_cols: int | None = Field(default=None, ge=1, le=6)
-    channel_start: int | None = Field(default=None, ge=1, le=100000)
+
+
+def _validate_source_fields(req: "StreamCreateRequest") -> "StreamCreateRequest":
+    """Require the URL fields that the chosen source_type actually needs, and
+    check their scheme. Shared entry point so create-time validation lives in
+    one place (updates are partial → validated in the router against the
+    effective type)."""
+    if req.source_type == "stream":
+        if not (req.hls_url and req.hls_url.strip()):
+            raise ValueError("Stream butuh URL HLS")
+    elif req.source_type == "web":
+        if not (req.url and req.url.strip()):
+            raise ValueError("Sumber web butuh URL halaman")
+        if not _WEB_SCHEME.match(req.url.strip()):
+            raise ValueError("URL web harus diawali http:// atau https://")
+    else:  # vnc
+        if not (req.url and req.url.strip()):
+            raise ValueError("Sumber VNC butuh alamat noVNC/websockify")
+        if not _VNC_SCHEME.match(req.url.strip()):
+            raise ValueError("Alamat VNC harus http(s):// atau ws(s)://")
+    return req
 
 
 # --- Channels (TV-style registry: number + nickname + one source) ----------
 
+# "screen" replaces the old "video"/"web"/"vnc" kinds: one channel that shows
+# any Source (stream/web/vnc) by id + an optional crop. What KIND of source it
+# is comes from the referenced scada_streams row, not the channel.
 ChannelKind = Literal[
-    "video", "web", "chart", "table", "gauge", "bar", "alarm", "activity"
+    "screen", "chart", "table", "gauge", "bar", "alarm", "activity"
 ]
 
 
@@ -323,14 +383,16 @@ class CropRect(BaseModel):
     h: float = Field(ge=8, le=4320)
 
 
-class ChannelVideoConfig(ScreenSize):
+class ScreenChannelConfig(ScreenSize):
+    """A channel that mirrors one Source (stream/web/vnc) — chosen by id in the
+    unified "Kelola Screen" list. Optional crop (drawn in the channel editor:
+    grid-divide 2×2/3×3 or a free rectangle) is applied to whatever the source
+    renders. `src_w`/`src_h` is the reference resolution the crop was drawn
+    against; `view_w`/`view_h` (from ScreenSize) is the channel's own screen."""
+
+    # References a scada_streams row (any source_type). Named stream_id for
+    # continuity with the layout VideoPanelConfig / DB column.
     stream_id: uuid.UUID
-    # LEGACY: crop one cell of the stream's mosaic grid (row-major, 0-based).
-    cell: int | None = Field(default=None, ge=0, le=35)
-    # Manual free crop (preferred): user-drawn region of the source frame —
-    # one OBS mosaic stream becomes N independent channels, no grid assumed.
-    # Defined against the reference resolution src_w×src_h (auto-detected in
-    # the editor) so it survives source resolution changes.
     crop: CropRect | None = None
     src_w: int | None = Field(default=None, ge=16, le=7680)
     src_h: int | None = Field(default=None, ge=16, le=4320)
@@ -339,8 +401,7 @@ class ChannelVideoConfig(ScreenSize):
 # Which config model validates each channel kind — panel configs are reused so
 # a channel is exactly "a panel definition without a grid position".
 CHANNEL_CONFIG_MODELS: dict[str, type[BaseModel]] = {
-    "video": ChannelVideoConfig,
-    "web": WebPanelConfig,
+    "screen": ScreenChannelConfig,
     "chart": ChartPanelConfig,
     "table": TablePanelConfig,
     "gauge": GaugePanelConfig,
@@ -517,16 +578,19 @@ class PublishedLayoutOut(BaseModel):
 class StreamOut(BaseModel):
     id: str
     name: str
-    hls_url: str
+    source_type: str  # "stream" | "web" | "vnc"
+    hls_url: str | None
     webrtc_url: str | None
     # Read credentials are intentionally part of the payload — the endpoint is
     # gated behind scada:view and the browser player needs them (query params).
     read_user: str | None
     read_pass: str | None
+    # web/vnc address; `secret` = the VNC view-only password. Exposed on
+    # purpose (same rationale as read_pass) — the viewer's browser connects
+    # directly and needs it.
+    url: str | None
+    secret: str | None
     enabled: bool
-    mosaic_rows: int
-    mosaic_cols: int
-    channel_start: int
     created_at: str | None
     updated_at: str | None
 

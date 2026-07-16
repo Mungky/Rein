@@ -40,7 +40,7 @@ function describeError(data: ErrorData): { code: string; hint: string } {
   const httpCode = data.response?.code;
   if (httpCode) {
     if (httpCode === 401 || httpCode === 403)
-      return { code: `HTTP ${httpCode}`, hint: "Akses ditolak — cek user/password di Kelola Stream" };
+      return { code: `HTTP ${httpCode}`, hint: "Akses ditolak — cek user/password di Kelola Screen" };
     if (httpCode === 404)
       return { code: "HTTP 404", hint: "Stream tidak ada — OBS mungkin belum 'Start Streaming'" };
     if (httpCode >= 500)
@@ -122,6 +122,7 @@ export function VideoPanel({
       teardown();
 
       const src = stream.hls_url;
+      if (!src) return; // non-stream source (web/vnc) — nothing to attach
       const auth = basicAuthHeader(stream);
 
       if (Hls.isSupported()) {

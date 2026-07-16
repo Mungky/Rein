@@ -13,10 +13,12 @@
  *  default (monitoring wall), a panel's Interact button enables the mouse. */
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import type { WebPanelConfig } from "./types";
+import type { CropRect, WebPanelConfig } from "./types";
 
 interface LiveSlot {
   cfg: WebPanelConfig;
+  // Screen-channel crop (in view_w×view_h px); null = whole page.
+  crop: CropRect | null;
   els: HTMLElement[]; // placeholders, most recent last (maximize overlay wins)
   interact: boolean;
   nonce: number; // bump to force the iframe to reload
@@ -52,14 +54,16 @@ function subscribe(l: () => void) {
 export function registerWebSlot(
   channelId: string,
   el: HTMLElement,
-  cfg: WebPanelConfig
+  cfg: WebPanelConfig,
+  crop: CropRect | null = null
 ) {
   const slot = slots.get(channelId);
   if (slot) {
     slot.els.push(el);
     slot.cfg = cfg;
+    slot.crop = crop;
   } else {
-    slots.set(channelId, { cfg, els: [el], interact: false, nonce: 0 });
+    slots.set(channelId, { cfg, crop, els: [el], interact: false, nonce: 0 });
   }
   emit();
 }
@@ -108,16 +112,18 @@ function useLayerVersion(): number {
 export function WebSlot({
   channelId,
   cfg,
+  crop,
 }: {
   channelId: string;
   cfg: WebPanelConfig;
+  crop?: CropRect | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const cfgKey = JSON.stringify(cfg);
+  const cfgKey = JSON.stringify([cfg, crop]);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    registerWebSlot(channelId, el, cfg);
+    registerWebSlot(channelId, el, cfg, crop ?? null);
     return () => unregisterWebSlot(channelId, el);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId, cfgKey]);
@@ -163,12 +169,19 @@ export function WebLiveLayer() {
           if (inner) {
             const vw = slot.cfg.view_w ?? 1920;
             const vh = slot.cfg.view_h ?? 1080;
-            const s = Math.min(b.width / vw, b.height / vh);
+            // Crop region (view px); no crop = whole page. `s` contains that
+            // region in the box, and left/top shift it so the region's corner
+            // lands in the letterbox (reduces to whole-page when crop is null).
+            const rx = slot.crop?.x ?? 0;
+            const ry = slot.crop?.y ?? 0;
+            const rw = slot.crop && slot.crop.w > 0 ? slot.crop.w : vw;
+            const rh = slot.crop && slot.crop.h > 0 ? slot.crop.h : vh;
+            const s = Math.min(b.width / rw, b.height / rh);
             inner.style.zoom = String(s);
             // Offsets are in PRE-zoom (layout) px so the centering stays
             // correct: layout size seen by the parent = vw*s × vh*s.
-            inner.style.left = `${Math.round((b.width - vw * s) / 2 / s)}px`;
-            inner.style.top = `${Math.round((b.height - vh * s) / 2 / s)}px`;
+            inner.style.left = `${Math.round((b.width - rw * s) / 2 / s - rx)}px`;
+            inner.style.top = `${Math.round((b.height - rh * s) / 2 / s - ry)}px`;
           }
         }
       }

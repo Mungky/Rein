@@ -9,10 +9,10 @@ import type {
   AlarmPanelConfig,
   BarPanelConfig,
   Channel,
-  ChannelVideoConfig,
   ChartPanelConfig,
   GaugePanelConfig,
   Panel,
+  ScreenChannelConfig,
   Stream,
   TablePanelConfig,
   Tag,
@@ -26,10 +26,22 @@ import { BarPanel } from "./bar-panel";
 import { AlarmPanel } from "./alarm-panel";
 import { ActivityPanel } from "./activity-panel";
 import { WebPanel } from "./web-panel";
+import { VncPanel } from "./vnc-panel";
 import { CroppedVideoPanel } from "./cropped-video-panel";
 import { OrbitFallback } from "./orbit-fallback";
 import { WebSlot } from "../web-live-layer";
 import { ScreenBox, channelScreen } from "../screen-box";
+
+/** True when a channel is a "screen" whose Source is a web page — the only
+ *  channels routed through the keep-alive iframe layer (WebLiveLayer) and
+ *  eligible for the Interact button. Video/VNC screens are not iframes. */
+export function isWebScreenChannel(channel: Channel, streams: Stream[]): boolean {
+  if (channel.kind !== "screen") return false;
+  const src = streams.find(
+    (s) => s.id === (channel.config as ScreenChannelConfig).stream_id
+  );
+  return src?.source_type === "web";
+}
 
 /** Render a channel's SOURCE inside its fixed-resolution ScreenBox — the
  *  channel is a "monitor" (resolusi layar tetap); every placement (Monitor
@@ -56,40 +68,70 @@ function renderChannelSource(
   opts?: { webLive?: boolean }
 ) {
   switch (channel.kind) {
-    case "video": {
-      const cfg = channel.config as ChannelVideoConfig;
-      const stream = streams.find((s) => s.id === cfg.stream_id);
-      if (!stream) {
+    case "screen": {
+      const cfg = channel.config as ScreenChannelConfig;
+      const source = streams.find((s) => s.id === cfg.stream_id);
+      if (!source) {
         return (
           <OrbitFallback
             kind="error"
-            reason={`CH ${channel.number} — sumber stream tidak ditemukan (sudah dihapus?)`}
+            reason={`CH ${channel.number} — sumber (Screen) tidak ditemukan (sudah dihapus?)`}
           />
         );
       }
-      // Manual free crop or legacy mosaic cell → shared-decoder crop renderer
-      if (cfg.crop || (cfg.cell !== null && cfg.cell !== undefined)) {
-        return <CroppedVideoPanel stream={stream} cfg={cfg} />;
+      // The SOURCE decides how to render — stream video, web page, or VNC —
+      // and the channel's crop is applied on top of whichever it is.
+      if (source.source_type === "web") {
+        if (!source.url || !/^https?:\/\//i.test(source.url)) {
+          return (
+            <OrbitFallback
+              kind="error"
+              reason={`CH ${channel.number} — alamat web sumber tidak valid`}
+            />
+          );
+        }
+        const webCfg: WebPanelConfig = {
+          url: source.url,
+          view_w: cfg.view_w ?? 1920,
+          view_h: cfg.view_h ?? 1080,
+        };
+        if (opts?.webLive)
+          return (
+            <WebSlot channelId={channel.id} cfg={webCfg} crop={cfg.crop} />
+          );
+        return <WebPanel config={webCfg} crop={cfg.crop} />;
+      }
+      if (source.source_type === "vnc") {
+        if (!source.url || !/^(https?|wss?):\/\//i.test(source.url)) {
+          return (
+            <OrbitFallback
+              kind="error"
+              reason={`CH ${channel.number} — alamat VNC sumber tidak valid`}
+            />
+          );
+        }
+        // R-Net owns the RFB connection, always view-only; a flipped-away page
+        // reconnects in ~a second on return.
+        return (
+          <VncPanel
+            url={source.url}
+            password={source.secret}
+            crop={cfg.crop}
+            srcW={cfg.src_w}
+            srcH={cfg.src_h}
+          />
+        );
+      }
+      // stream
+      if (cfg.crop) {
+        return <CroppedVideoPanel stream={source} cfg={cfg} />;
       }
       return (
         <VideoPanel
-          stream={stream}
-          config={{ stream_id: cfg.stream_id, object_fit: "contain", muted: true }}
+          stream={source}
+          config={{ stream_id: source.id, object_fit: "contain", muted: true }}
         />
       );
-    }
-    case "web": {
-      const cfg = channel.config as WebPanelConfig;
-      if (!/^https?:\/\//i.test(cfg.url)) {
-        return (
-          <OrbitFallback
-            kind="error"
-            reason={`CH ${channel.number} — alamat web tidak valid`}
-          />
-        );
-      }
-      if (opts?.webLive) return <WebSlot channelId={channel.id} cfg={cfg} />;
-      return <WebPanel config={cfg} />;
     }
     case "chart":
       return <ChartPanel config={channel.config as ChartPanelConfig} tags={tags} />;
@@ -154,7 +196,12 @@ export function renderPanel(
           />
         );
       }
-      if (opts?.videoSuspended && channel.kind === "video") {
+      if (
+        opts?.videoSuspended &&
+        channel.kind === "screen" &&
+        streams.find((s) => s.id === (channel.config as ScreenChannelConfig).stream_id)
+          ?.source_type === "stream"
+      ) {
         return (
           <div className="flex h-full w-full items-center justify-center bg-black text-[12px] text-white/40">
             Video dijeda — kembali ke tab Monitor

@@ -1,17 +1,22 @@
 "use client";
 
-/** Visual crop editor for a video channel — draw the crop rectangle straight
- *  on the LIVE stream: drag to move, corner to resize, numeric boxes for
+/** Visual crop editor for a "screen" channel — draw the crop rectangle straight
+ *  on the LIVE source: drag to move, corner to resize, numeric boxes for
  *  precision, and quick-grid buttons (2×2/3×3/4×4 → click a cell) for the
- *  "1 OBS mosaic → N channels" workflow. Uses the shared decoder pool, so
- *  editing costs no extra download. Source resolution is auto-detected. */
+ *  "1 OBS mosaic → N channels" workflow. Works for all three source types:
+ *    stream → live video (shared decoder pool, source res auto-detected)
+ *    web    → the live page laid out at the channel resolution
+ *    vnc    → the live remote screen (framebuffer res auto-detected)
+ *  The crop rectangle + numeric UI is identical across all three; only the
+ *  backdrop differs. */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CropRect, Stream } from "./types";
 import { useScadaStore } from "./store";
 import { acquireStreamVideo } from "./stream-pool";
+import { VncPanel } from "./panels/vnc-panel";
 
 const GRID_CHOICES = [
   { label: "2×2", r: 2, c: 2 },
@@ -20,12 +25,18 @@ const GRID_CHOICES = [
 ] as const;
 
 export function CropEditor({
-  stream,
+  source,
   crop,
+  viewW,
+  viewH,
   onChange,
 }: {
-  stream: Stream;
+  source: Stream;
   crop: CropRect | null;
+  /** Channel screen resolution — the reference space for web crops and the
+   *  fallback for vnc until the framebuffer size is known. */
+  viewW: number;
+  viewH: number;
   /** Fired with the crop (null = whole frame) + detected source resolution. */
   onChange: (crop: CropRect | null, srcW: number, srcH: number) => void;
 }) {
@@ -33,9 +44,22 @@ export function CropEditor({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
-  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  // Detected source resolution (stream: from the video; vnc: from the RFB
+  // framebuffer). Web needs no detection — its reference space IS the channel
+  // screen (viewW×viewH), derived below without state.
+  const [detected, setDetected] = useState<{ w: number; h: number } | null>(null);
   const [grid, setGrid] = useState<{ r: number; c: number } | null>(null);
   const [boxW, setBoxW] = useState(0);
+
+  const isStream = source.source_type === "stream";
+  const isWeb = source.source_type === "web";
+  const isVnc = source.source_type === "vnc";
+
+  const dims = isWeb ? { w: viewW, h: viewH } : detected;
+
+  const onVncResolution = useCallback((w: number, h: number) => {
+    setDetected((d) => (d && d.w === w && d.h === h ? d : { w, h }));
+  }, []);
 
   useEffect(() => {
     const el = boxRef.current;
@@ -48,30 +72,31 @@ export function CropEditor({
     return () => ro.disconnect();
   }, []);
 
+  // ── Stream backdrop: shared decoder + live canvas paint + res detect ──
   useEffect(() => {
-    const { video, release } = acquireStreamVideo(stream, reconnectNonce);
+    if (!isStream) return;
+    const { video, release } = acquireStreamVideo(source, reconnectNonce);
     videoRef.current = video;
     return () => {
       videoRef.current = null;
       release();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream.id, stream.hls_url, stream.read_user, stream.read_pass, reconnectNonce]);
+  }, [isStream, source.id, source.hls_url, source.read_user, source.read_pass, reconnectNonce]);
 
-  // Paint the full frame + detect the source resolution
   useEffect(() => {
+    if (!isStream) return;
     let raf = 0;
     const draw = () => {
       const video = videoRef.current;
       const canvas = canvasRef.current;
       if (video && video.readyState >= 2 && video.videoWidth) {
-        setDims((d) =>
+        setDetected((d) =>
           d && d.w === video.videoWidth && d.h === video.videoHeight
             ? d
             : { w: video.videoWidth, h: video.videoHeight }
         );
         if (canvas) {
-          // Physical pixels — same anti-blur treatment as CroppedVideoPanel.
           const dpr = Math.min(window.devicePixelRatio || 1, 3);
           const cw = Math.round(canvas.clientWidth * dpr);
           const ch = Math.round(canvas.clientHeight * dpr);
@@ -93,7 +118,7 @@ export function CropEditor({
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [isStream]);
 
   // ── Pointer interactions (display px ↔ source px) ──
   function startDrag(e: React.PointerEvent, mode: "move" | "resize") {
@@ -139,27 +164,45 @@ export function CropEditor({
     onChange({ ...base, [k]: Math.max(0, Math.round(v || 0)) }, dims.w, dims.h);
   }
 
+  const label = isStream ? "Crop Stream" : isWeb ? "Crop Halaman" : "Crop Layar VNC";
+
   return (
     <div className="rounded-[var(--r)] border border-border-soft bg-bg p-3">
-      <div className="text-[12px] font-semibold text-text mb-0.5">
-        Crop Stream
-      </div>
+      <div className="text-[12px] font-semibold text-text mb-0.5">{label}</div>
       <p className="text-[11px] text-text-light mb-2">
-        Gambar kotak di atas video: geser untuk memindah, tarik sudut
+        Gambar kotak di atas tampilan: geser untuk memindah, tarik sudut
         kanan-bawah untuk ukuran. Atau klik &ldquo;Bagi&rdquo; lalu pilih
-        kotaknya — 1 stream mosaic jadi banyak channel.
+        kotaknya — satu sumber bisa jadi banyak channel.
       </p>
 
-      {/* Live frame + crop overlay */}
+      {/* Live source + crop overlay */}
       <div
         ref={boxRef}
         className="relative w-full overflow-hidden rounded-[var(--r-sm)] bg-black"
         style={{ aspectRatio: dims ? `${dims.w} / ${dims.h}` : "16 / 9" }}
       >
-        <canvas ref={canvasRef} className="block h-full w-full" />
+        {isStream && <canvas ref={canvasRef} className="block h-full w-full" />}
+        {isWeb && source.url && (
+          <iframe
+            src={source.url}
+            title={source.url}
+            className="pointer-events-none absolute inset-0 h-full w-full border-0"
+            sandbox="allow-scripts allow-same-origin allow-forms"
+            referrerPolicy="no-referrer"
+          />
+        )}
+        {isVnc && source.url && (
+          <div className="pointer-events-none absolute inset-0">
+            <VncPanel
+              url={source.url}
+              password={source.secret}
+              onResolution={onVncResolution}
+            />
+          </div>
+        )}
         {!dims && (
           <div className="absolute inset-0 flex items-center justify-center gap-2 text-[11.5px] text-white/60">
-            <Loader2 className="size-4 animate-spin" /> Menunggu sinyal stream…
+            <Loader2 className="size-4 animate-spin" /> Menunggu sinyal sumber…
           </div>
         )}
 

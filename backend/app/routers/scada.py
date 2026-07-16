@@ -11,6 +11,7 @@ player must append as query params, and the endpoint is gated behind
 `scada:view` — every recipient is an authorized viewer.
 """
 
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -104,17 +105,42 @@ def _stream_dict(s: ScadaStream) -> dict:
     return {
         "id": str(s.id),
         "name": s.name,
+        "source_type": s.source_type,
         "hls_url": s.hls_url,
         "webrtc_url": s.webrtc_url,
         "read_user": s.read_user,
         "read_pass": s.read_pass,
+        "url": s.url,
+        "secret": s.secret,
         "enabled": s.enabled,
-        "mosaic_rows": s.mosaic_rows,
-        "mosaic_cols": s.mosaic_cols,
-        "channel_start": s.channel_start,
         "created_at": str(s.created_at) if s.created_at else None,
         "updated_at": str(s.updated_at) if s.updated_at else None,
     }
+
+
+def _validate_effective_source(s: ScadaStream) -> None:
+    """Ensure a source row has the URL its type needs and drop the fields the
+    type doesn't use (so switching type never leaves a stale address). Mirrors
+    the create-time validation in schemas.StreamCreateRequest."""
+    if s.source_type == "stream":
+        if not (s.hls_url and s.hls_url.strip()):
+            raise ValueError("Stream butuh URL HLS")
+        s.url = None
+        s.secret = None
+    elif s.source_type == "web":
+        if not (s.url and s.url.strip()):
+            raise ValueError("Sumber web butuh URL halaman")
+        if not re.match(r"^https?://", s.url.strip(), re.IGNORECASE):
+            raise ValueError("URL web harus diawali http:// atau https://")
+        s.hls_url = s.webrtc_url = s.read_user = s.read_pass = s.secret = None
+    elif s.source_type == "vnc":
+        if not (s.url and s.url.strip()):
+            raise ValueError("Sumber VNC butuh alamat noVNC/websockify")
+        if not re.match(r"^(https?|wss?)://", s.url.strip(), re.IGNORECASE):
+            raise ValueError("Alamat VNC harus http(s):// atau ws(s)://")
+        s.hls_url = s.webrtc_url = s.read_user = s.read_pass = None
+    else:
+        raise ValueError(f"Jenis sumber tidak dikenal: {s.source_type}")
 
 
 async def _get_own_perspective(
@@ -384,14 +410,14 @@ async def create_stream(
 ):
     stream = ScadaStream(
         name=body.name,
-        hls_url=body.hls_url,
+        source_type=body.source_type,
+        hls_url=(body.hls_url or None) if body.source_type == "stream" else None,
         webrtc_url=body.webrtc_url or None,
         read_user=body.read_user,
         read_pass=body.read_pass,
+        url=(body.url or None) if body.source_type in ("web", "vnc") else None,
+        secret=(body.secret or None) if body.source_type == "vnc" else None,
         enabled=body.enabled,
-        mosaic_rows=body.mosaic_rows,
-        mosaic_cols=body.mosaic_cols,
-        channel_start=body.channel_start,
     )
     db.add(stream)
     await db.flush()
@@ -412,22 +438,30 @@ async def update_stream(
 
     if body.name is not None:
         stream.name = body.name
+    if body.source_type is not None:
+        stream.source_type = body.source_type
     if body.hls_url is not None:
-        stream.hls_url = body.hls_url
+        stream.hls_url = body.hls_url or None
     if body.webrtc_url is not None:
         stream.webrtc_url = body.webrtc_url or None
     if body.read_user is not None:
         stream.read_user = body.read_user or None
     if body.read_pass is not None:
         stream.read_pass = body.read_pass or None
+    if body.url is not None:
+        stream.url = body.url or None
+    if body.secret is not None:
+        stream.secret = body.secret or None
     if body.enabled is not None:
         stream.enabled = body.enabled
-    if body.mosaic_rows is not None:
-        stream.mosaic_rows = body.mosaic_rows
-    if body.mosaic_cols is not None:
-        stream.mosaic_cols = body.mosaic_cols
-    if body.channel_start is not None:
-        stream.channel_start = body.channel_start
+
+    # Validate the EFFECTIVE source (type + the URL it requires) after merging,
+    # then null out the fields the type doesn't use so stale addresses can't
+    # linger when a source is switched between kinds.
+    try:
+        _validate_effective_source(stream)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     await db.flush()
     await db.refresh(stream)

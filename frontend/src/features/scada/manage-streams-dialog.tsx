@@ -1,40 +1,75 @@
 "use client";
 
-/** Stream management dialog — admin-only (scada:manage).
- *  CRUD for HLS stream sources: name, playlist URL, read credentials. */
+/** "Kelola Screen" dialog — admin-only (scada:manage). One place to register
+ *  every SOURCE a channel can show: a video Stream (HLS/WebRTC), a Web page,
+ *  or a VNC mirror. Pick the type at the top; only the fields that type needs
+ *  are shown. Channels then reference a source by id and crop it (crop lives
+ *  on the channel, not here — no more mosaic). */
 
 import { useState } from "react";
-import { Loader2, Pencil, Plus, Radio, RefreshCw, Trash2, X } from "lucide-react";
+import {
+  Globe,
+  Loader2,
+  MonitorPlay,
+  Pencil,
+  Plus,
+  RefreshCw,
+  ScreenShare,
+  Trash2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
-import type { Stream } from "./types";
+import type { SourceType, Stream } from "./types";
 
-interface StreamForm {
+interface ScreenForm {
   name: string;
+  source_type: SourceType;
+  // stream
   hls_url: string;
   webrtc_url: string;
   read_user: string;
   read_pass: string;
+  // web / vnc
+  url: string;
+  secret: string; // vnc view-only password
   enabled: boolean;
-  mosaic_rows: number;
-  mosaic_cols: number;
-  channel_start: number;
 }
 
-const EMPTY_FORM: StreamForm = {
+const EMPTY_FORM: ScreenForm = {
   name: "",
+  source_type: "stream",
   hls_url: "",
   webrtc_url: "",
   read_user: "",
   read_pass: "",
+  url: "",
+  secret: "",
   enabled: true,
-  mosaic_rows: 1,
-  mosaic_cols: 1,
-  channel_start: 1,
 };
 
-const MOSAIC_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
+const TYPE_META: Record<
+  SourceType,
+  { label: string; icon: React.ComponentType<{ className?: string }>; hint: string }
+> = {
+  stream: {
+    label: "Video Stream",
+    icon: MonitorPlay,
+    hint: "HLS/WebRTC dari MediaMTX",
+  },
+  web: { label: "Halaman Web", icon: Globe, hint: "Situs / HMI (mis. V-Net)" },
+  vnc: {
+    label: "VNC (Layar PC)",
+    icon: ScreenShare,
+    hint: "Spion layar PC, view-only",
+  },
+};
+
+function sourceAddress(s: Stream): string {
+  if (s.source_type === "stream") return s.hls_url ?? "(tanpa URL)";
+  return s.url ?? "(tanpa alamat)";
+}
 
 export function ManageStreamsDialog({
   streams,
@@ -44,12 +79,12 @@ export function ManageStreamsDialog({
 }: {
   streams: Stream[];
   onChanged: () => Promise<void>;
-  /** Re-fetch streams from the DB and force all video players to reconnect. */
+  /** Re-fetch sources from the DB and force all video players to reconnect. */
   onRefresh: () => Promise<void>;
   onClose: () => void;
 }) {
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
-  const [form, setForm] = useState<StreamForm>(EMPTY_FORM);
+  const [form, setForm] = useState<ScreenForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -57,9 +92,9 @@ export function ManageStreamsDialog({
     setRefreshing(true);
     try {
       await onRefresh();
-      toast.success("Stream disegarkan — video menyambung ulang");
+      toast.success("Sumber disegarkan — video menyambung ulang");
     } catch {
-      toast.error("Gagal menyegarkan stream");
+      toast.error("Gagal menyegarkan sumber");
     } finally {
       setRefreshing(false);
     }
@@ -70,14 +105,14 @@ export function ManageStreamsDialog({
       setEditingId(stream.id);
       setForm({
         name: stream.name,
-        hls_url: stream.hls_url,
+        source_type: stream.source_type,
+        hls_url: stream.hls_url ?? "",
         webrtc_url: stream.webrtc_url ?? "",
         read_user: stream.read_user ?? "",
         read_pass: stream.read_pass ?? "",
+        url: stream.url ?? "",
+        secret: stream.secret ?? "",
         enabled: stream.enabled,
-        mosaic_rows: stream.mosaic_rows ?? 1,
-        mosaic_cols: stream.mosaic_cols ?? 1,
-        channel_start: stream.channel_start ?? 1,
       });
     } else {
       setEditingId("new");
@@ -85,52 +120,61 @@ export function ManageStreamsDialog({
     }
   }
 
+  // The one required address field per type must be filled before saving.
+  const addressOk =
+    form.source_type === "stream"
+      ? form.hls_url.trim() !== ""
+      : form.url.trim() !== "";
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.name.trim() || !form.hls_url.trim()) return;
+    if (!form.name.trim() || !addressOk) return;
     setSaving(true);
     try {
       const payload = {
         name: form.name.trim(),
-        hls_url: form.hls_url.trim(),
-        webrtc_url: form.webrtc_url.trim() || null,
-        read_user: form.read_user.trim() || null,
-        read_pass: form.read_pass.trim() || null,
+        source_type: form.source_type,
+        hls_url: form.source_type === "stream" ? form.hls_url.trim() : null,
+        webrtc_url:
+          form.source_type === "stream" ? form.webrtc_url.trim() || null : null,
+        read_user:
+          form.source_type === "stream" ? form.read_user.trim() || null : null,
+        read_pass:
+          form.source_type === "stream" ? form.read_pass.trim() || null : null,
+        url: form.source_type === "stream" ? null : form.url.trim(),
+        secret: form.source_type === "vnc" ? form.secret.trim() || null : null,
         enabled: form.enabled,
-        mosaic_rows: form.mosaic_rows,
-        mosaic_cols: form.mosaic_cols,
-        channel_start: form.channel_start,
       };
       if (editingId === "new") {
         await scadaApi.createStream(payload);
-        toast.success("Stream ditambahkan");
+        toast.success("Sumber ditambahkan");
       } else if (editingId) {
         await scadaApi.updateStream(editingId, payload);
-        toast.success("Stream diperbarui");
+        toast.success("Sumber diperbarui");
       }
       await onChanged();
       setEditingId(null);
     } catch {
-      toast.error("Gagal menyimpan stream");
+      toast.error("Gagal menyimpan sumber");
     } finally {
       setSaving(false);
     }
   }
 
   async function remove(stream: Stream) {
-    if (!window.confirm(`Hapus stream "${stream.name}"?`)) return;
+    if (!window.confirm(`Hapus sumber "${stream.name}"?`)) return;
     try {
       await scadaApi.deleteStream(stream.id);
-      toast.success("Stream dihapus");
+      toast.success("Sumber dihapus");
       await onChanged();
     } catch {
-      toast.error("Gagal menghapus stream");
+      toast.error("Gagal menghapus sumber");
     }
   }
 
-  // One form element, rendered either inline under the row being edited or at
-  // the bottom for a brand-new stream — so it's always clear WHICH stream this
-  // edits.
+  const isStream = form.source_type === "stream";
+  const isVnc = form.source_type === "vnc";
+
   const editFormEl = (
     <form
       onSubmit={submit}
@@ -143,9 +187,43 @@ export function ManageStreamsDialog({
           <Pencil className="size-4 shrink-0 text-primary" />
         )}
         <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-text">
-          {editingId === "new" ? "Stream Baru" : `Ubah: ${form.name || "stream ini"}`}
+          {editingId === "new" ? "Sumber Baru" : `Ubah: ${form.name || "sumber ini"}`}
         </span>
       </div>
+
+      {/* Type selector — decides which fields show below */}
+      <div>
+        <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+          Jenis Sumber
+        </label>
+        <div className="grid grid-cols-3 gap-1.5">
+          {(Object.keys(TYPE_META) as SourceType[]).map((t) => {
+            const { label, icon: Icon, hint } = TYPE_META[t];
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setForm({ ...form, source_type: t })}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-[var(--r)] border px-1.5 py-2 text-center",
+                  form.source_type === t
+                    ? "border-primary bg-primary/5 text-text"
+                    : "border-border-soft bg-bg text-text-muted cursor-pointer hover:border-border"
+                )}
+              >
+                <Icon className="size-4" />
+                <span className="text-[10.5px] font-semibold leading-tight">
+                  {label}
+                </span>
+                <span className="text-[9px] font-normal leading-tight text-text-light">
+                  {hint}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div>
         <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
           Nama <span className="text-red">*</span>
@@ -159,134 +237,108 @@ export function ManageStreamsDialog({
           maxLength={120}
         />
       </div>
-      <div>
-        <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-          URL HLS <span className="text-red">*</span>
-        </label>
-        <input
-          required
-          className="field-input font-mono"
-          placeholder="https://stream.domain.com/server/index.m3u8"
-          value={form.hls_url}
-          onChange={(e) => setForm({ ...form, hls_url: e.target.value })}
-        />
-      </div>
-      <div>
-        <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-          URL WebRTC (opsional — delay &lt;1 detik)
-        </label>
-        <input
-          className="field-input font-mono"
-          placeholder="https://webrtc.domain.com/server/whep"
-          value={form.webrtc_url}
-          onChange={(e) => setForm({ ...form, webrtc_url: e.target.value })}
-        />
-        <p className="mt-1 text-[11px] text-text-light">
-          Diisi = pemutar mencoba WebRTC dulu (nyaris tanpa delay), otomatis
-          balik ke HLS bila jaringan penonton memblokirnya.
-        </p>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-            User (read)
-          </label>
-          <input
-            className="field-input font-mono"
-            placeholder="rein-viewer"
-            value={form.read_user}
-            onChange={(e) => setForm({ ...form, read_user: e.target.value })}
-            maxLength={64}
-          />
-        </div>
-        <div>
-          <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-            Password (read)
-          </label>
-          <input
-            className="field-input font-mono"
-            type="password"
-            value={form.read_pass}
-            onChange={(e) => setForm({ ...form, read_pass: e.target.value })}
-            maxLength={128}
-          />
-        </div>
-      </div>
 
-      {/* Mosaic → Video Wall channels */}
-      <div className="rounded-[var(--r)] border border-border-soft bg-bg p-3">
-        <div className="text-[12px] font-semibold text-text mb-0.5">
-          Mosaic (untuk Video Wall)
-        </div>
-        <p className="text-[11px] text-text-light mb-2.5">
-          Jika 1 stream berisi beberapa kamera (mis. OBS 3×3), atur jumlah
-          baris × kolomnya. Tiap kotak jadi 1 channel yang bisa dipasang di
-          panel Video Wall. Biarkan 1×1 untuk stream biasa.
-        </p>
-        <div className="grid grid-cols-3 gap-2.5">
+      {/* ── Video Stream fields ── */}
+      {isStream && (
+        <>
           <div>
-            <label className="text-[11px] font-semibold text-text-muted mb-1 block">
-              Baris
-            </label>
-            <select
-              className="field-select cursor-pointer"
-              value={form.mosaic_rows}
-              onChange={(e) =>
-                setForm({ ...form, mosaic_rows: Number(e.target.value) })
-              }
-            >
-              {MOSAIC_OPTIONS.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-[11px] font-semibold text-text-muted mb-1 block">
-              Kolom
-            </label>
-            <select
-              className="field-select cursor-pointer"
-              value={form.mosaic_cols}
-              onChange={(e) =>
-                setForm({ ...form, mosaic_cols: Number(e.target.value) })
-              }
-            >
-              {MOSAIC_OPTIONS.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-[11px] font-semibold text-text-muted mb-1 block">
-              Channel mulai
+            <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+              URL HLS <span className="text-red">*</span>
             </label>
             <input
-              type="number"
-              min={1}
-              max={100000}
-              className="field-input"
-              value={form.channel_start}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  channel_start: Math.max(1, Number(e.target.value) || 1),
-                })
-              }
+              className="field-input font-mono"
+              placeholder="https://stream.domain.com/scada/index.m3u8"
+              value={form.hls_url}
+              onChange={(e) => setForm({ ...form, hls_url: e.target.value })}
             />
           </div>
+          <div>
+            <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+              URL WebRTC (opsional — delay &lt;1 detik)
+            </label>
+            <input
+              className="field-input font-mono"
+              placeholder="https://webrtc.domain.com/server/whep"
+              value={form.webrtc_url}
+              onChange={(e) => setForm({ ...form, webrtc_url: e.target.value })}
+            />
+            <p className="mt-1 text-[11px] text-text-light">
+              Diisi = pemutar mencoba WebRTC dulu (nyaris tanpa delay), otomatis
+              balik ke HLS bila jaringan penonton memblokirnya.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                User (read)
+              </label>
+              <input
+                className="field-input font-mono"
+                placeholder="rein-viewer"
+                value={form.read_user}
+                onChange={(e) => setForm({ ...form, read_user: e.target.value })}
+                maxLength={64}
+              />
+            </div>
+            <div>
+              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                Password (read)
+              </label>
+              <input
+                className="field-input font-mono"
+                type="password"
+                value={form.read_pass}
+                onChange={(e) => setForm({ ...form, read_pass: e.target.value })}
+                maxLength={128}
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Web / VNC address ── */}
+      {!isStream && (
+        <div>
+          <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+            {isVnc ? "Alamat noVNC / websockify" : "Alamat Halaman"}{" "}
+            <span className="text-red">*</span>
+          </label>
+          <input
+            className="field-input font-mono"
+            placeholder={
+              isVnc
+                ? "https://vnc-scada.contoh.com  (otomatis jadi wss://)"
+                : "https://vnet.wecon.com.cn/..."
+            }
+            value={form.url}
+            onChange={(e) => setForm({ ...form, url: e.target.value })}
+            maxLength={2048}
+          />
         </div>
-        <p className="mt-2 text-[11px] text-text-muted">
-          {form.mosaic_rows * form.mosaic_cols === 1
-            ? `Channel ${form.channel_start} (1 kotak).`
-            : `Channel ${form.channel_start}–${
-                form.channel_start + form.mosaic_rows * form.mosaic_cols - 1
-              } (${form.mosaic_rows * form.mosaic_cols} kotak).`}
-        </p>
-      </div>
+      )}
+
+      {/* ── VNC view-only password ── */}
+      {isVnc && (
+        <div>
+          <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+            Password VNC (view-only, opsional)
+          </label>
+          <input
+            type="password"
+            className="field-input font-mono"
+            placeholder="Password view-only — kosongkan jika tanpa password"
+            value={form.secret}
+            onChange={(e) => setForm({ ...form, secret: e.target.value })}
+            maxLength={128}
+            autoComplete="off"
+          />
+          <p className="mt-1 text-[11px] text-text-light">
+            Selalu <b>tonton saja</b> — klik/keyboard tak pernah dikirim ke PC
+            sumber. Pastikan server VNC juga disetel view-only, dan pakai
+            password khusus view-only (terbaca semua pengguna R-Net).
+          </p>
+        </div>
+      )}
 
       <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-text-muted">
         <input
@@ -294,7 +346,7 @@ export function ManageStreamsDialog({
           checked={form.enabled}
           onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
         />
-        Stream aktif
+        Sumber aktif
       </label>
       <div className="flex justify-end gap-2">
         <button
@@ -304,7 +356,11 @@ export function ManageStreamsDialog({
         >
           Batal
         </button>
-        <button type="submit" disabled={saving} className="btn btn-primary btn-sm">
+        <button
+          type="submit"
+          disabled={saving || !addressOk}
+          className="btn btn-primary btn-sm"
+        >
           {saving && <Loader2 className="size-3.5 animate-spin" />}
           Simpan
         </button>
@@ -321,14 +377,14 @@ export function ManageStreamsDialog({
         {/* Header */}
         <div className="px-6 pt-6 pb-4 border-b border-border-soft flex items-start gap-3 shrink-0">
           <div className="size-10 rounded-[var(--r-lg)] bg-gradient-to-br from-primary to-primary-hover text-white flex items-center justify-center shrink-0">
-            <Radio className="size-5" />
+            <MonitorPlay className="size-5" />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-[16px] font-bold text-text leading-tight">
-              Kelola Stream
+              Kelola Screen
             </h2>
             <p className="text-[12px] text-text-muted mt-0.5">
-              Sumber video HLS dari MediaMTX
+              Sumber tampilan channel: Video Stream · Halaman Web · VNC
             </p>
           </div>
           <button
@@ -336,7 +392,7 @@ export function ManageStreamsDialog({
             onClick={refresh}
             disabled={refreshing}
             className="btn btn-ghost btn-sm -mt-1 gap-1.5"
-            title="Ambil alamat stream terbaru dari database & sambungkan ulang video"
+            title="Ambil alamat terbaru dari database & sambungkan ulang video"
           >
             <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
             Segarkan
@@ -354,58 +410,69 @@ export function ManageStreamsDialog({
         <div className="px-6 py-5 flex flex-col gap-3 overflow-y-auto">
           {streams.length === 0 && editingId === null && (
             <p className="text-[12px] text-text-muted text-center py-4">
-              Belum ada stream. Tambahkan sumber video pertama.
+              Belum ada sumber. Tambahkan Video Stream, Halaman Web, atau VNC.
             </p>
           )}
 
-          {streams.map((stream) => (
-            <div key={stream.id} className="flex flex-col gap-3">
-              <div
-                className={cn(
-                  "flex items-center gap-2.5 rounded-[var(--r-lg)] border px-3 py-2.5",
-                  editingId === stream.id
-                    ? "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
-                    : "border-border-soft"
-                )}
-              >
-                <span
+          {streams.map((stream) => {
+            const { icon: Icon, label } = TYPE_META[stream.source_type];
+            return (
+              <div key={stream.id} className="flex flex-col gap-3">
+                <div
                   className={cn(
-                    "size-2 shrink-0 rounded-full",
-                    stream.enabled ? "bg-green-500" : "bg-border"
+                    "flex items-center gap-2.5 rounded-[var(--r-lg)] border px-3 py-2.5",
+                    editingId === stream.id
+                      ? "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
+                      : "border-border-soft"
                   )}
-                  title={stream.enabled ? "Aktif" : "Nonaktif"}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-semibold text-text">
-                    {stream.name}
+                >
+                  <span
+                    className={cn(
+                      "size-2 shrink-0 rounded-full",
+                      stream.enabled ? "bg-green-500" : "bg-border"
+                    )}
+                    title={stream.enabled ? "Aktif" : "Nonaktif"}
+                  />
+                  <Icon className="size-4 shrink-0 text-text-muted" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-[13px] font-semibold text-text">
+                        {stream.name}
+                      </span>
+                      <span className="shrink-0 rounded-full bg-bg-sidebar px-1.5 py-px text-[9.5px] font-semibold text-text-muted">
+                        {label}
+                      </span>
+                    </div>
+                    <div className="truncate text-[11px] font-mono text-text-muted">
+                      {sourceAddress(stream)}
+                    </div>
                   </div>
-                  <div className="truncate text-[11px] font-mono text-text-muted">
-                    {stream.hls_url}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      editingId === stream.id ? setEditingId(null) : startEdit(stream)
+                    }
+                    className={cn(
+                      "btn btn-ghost btn-icon btn-sm",
+                      editingId === stream.id && "text-primary"
+                    )}
+                    title={editingId === stream.id ? "Tutup" : "Ubah"}
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => remove(stream)}
+                    className="btn btn-ghost btn-icon btn-sm text-red"
+                    title="Hapus"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => (editingId === stream.id ? setEditingId(null) : startEdit(stream))}
-                  className={cn(
-                    "btn btn-ghost btn-icon btn-sm",
-                    editingId === stream.id && "text-primary"
-                  )}
-                  title={editingId === stream.id ? "Tutup" : "Ubah"}
-                >
-                  <Pencil className="size-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => remove(stream)}
-                  className="btn btn-ghost btn-icon btn-sm text-red"
-                  title="Hapus"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                {editingId === stream.id && editFormEl}
               </div>
-              {editingId === stream.id && editFormEl}
-            </div>
-          ))}
+            );
+          })}
 
           {editingId === "new" ? (
             editFormEl
@@ -415,7 +482,7 @@ export function ManageStreamsDialog({
               onClick={() => startEdit(null)}
               className="btn btn-secondary btn-sm self-start gap-1.5"
             >
-              <Plus className="size-3.5" /> Tambah Stream
+              <Plus className="size-3.5" /> Tambah Sumber
             </button>
           ) : null}
         </div>

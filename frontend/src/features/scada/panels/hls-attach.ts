@@ -48,6 +48,7 @@ export function attachHls(
     if (disposed) return;
     teardown();
     const src = stream.hls_url;
+    if (!src) return; // non-stream source (web/vnc) — nothing to attach
 
     if (Hls.isSupported()) {
       hls = new Hls({

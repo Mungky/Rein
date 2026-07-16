@@ -1,12 +1,13 @@
 "use client";
 
-/** One cropped region of a stream — the renderer behind a "video" channel.
- *  Supports the manual free crop (user-drawn rect in source pixels, scaled by
- *  the reference resolution) and the legacy mosaic-cell index. Decoding is
- *  SHARED through the stream pool: nine crops of one OBS mosaic = one decode. */
+/** One cropped region of a stream — the renderer behind a cropped "screen"
+ *  channel whose source is a video stream. The crop is a user-drawn rect in
+ *  source pixels, scaled by the reference resolution (src_w×src_h) so it
+ *  survives a source resolution change. Decoding is SHARED through the stream
+ *  pool: nine crops of one OBS mosaic = one decode. */
 
 import { useEffect, useRef } from "react";
-import type { ChannelVideoConfig, Stream } from "../types";
+import type { ScreenChannelConfig, Stream } from "../types";
 import { useScadaStore } from "../store";
 import { acquireStreamVideo } from "../stream-pool";
 import { OrbitFallback } from "./orbit-fallback";
@@ -16,7 +17,7 @@ export function CroppedVideoPanel({
   cfg,
 }: {
   stream: Stream | undefined;
-  cfg: ChannelVideoConfig;
+  cfg: ScreenChannelConfig;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -63,8 +64,8 @@ export function CroppedVideoPanel({
           if (ctx) {
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = "high";
-            // Source region: manual crop (scaled from its reference
-            // resolution) > legacy mosaic cell > whole frame.
+            // Source region: manual crop scaled from its reference resolution,
+            // else the whole frame.
             let sx = 0;
             let sy = 0;
             let sw = vw;
@@ -76,13 +77,6 @@ export function CroppedVideoPanel({
               sy = cfg.crop.y * fy;
               sw = Math.max(1, cfg.crop.w * fx);
               sh = Math.max(1, cfg.crop.h * fy);
-            } else if (cfg.cell !== null && cfg.cell !== undefined) {
-              const R = Math.max(1, stream.mosaic_rows);
-              const C = Math.max(1, stream.mosaic_cols);
-              sw = vw / C;
-              sh = vh / R;
-              sx = (cfg.cell % C) * sw;
-              sy = Math.floor(cfg.cell / C) * sh;
             }
             // contain — show the whole region, letterboxed
             const scale = Math.min(cw / sw, ch / sh);
@@ -98,7 +92,7 @@ export function CroppedVideoPanel({
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [stream, cfg.crop, cfg.src_w, cfg.src_h, cfg.cell]);
+  }, [stream, cfg.crop, cfg.src_w, cfg.src_h]);
 
   if (!stream) {
     return (

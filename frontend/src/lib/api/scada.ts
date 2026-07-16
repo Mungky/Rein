@@ -58,28 +58,28 @@ export const scadaApi = {
 
   createStream: (data: {
     name: string;
-    hls_url: string;
+    source_type?: "stream" | "web" | "vnc";
+    hls_url?: string | null;
     webrtc_url?: string | null;
     read_user?: string | null;
     read_pass?: string | null;
+    url?: string | null;
+    secret?: string | null;
     enabled?: boolean;
-    mosaic_rows?: number;
-    mosaic_cols?: number;
-    channel_start?: number;
   }) => apiClient.post<Stream>("/api/scada/streams", data),
 
   updateStream: (
     id: string,
     data: {
       name?: string;
-      hls_url?: string;
+      source_type?: "stream" | "web" | "vnc";
+      hls_url?: string | null;
       webrtc_url?: string | null;
       read_user?: string | null;
       read_pass?: string | null;
+      url?: string | null;
+      secret?: string | null;
       enabled?: boolean;
-      mosaic_rows?: number;
-      mosaic_cols?: number;
-      channel_start?: number;
     }
   ) => apiClient.patch<Stream>(`/api/scada/streams/${id}`, data),
 

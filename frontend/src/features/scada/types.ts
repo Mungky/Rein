@@ -109,6 +109,17 @@ export interface WebPanelConfig {
   view_h?: number | null;
 }
 
+/** VNC channel source: a dedicated PC mirrored VIEW-ONLY via noVNC/websockify
+ *  (e.g. browser showing a cloud SCADA). `url` = websockify endpoint; https://
+ *  is accepted and normalized to wss:// at connect time. The password is a
+ *  dedicated view-only one — every scada:view user can read it. */
+export interface VncPanelConfig {
+  url: string;
+  password?: string | null;
+  view_w?: number | null;
+  view_h?: number | null;
+}
+
 /** A layout cell that shows one TV-style channel (see Channel below). */
 export interface ChannelPanelConfig {
   channel_id: string;
@@ -132,8 +143,7 @@ export type Panel =
 /* ── Channels (TV-style registry) ── */
 
 export type ChannelKind =
-  | "video"
-  | "web"
+  | "screen"
   | "chart"
   | "table"
   | "gauge"
@@ -149,13 +159,11 @@ export interface CropRect {
   h: number;
 }
 
-/** Video channel source: a stream, optionally cropped — either a manual free
- *  crop (preferred; user-drawn region, 1 OBS mosaic → N channels) or the
- *  legacy mosaic cell index. Neither = whole frame. */
-export interface ChannelVideoConfig {
+/** A "screen" channel: shows one Source (stream/web/vnc) by id, optionally
+ *  cropped (grid-divide 2×2/3×3 or a free rectangle). The source KIND comes
+ *  from the referenced Stream.source_type — the channel doesn't store it. */
+export interface ScreenChannelConfig {
   stream_id: string;
-  /** LEGACY mosaic cell (row-major, 0-based). */
-  cell?: number | null;
   crop?: CropRect | null;
   /** Reference resolution the crop was drawn against (auto-detected). */
   src_w?: number | null;
@@ -172,8 +180,7 @@ export interface Channel {
   name: string;
   kind: ChannelKind;
   config:
-    | ChannelVideoConfig
-    | WebPanelConfig
+    | ScreenChannelConfig
     | ChartPanelConfig
     | TablePanelConfig
     | GaugePanelConfig
@@ -216,21 +223,29 @@ export interface PublishedLayout {
   layout: PerspectiveLayout | null;
 }
 
+export type SourceType = "stream" | "web" | "vnc";
+
+/** A "Screen" source a channel can show. Despite the name it holds all three
+ *  source kinds (`source_type`): "stream" (HLS/WebRTC video), "web" (embedded
+ *  page/HMI), "vnc" (view-only PC mirror). Managed in the "Kelola Screen"
+ *  dialog; a channel of kind "screen" references one by id and crops it. */
 export interface Stream {
   id: string;
   name: string;
-  hls_url: string;
-  /** Optional WHEP endpoint — players try WebRTC (sub-second) first, then
-   *  fall back to LL-HLS automatically. */
+  source_type: SourceType;
+  /** stream only — HLS playlist URL (null for web/vnc). */
+  hls_url: string | null;
+  /** stream only — optional WHEP endpoint: players try WebRTC (sub-second)
+   *  first, then fall back to LL-HLS automatically. */
   webrtc_url: string | null;
   read_user: string | null;
   read_pass: string | null;
+  /** web: the page URL; vnc: the noVNC/websockify endpoint (https→wss). */
+  url: string | null;
+  /** vnc: the VIEW-ONLY password (exposed like read_pass — the viewer's
+   *  browser connects directly and needs it). */
+  secret: string | null;
   enabled: boolean;
-  /** Video-wall mosaic: one OBS output can carry mosaic_rows×mosaic_cols cameras. */
-  mosaic_rows: number;
-  mosaic_cols: number;
-  /** Global channel number of cell 0 (a 3×3 stream starting at 1 owns 1..9). */
-  channel_start: number;
   created_at: string | null;
   updated_at: string | null;
 }
