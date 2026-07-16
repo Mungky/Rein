@@ -76,7 +76,11 @@ if (-not (Get-Process mediamtx -ErrorAction SilentlyContinue)) {
 }
 
 # --- 2. Cloudflare Quick Tunnel (URL baru tiap start) --------------------
-Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force
+# Matikan HANYA tunnel video lama (:8888). Tunnel sumber VNC (:6080) di PC
+# yang sama - kalau ada - tidak disentuh.
+Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match ":8888" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep 1
 Remove-Item $TunnelLog -Force -ErrorAction SilentlyContinue
 Start-Process -FilePath $Cloudflared `

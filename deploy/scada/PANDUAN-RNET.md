@@ -9,9 +9,9 @@
 
 ---
 
-## 1. Gambaran Besar — Dua Jalur
+## 1. Gambaran Besar — Tiga Jalur
 
-R-Net punya dua jalur yang berdiri sendiri (boleh pasang salah satu saja):
+R-Net punya tiga jalur yang berdiri sendiri (boleh pasang salah satu saja):
 
 ```
 JALUR VIDEO (tab Monitor):
@@ -27,6 +27,13 @@ JALUR DATA SENSOR (panel Grafik/Gauge/Tabel):
 │ / PLC  │   │ V-Net   │   │ (broker,  │   │ (bridge) │   │       │
 │        │   │         │   │kantor pos)│   │          │   │       │
 └────────┘   └─────────┘   └───────────┘   └──────────┘   └───────┘
+
+JALUR SPION LAYAR / VNC (channel "VNC (Layar PC)"):
+┌──────────────────┐   ┌──────────┐   ┌──────────────┐   ┌───────┐
+│ PC dedicated:    │──▶│ TightVNC │──▶│  websocat +  │──▶│ R-Net │
+│ browser membuka  │   │(view-only│   │  Cloudflare  │   │(tajam,│
+│ cloud SCADA      │   │ mirror)  │   │  Tunnel      │   │ live) │
+└──────────────────┘   └──────────┘   └──────────────┘   └───────┘
 ```
 
 | Komponen | Fungsi | Wajib untuk |
@@ -36,6 +43,7 @@ JALUR DATA SENSOR (panel Grafik/Gauge/Tabel):
 | **Mosquitto** | Broker MQTT — menampung data sensor dari V-Box | Jalur data |
 | **Jembatan (mqtt-bridge)** | Menyalin data dari broker ke database R-Net | Jalur data |
 | **Node-RED** | Opsional — otomasi alur data (mis. baca Modbus/PLC → kirim ke MQTT) | Sesuai kebutuhan |
+| **TightVNC + websocat** | Memantulkan layar PC (mis. browser cloud SCADA) ke channel R-Net, view-only, tanpa OBS | Jalur spion layar |
 
 Prinsip penting: **tidak ada yang autostart**. Semua dinyalakan/dimatikan
 lewat saklar (file `.bat` yang tinggal dobel-klik).
@@ -58,6 +66,7 @@ lewat saklar (file `.bat` yang tinggal dobel-klik).
    [2] Mosquitto (broker MQTT)       - terima data sensor V-Box
    [3] Node-RED                      - otomasi alur data / gateway PLC
    [4] OBS Studio                    - sumber siaran layar
+   [5] Sumber VNC (TightVNC+websocat)- spion layar PC ini utk channel R-Net
    ```
 
    Ketik nomornya dipisah koma, mis. `1,2,4`. Enter saja = `1`
@@ -77,6 +86,9 @@ lewat saklar (file `.bat` yang tinggal dobel-klik).
    - **Akun MQTT** (kalau pilih komponen 2) — username + password yang
      nanti diisi di V-Box. Bisa dilihat/diubah kapan pun lewat
      **Pengaturan MQTT.bat** (bagian 6).
+   - **Password VNC + nomor channel** (kalau pilih komponen 5) — password
+     KONTROL (untuk Anda) dan VIEW-ONLY (untuk channel R-Net), maks 8
+     karakter, Enter = dibuatkan otomatis. Detail di bagian 8.
 
 5. Selesai. Isi folder `C:\rein-scada\` sekarang:
 
@@ -86,8 +98,9 @@ lewat saklar (file `.bat` yang tinggal dobel-klik).
    | `stop-scada.bat` | Saklar OFF semuanya |
    | `Pengaturan MQTT.bat` | **UI pengaturan broker MQTT** (port/akun/tes) |
    | `start-nodered.bat` | Saklar ON Node-RED (kalau dipasang) |
-   | `config.env` | Kredensial Supabase + STREAM_NAME (RAHASIA) |
-   | `mediamtx\`, `cloudflared\`, `mosquitto\` | Program + config masing-masing |
+   | `start-vnc.bat` / `stop-vnc.bat` | Saklar sumber VNC (kalau dipasang, bagian 8) |
+   | `config.env` | Kredensial Supabase + STREAM_NAME + VNC_CHANNEL (RAHASIA) |
+   | `mediamtx\`, `cloudflared\`, `mosquitto\`, `websocat\` | Program + config masing-masing |
 
    Installer aman dijalankan ulang kapan pun (update komponen, tambah
    komponen baru) — config dan password lama **tidak pernah ditimpa**.
@@ -207,7 +220,52 @@ V-Box.
 
 ---
 
-## 8. Checklist Uji (sekali setelah pasang)
+## 8. Sumber VNC — Spion Layar PC (opsional)
+
+Untuk menampilkan **layar sebuah PC** (misal browser yang membuka cloud
+SCADA) sebagai channel R-Net — tajam dan tanpa OBS. R-Net **selalu
+view-only**: penonton tidak pernah bisa menggerakkan mouse/keyboard PC
+sumber.
+
+**Sekali saja (di PC sumber):**
+
+1. Jalankan installer, pilih komponen **5**. Installer memasang TightVNC
+   (winget) + websocat + cloudflared, menonaktifkan service TightVNC
+   (dipakai mode aplikasi — konsisten saklar manual), menyetel dua
+   password (KONTROL untuk Anda, VIEW-ONLY untuk R-Net), dan mengisi
+   `VNC_CHANNEL` + `VNC_VIEW_PASSWORD` di `config.env`.
+2. Di R-Net → **Channel** → Channel Baru → jenis **VNC (Layar PC)**,
+   nomor sama dengan `VNC_CHANNEL`. Alamat & password boleh dikosongi
+   asal-asalan dulu — saklar yang mengisinya. Taruh channel di layout
+   Monitor.
+
+**Rutinitas tiap PC dinyalakan:**
+
+1. Buka browser ke cloud SCADA, **login**, atur tampilannya (token cloud
+   SCADA yang kedaluwarsa 24 jam tetap urusan PC ini).
+2. Dobel-klik **`start-vnc.bat`** — TightVNC + websocat + Quick Tunnel
+   hidup, lalu alamat (dan password view-only) channel VNC ter-update
+   otomatis di database. Halaman R-Net yang sudah terbuka cukup
+   di-refresh sekali.
+3. Matikan: **`stop-vnc.bat`**.
+
+**Catatan:**
+
+- Ada beberapa PC sumber VNC? Satu PC = satu channel: isi `VNC_CHANNEL`
+  berbeda di masing-masing `config.env`.
+- Semua port (5900 VNC, 6080 websocat) hanya listen di PC itu sendiri;
+  satu-satunya jalan masuk dari luar adalah tunnel (wss, terenkripsi).
+- Password view-only ikut tersimpan di config channel dan terbaca semua
+  user R-Net (memang diperlukan browser penonton untuk konek) — karena
+  itu **jangan pernah** menaruh password KONTROL di sana.
+- Ganti password: klik kanan ikon TightVNC di tray → Configuration →
+  ganti, lalu samakan `VNC_VIEW_PASSWORD` di `config.env`.
+- Panduan teknis lengkap (termasuk cara manual tanpa installer):
+  `docs/VNC-SOURCE-SETUP.md` di repo REIN.
+
+---
+
+## 9. Checklist Uji (sekali setelah pasang)
 
 | # | Uji | Hasil yang benar |
 |---|---|---|
@@ -216,10 +274,11 @@ V-Box.
 | 3 | Pengaturan MQTT → Tes Koneksi | "BERHASIL" |
 | 4 | (Kalau pakai bridge) publish tes: `mosquitto_pub -h 127.0.0.1 -u USER -P PASS -t rnet/tes/dev1/suhu -m "{\"value\": 75}"` | Nilai muncul di R-Net ≤ 1 menit |
 | 5 | `stop-scada.bat` | Semua proses mati; R-Net menampilkan "stream terputus" |
+| 6 | (Kalau pakai sumber VNC) `start-vnc.bat` → refresh R-Net | Layar PC sumber tampil di channel VNC; klik di panel TIDAK menggerakkan PC sumber |
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ### Video
 
@@ -258,11 +317,20 @@ Cara tahu biang keroknya — bandingkan di PC server itu sendiri:
 | Broker gagal menyala | Port dipakai aplikasi lain | Pengaturan MQTT → Buka Log; ganti port lalu Simpan |
 | Data tidak muncul di R-Net padahal broker OK | Bridge tidak jalan / topik tidak cocok | Jalankan `mqtt-bridge/start-bridge.bat`; topik di perangkat harus PERSIS sama dengan tag di R-Net |
 
+### Sumber VNC
+
+| Gejala | Penyebab umum | Cara cek/atasi |
+|---|---|---|
+| Channel VNC "Menghubungkan…" terus | Saklar belum jalan / URL basi | Jalankan ulang `start-vnc.bat`, refresh halaman R-Net |
+| "Server VNC minta password" | `VNC_VIEW_PASSWORD` kosong/beda dengan TightVNC | Samakan password view-only di config.env (atau di form channel), jalankan ulang saklar |
+| Layar hitam | PC sumber sleep / monitor mati dengan mode tertentu | Matikan sleep (Settings → Power: Never); layar boleh mati, sesi Windows harus tetap login |
+| Gambar tidak update | Browser cloud SCADA logout (token 24 jam) | Login ulang di PC sumber |
+
 ---
 
-## 10. Uninstall Total
+## 11. Uninstall Total
 
-1. `stop-scada.bat` (dan tutup jendela Node-RED kalau ada).
+1. `stop-scada.bat` + `stop-vnc.bat` (dan tutup jendela Node-RED kalau ada).
 2. Hapus folder `C:\rein-scada\`.
-3. Mosquitto/OBS/Node.js dihapus lewat Settings → Apps seperti aplikasi
-   biasa (`winget uninstall` juga bisa).
+3. Mosquitto/OBS/Node.js/TightVNC dihapus lewat Settings → Apps seperti
+   aplikasi biasa (`winget uninstall` juga bisa).
