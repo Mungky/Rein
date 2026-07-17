@@ -23,7 +23,7 @@
 #         - websocat               : rilis terbaru GitHub resmi (SHA-256 dicetak)
 #    3. Membuat mediamtx.yml + config.env (menanyakan/meng-generate password)
 #    4. Menyalin saklar start/stop + "Pengaturan MQTT.bat" (UI pengaturan
-#       broker — dobel-klik dari File Explorer, tidak perlu edit file config)
+#       broker - dobel-klik dari File Explorer, tidak perlu edit file config)
 #
 #  JAMINAN KEAMANAN:
 #    - Hanya sumber resmi: github.com/bluenviron/mediamtx,
@@ -69,7 +69,7 @@ function Install-WingetPkg($id, $label) {
     & winget install --id $id --exact --silent `
         --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -eq 0) { Good "$label terpasang."; return $true }
-    # -1978335189 = "sudah terpasang & sudah versi terbaru" — bukan error.
+    # -1978335189 = "sudah terpasang & sudah versi terbaru" - bukan error.
     if ($LASTEXITCODE -eq -1978335189) { Good "$label sudah versi terbaru."; return $true }
     Warn "winget gagal memasang $label (kode $LASTEXITCODE)."
     return $false
@@ -479,22 +479,23 @@ if ($doVnc) {
     $Cfg = Join-Path $InstallDir "config.env"
     $cfgRaw = if (Test-Path $Cfg) { Get-Content $Cfg -Raw } else { "" }
     $append = @()
-    if ($cfgRaw -notmatch "(?m)^\s*VNC_CHANNEL\s*=") {
+    if ($cfgRaw -notmatch "(?m)^\s*VNC_SOURCE\s*=") {
         Write-Host ""
-        Info "Nomor channel R-Net milik PC INI (channel jenis 'VNC (Layar PC)')."
-        Info "Kosong = saklar meng-update SEMUA channel VNC (aman kalau cuma 1 PC)."
-        $vncCh = Read-Host "   VNC_CHANNEL (mis. 42; kosong = semua channel VNC)"
-        $append += "# Nomor channel VNC yang alamatnya di-update PC ini (kosong = semua)."
-        $append += "VNC_CHANNEL=$($vncCh.Trim())"
+        Info "Nama sumber (Screen) milik PC INI - harus PERSIS sama dengan nama di"
+        Info "R-Net > Channel > Kelola Screen (sumber jenis 'VNC (Layar PC)')."
+        Info "Kosong = saklar meng-update SEMUA sumber VNC (aman kalau cuma 1 PC)."
+        $vncSrc = Read-Host "   VNC_SOURCE (mis. PC SCADA Lombok; kosong = semua sumber VNC)"
+        $append += "# Nama sumber VNC yang alamatnya di-update PC ini (kosong = semua)."
+        $append += "VNC_SOURCE=$($vncSrc.Trim())"
     }
     if ($cfgRaw -notmatch "(?m)^\s*VNC_VIEW_PASSWORD\s*=") {
         $append += "# Password VIEW-ONLY TightVNC - saklar start-vnc menuliskannya ke"
-        $append += "# config channel R-Net supaya penonton auto-connect."
+        $append += "# sumber VNC di R-Net supaya penonton auto-connect."
         $append += "VNC_VIEW_PASSWORD=$(if ($vncView) { $vncView } else { '' })"
     }
     if ($append.Count -gt 0) {
         Write-TextNoBom $Cfg (($cfgRaw.TrimEnd() + "`r`n`r`n" + ($append -join "`r`n") + "`r`n").TrimStart())
-        Good "config.env diperbarui (VNC_CHANNEL / VNC_VIEW_PASSWORD)."
+        Good "config.env diperbarui (VNC_SOURCE / VNC_VIEW_PASSWORD)."
         if (-not $vncView -and $cfgRaw -notmatch "(?m)^\s*VNC_VIEW_PASSWORD\s*=") {
             Warn "VNC_VIEW_PASSWORD masih kosong - isi manual di config.env dengan"
             Warn "password view-only TightVNC supaya channel auto-connect."
@@ -546,11 +547,12 @@ if ($doNodeRed) {
 if ($doVnc) {
     Write-Host "  SUMBER VNC (spion layar PC ini):"
     Write-Host "  1. Buka browser di PC ini ke cloud SCADA, login, atur tampilannya."
-    Write-Host "  2. Dobel-klik  $InstallDir\start-vnc.bat"
-    Write-Host "     -> TightVNC + websocat + tunnel hidup; alamat channel VNC"
-    Write-Host "        ter-update otomatis (kalau config.env terisi)."
-    Write-Host "  3. Di R-Net > Channel: buat channel jenis 'VNC (Layar PC)'"
-    Write-Host "     dengan nomor = VNC_CHANNEL, lalu taruh di layout Monitor."
+    Write-Host "  2. Di R-Net > Channel > Kelola Screen: tambah sumber jenis"
+    Write-Host "     'VNC (Layar PC)' dengan nama PERSIS = VNC_SOURCE."
+    Write-Host "     Lalu buat channel 'Video Screen' yang memakai sumber itu."
+    Write-Host "  3. Dobel-klik  $InstallDir\start-vnc.bat"
+    Write-Host "     -> TightVNC + websocat + tunnel hidup; alamat + password"
+    Write-Host "        sumber VNC ter-update otomatis (kalau config.env terisi)."
     Write-Host "  Matikan: stop-vnc.bat. Panduan detail: docs/VNC-SOURCE-SETUP.md"
     Write-Host ""
 }

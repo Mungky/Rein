@@ -230,28 +230,28 @@ sumber.
 **Sekali saja (di PC sumber):**
 
 1. Jalankan installer, pilih komponen **5**. Installer memasang TightVNC
-   (winget) + websocat + cloudflared, menonaktifkan service TightVNC
-   (dipakai mode aplikasi — konsisten saklar manual), menyetel dua
-   password (KONTROL untuk Anda, VIEW-ONLY untuk R-Net), dan mengisi
-   `VNC_CHANNEL` + `VNC_VIEW_PASSWORD` di `config.env`.
-2. Di R-Net → **Channel** → Channel Baru → jenis **VNC (Layar PC)**,
-   nomor sama dengan `VNC_CHANNEL`. Alamat & password boleh dikosongi
-   asal-asalan dulu — saklar yang mengisinya. Taruh channel di layout
-   Monitor.
+   (winget) + websocat + cloudflared, menyetel dua password (KONTROL untuk
+   Anda, VIEW-ONLY untuk R-Net), dan mengisi `VNC_SOURCE` +
+   `VNC_VIEW_PASSWORD` di `config.env`.
+2. Di R-Net → **Channel** → **Kelola Screen** → Tambah Sumber → jenis
+   **VNC (Layar PC)**, dengan **nama PERSIS sama dengan `VNC_SOURCE`**.
+   Alamat & password boleh dikosongkan — saklar yang mengisinya.
+3. Masih di R-Net → **Channel Baru** → jenis **Video Screen** → pilih
+   sumber VNC tadi (boleh di-crop). Taruh channel di layout Monitor.
 
 **Rutinitas tiap PC dinyalakan:**
 
 1. Buka browser ke cloud SCADA, **login**, atur tampilannya (token cloud
    SCADA yang kedaluwarsa 24 jam tetap urusan PC ini).
 2. Dobel-klik **`start-vnc.bat`** — TightVNC + websocat + Quick Tunnel
-   hidup, lalu alamat (dan password view-only) channel VNC ter-update
+   hidup, lalu alamat (dan password view-only) **sumber** VNC ter-update
    otomatis di database. Halaman R-Net yang sudah terbuka cukup
    di-refresh sekali.
 3. Matikan: **`stop-vnc.bat`**.
 
 **Catatan:**
 
-- Ada beberapa PC sumber VNC? Satu PC = satu channel: isi `VNC_CHANNEL`
+- Ada beberapa PC sumber VNC? Satu PC = satu sumber: isi `VNC_SOURCE`
   berbeda di masing-masing `config.env`.
 - Semua port (5900 VNC, 6080 websocat) hanya listen di PC itu sendiri;
   satu-satunya jalan masuk dari luar adalah tunnel (wss, terenkripsi).

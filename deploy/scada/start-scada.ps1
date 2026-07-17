@@ -47,12 +47,12 @@ $hasCreds = $cfg.SUPABASE_URL -and $cfg.SUPABASE_SERVICE_KEY `
     -and ($cfg.SUPABASE_URL -notmatch "GANTI") -and ($cfg.SUPABASE_SERVICE_KEY -notmatch "GANTI")
 
 # Stream yang di-update mesin ini. STREAM_NAME kosong = mode lama (menimpa
-# SEMUA stream) — hanya aman kalau cuma ada satu sumber siaran.
+# SEMUA stream) - hanya aman kalau cuma ada satu sumber siaran.
 $streamName = if ($cfg.STREAM_NAME) { $cfg.STREAM_NAME.Trim() } else { "" }
 $streamPath = if ($cfg.STREAM_PATH) { $cfg.STREAM_PATH.Trim() } else { "scada" }
 if ($streamPath -eq "") { $streamPath = "scada" }
 
-# --- 0.5 Mosquitto (broker MQTT) — hanya jika dikonfigurasi installer -----
+# --- 0.5 Mosquitto (broker MQTT) - hanya jika dikonfigurasi installer -----
 $MqConf = Join-Path $Root "mosquitto\mosquitto.conf"
 $MqExe  = Join-Path $env:ProgramFiles "mosquitto\mosquitto.exe"
 if ((Test-Path $MqConf) -and (Test-Path $MqExe)) {
@@ -103,7 +103,7 @@ if ($streamName -ne "") {
 }
 
 # --- 3. Update alamat stream di Supabase (REST, tanpa Python) ------------
-# Kalau STREAM_NAME diisi, hanya baris dengan nama itu yang di-update — jadi
+# Kalau STREAM_NAME diisi, hanya baris dengan nama itu yang di-update - jadi
 # beberapa mesin siaran tidak saling menimpa. Kalau kosong, semua baris.
 function Update-StreamUrl($supabaseUrl, $serviceKey, $newUrl, $name) {
     if ($name -ne "") {

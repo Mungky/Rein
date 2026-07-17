@@ -40,14 +40,16 @@ Semua langkah di bawah sudah diotomasi oleh installer universal R-Net:
    - mengunduh **websocat** (jembatan WebSocket, 1 file exe dari GitHub
      resmi, SHA-256 dicetak — pengganti websockify tanpa Python) dan
      **cloudflared** (verifikasi tanda tangan digital);
-   - mengisi `VNC_CHANNEL` + `VNC_VIEW_PASSWORD` di `config.env`.
+   - mengisi `VNC_SOURCE` + `VNC_VIEW_PASSWORD` di `config.env`.
 
-2. Di R-Net → **Channel** → Channel Baru → jenis **VNC (Layar PC)** dengan
-   nomor = `VNC_CHANNEL`. Alamat/password akan diisi otomatis oleh saklar.
+2. Di R-Net → **Channel** → **Kelola Screen** → Tambah Sumber → jenis
+   **VNC (Layar PC)**, nama PERSIS = `VNC_SOURCE` (alamat/password diisi
+   otomatis oleh saklar). Lalu buat channel **Video Screen** yang memakai
+   sumber itu.
 
 3. Rutinitas tiap PC dinyalakan: buka browser cloud SCADA + login, lalu
    dobel-klik **`start-vnc.bat`** — TightVNC + websocat + Quick Tunnel
-   hidup, dan alamat (+password view-only) channel ter-update otomatis di
+   hidup, dan alamat (+password view-only) **sumber** ter-update otomatis di
    database (pola yang sama dengan `start-scada.bat` untuk stream video).
    URL Quick Tunnel memang berubah tiap start — tidak masalah, karena
    saklar yang menuliskannya. Matikan dengan `stop-vnc.bat`.
@@ -124,9 +126,9 @@ Lalu tambahkan DNS route: `cloudflared tunnel route dns <tunnel> vnc-scada.domai
 Cloudflare meneruskan upgrade WebSocket secara default — tidak ada setting
 khusus. TLS ke viewer ditangani Cloudflare.
 
-### 4. Tambah channel di R-Net
+### 4. Daftarkan sumber + channel di R-Net
 
-Halaman **R-Net → Channel → Channel Baru**:
+Halaman **R-Net → Channel → Kelola Screen → Tambah Sumber**:
 
 - **Jenis Sumber**: `VNC (Layar PC)`
 - **Alamat noVNC / websockify**: `https://xxx.trycloudflare.com` atau
@@ -134,10 +136,13 @@ Halaman **R-Net → Channel → Channel Baru**:
   (otomatis dinormalisasi jadi `wss://`; alamat LAN `http://192.168.x.x:6080`
   juga bisa untuk uji lokal selama REIN-nya juga dibuka via http)
 - **Password VNC**: password **view-only** dari langkah 1
-- **Resolusi Layar**: samakan dengan resolusi monitor PC sumber (mis. FHD)
 
-Channel ini lalu ditaruh di layout Monitor seperti channel lain. Mau berapa
-pun sumber VNC: satu PC = satu channel (atau beberapa channel ke PC yang sama).
+Lalu **Channel Baru** → jenis **Video Screen** → pilih sumber VNC itu →
+atur **Resolusi Layar** (samakan dengan monitor PC sumber, mis. FHD) dan
+crop bila perlu. Taruh channel di layout Monitor seperti channel lain.
+
+Satu sumber VNC bisa dipakai banyak channel (mis. di-crop jadi beberapa
+bagian layar); beberapa PC sumber = beberapa sumber VNC.
 
 ## Perilaku di sisi R-Net (yang sudah ditegakkan kode)
 

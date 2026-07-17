@@ -54,10 +54,12 @@ $cfg = Read-Config $ConfigFile
 $hasCreds = $cfg.SUPABASE_URL -and $cfg.SUPABASE_SERVICE_KEY `
     -and ($cfg.SUPABASE_URL -notmatch "GANTI") -and ($cfg.SUPABASE_SERVICE_KEY -notmatch "GANTI")
 
-# Channel yang di-update PC ini. VNC_CHANNEL kosong = SEMUA channel VNC -
-# hanya aman kalau cuma ada satu PC sumber VNC.
-$vncChannel = if ($cfg.VNC_CHANNEL)       { $cfg.VNC_CHANNEL.Trim() }       else { "" }
-$vncPass    = if ($cfg.VNC_VIEW_PASSWORD) { $cfg.VNC_VIEW_PASSWORD.Trim() } else { "" }
+# Sumber (Screen) yang di-update PC ini - namanya harus PERSIS sama dengan
+# nama di R-Net > Channel > Kelola Screen (pola yang sama dengan STREAM_NAME).
+# Kosong = SEMUA sumber jenis VNC, hanya aman kalau cuma ada satu PC sumber.
+# (VNC_CHANNEL dari versi lama masih dibaca sebagai nama, demi kompatibilitas.)
+$vncSource = if ($cfg.VNC_SOURCE)         { $cfg.VNC_SOURCE.Trim() }         else { "" }
+$vncPass   = if ($cfg.VNC_VIEW_PASSWORD)  { $cfg.VNC_VIEW_PASSWORD.Trim() }  else { "" }
 
 # --- 1. TightVNC (mode aplikasi) -------------------------------------------
 $svc = Get-Service tvnserver -ErrorAction SilentlyContinue
@@ -100,52 +102,55 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 if (-not $url) { Fail "URL tunnel tidak muncul dalam 30 dtk. Cek internet, jalankan ulang." }
 Write-Host "[OK] Tunnel hidup: $url"
-if ($vncChannel -ne "") {
-    Write-Host "[OK] Target: channel VNC nomor $vncChannel"
+if ($vncSource -ne "") {
+    Write-Host "[OK] Target: sumber (Screen) '$vncSource'"
 } else {
-    Write-Host "[!] VNC_CHANNEL kosong -> menimpa SEMUA channel VNC (mode 1 PC)." -ForegroundColor Yellow
+    Write-Host "[!] VNC_SOURCE kosong -> menimpa SEMUA sumber VNC (mode 1 PC)." -ForegroundColor Yellow
 }
 
-# --- 4. Update channel VNC di Supabase (REST, tanpa Python) -----------------
-# Config channel di-merge, bukan diganti: url (+password kalau ada di
-# config.env) di-set, resolusi layar dsb. dipertahankan. Frontend R-Net
-# menormalisasi https:// menjadi wss:// sendiri.
+# --- 4. Update SUMBER VNC di Supabase (REST, tanpa Python) ------------------
+# Alamat VNC tinggal di tabel sumber (scada_streams, source_type='vnc'), bukan
+# di config channel: satu sumber bisa dipakai banyak channel. Frontend R-Net
+# menormalisasi https:// menjadi wss:// sendiri. `secret` = password VIEW-ONLY.
 if ($hasCreds) {
     $key = $cfg.SUPABASE_SERVICE_KEY
-    $base = "$($cfg.SUPABASE_URL)/rest/v1/scada_channels"
+    $base = "$($cfg.SUPABASE_URL)/rest/v1/scada_streams"
     $headers = @{
         apikey         = $key
         Authorization  = "Bearer $key"
         "Content-Type" = "application/json"
         Prefer         = "return=representation"
     }
-    $filter = "kind=eq.vnc"
-    if ($vncChannel -ne "") { $filter += "&number=eq.$vncChannel" }
+    $filter = "source_type=eq.vnc"
+    if ($vncSource -ne "") {
+        $filter += "&name=eq.$([uri]::EscapeDataString($vncSource))"
+    }
 
     $ok = $false
     for ($i = 0; $i -lt 3; $i++) {
         try {
             $rows = Invoke-RestMethod -Method Get -TimeoutSec 20 -Headers $headers `
-                -Uri "${base}?${filter}&select=id,number,name,config"
+                -Uri "${base}?${filter}&select=id,name"
             if (-not $rows) {
-                if ($vncChannel -ne "") {
-                    Write-Host "[INFO] Belum ada channel VNC nomor $vncChannel di R-Net." -ForegroundColor Yellow
+                if ($vncSource -ne "") {
+                    Write-Host "[INFO] Belum ada sumber VNC bernama '$vncSource' di R-Net." -ForegroundColor Yellow
                 } else {
-                    Write-Host "[INFO] Belum ada channel jenis VNC di R-Net." -ForegroundColor Yellow
+                    Write-Host "[INFO] Belum ada sumber jenis VNC di R-Net." -ForegroundColor Yellow
                 }
-                Write-Host "       Buka R-Net > Channel, buat channel 'VNC (Layar PC)', jalankan ulang." -ForegroundColor Yellow
-                Write-Host "       Atau isi manual alamat ini di channel: $url" -ForegroundColor Yellow
+                Write-Host "       Buka R-Net > Channel > Kelola Screen, tambah sumber jenis" -ForegroundColor Yellow
+                Write-Host "       'VNC (Layar PC)' dengan nama PERSIS itu, lalu jalankan ulang." -ForegroundColor Yellow
+                Write-Host "       Atau isi manual alamat ini di sumber: $url" -ForegroundColor Yellow
             } else {
                 foreach ($r in $rows) {
-                    $conf = $r.config
-                    $conf | Add-Member -NotePropertyName url -NotePropertyValue $url -Force
-                    if ($vncPass -ne "") {
-                        $conf | Add-Member -NotePropertyName password -NotePropertyValue $vncPass -Force
-                    }
-                    $body = @{ config = $conf } | ConvertTo-Json -Depth 8
+                    $patch = @{ url = $url }
+                    # Password hanya ditimpa kalau config.env memuatnya - biar
+                    # password yang sudah diisi lewat UI tidak terhapus.
+                    if ($vncPass -ne "") { $patch.secret = $vncPass }
+                    $body = $patch | ConvertTo-Json
                     Invoke-RestMethod -Method Patch -TimeoutSec 20 -Headers $headers `
                         -Uri "${base}?id=eq.$($r.id)" -Body $body | Out-Null
-                    Write-Host ("   CH {0} ({1})  ->  {2}" -f $r.number, $r.name, $url)
+                    $pw = if ($vncPass -ne "") { " + password" } else { "" }
+                    Write-Host ("   {0}  ->  {1}{2}" -f $r.name, $url, $pw)
                 }
             }
             $ok = $true; break
@@ -156,6 +161,10 @@ if ($hasCreds) {
     }
     if (-not $ok) { Fail "Tidak bisa update database R-Net. Cek internet / isi config.env." }
 
+    if ($vncPass -eq "") {
+        Write-Host "[!] VNC_VIEW_PASSWORD kosong di config.env - kalau TightVNC minta" -ForegroundColor Yellow
+        Write-Host "    password, isi kolom Password VNC di Kelola Screen." -ForegroundColor Yellow
+    }
     Write-Host ""
     Write-Host "=== SUMBER VNC SIAP ===" -ForegroundColor Green
     Write-Host "Pastikan browser cloud SCADA terbuka & sudah login di PC ini."
@@ -166,7 +175,7 @@ if ($hasCreds) {
     Write-Host ""
     Write-Host "=== TUNNEL VNC SIAP (mode manual) ===" -ForegroundColor Cyan
     Write-Host "config.env belum diisi, jadi alamat TIDAK di-update otomatis."
-    Write-Host "Salin ke R-Net > Channel > channel VNC > Alamat noVNC/websockify:" -ForegroundColor Yellow
+    Write-Host "Salin ke R-Net > Channel > Kelola Screen > sumber VNC > Alamat:" -ForegroundColor Yellow
     Write-Host "   $url" -ForegroundColor White
     Write-Host "(password view-only TightVNC diisi di kolom Password VNC)"
 }

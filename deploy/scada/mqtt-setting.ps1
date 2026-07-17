@@ -3,7 +3,7 @@
 # ==========================================================================
 #  Dobel-klik "Pengaturan MQTT.bat" di File Explorer untuk membukanya.
 #
-#  Fungsinya: mengatur broker MQTT TANPA edit file config manual —
+#  Fungsinya: mengatur broker MQTT TANPA edit file config manual -
 #    - port listener, wajib-login/anonim, username + password
 #    - menyalakan / mematikan broker (saklar manual, bukan service)
 #    - tes koneksi (publish percobaan ke broker sendiri)
@@ -11,7 +11,7 @@
 #
 #  File yang dikelola: <folder ini>\mosquitto\mosquitto.conf + passwd.
 #  Password tersimpan sebagai hash (mosquitto_passwd), jadi password lama
-#  tidak bisa ditampilkan — kosongkan kolom password = tidak diubah.
+#  tidak bisa ditampilkan - kosongkan kolom password = tidak diubah.
 # ==========================================================================
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -44,7 +44,7 @@ if (-not (Test-Path $MqExe)) {
     exit 1
 }
 
-# UTF-8 tanpa BOM — konsisten dengan installer.
+# UTF-8 tanpa BOM - konsisten dengan installer.
 function Write-TextNoBom($path, $text) {
     $enc = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($path, $text, $enc)
