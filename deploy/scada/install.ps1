@@ -498,23 +498,33 @@ if ($doVnc) {
         if ($ctrlEnc -and $viewEnc) {
             $ctrlHex = ($ctrlEnc | ForEach-Object { $_.ToString("X2") }) -join ""
             $viewHex = ($viewEnc | ForEach-Object { $_.ToString("X2") }) -join ""
+            # Tulis ke view 64-bit DAN WOW6432Node: TightVNC 32-bit di Windows
+            # 64-bit membaca WOW6432Node, dan menebak salah = "Server is not
+            # configured properly" lagi. Menulis keduanya selalu aman.
+            # PENTING: Password (primary) WAJIB ada. TightVNC menganggap dirinya
+            # "not configured properly" kalau VNC auth aktif tapi primary kosong,
+            # walaupun view-only sudah diisi.
             $mirror = @"
-`$k = 'HKLM:\SOFTWARE\TightVNC\Server'
-New-Item -Path `$k -Force | Out-Null
 function Hex2Bytes(`$h) { `$b = New-Object byte[] (`$h.Length/2); for (`$i=0; `$i -lt `$b.Length; `$i++) { `$b[`$i] = [Convert]::ToByte(`$h.Substring(`$i*2,2),16) }; return `$b }
-New-ItemProperty -Path `$k -Name Password             -PropertyType Binary -Value (Hex2Bytes '$ctrlHex') -Force | Out-Null
-New-ItemProperty -Path `$k -Name PasswordViewOnly     -PropertyType Binary -Value (Hex2Bytes '$viewHex') -Force | Out-Null
-New-ItemProperty -Path `$k -Name UseVncAuthentication  -PropertyType DWord -Value 1 -Force | Out-Null
-New-ItemProperty -Path `$k -Name AcceptHttpConnections -PropertyType DWord -Value 0 -Force | Out-Null
-New-ItemProperty -Path `$k -Name AllowLoopback         -PropertyType DWord -Value 1 -Force | Out-Null
-New-ItemProperty -Path `$k -Name LoopbackOnly          -PropertyType DWord -Value 1 -Force | Out-Null
+foreach (`$k in @('HKLM:\SOFTWARE\TightVNC\Server','HKLM:\SOFTWARE\WOW6432Node\TightVNC\Server')) {
+    New-Item -Path `$k -Force | Out-Null
+    New-ItemProperty -Path `$k -Name Password             -PropertyType Binary -Value (Hex2Bytes '$ctrlHex') -Force | Out-Null
+    New-ItemProperty -Path `$k -Name PasswordViewOnly     -PropertyType Binary -Value (Hex2Bytes '$viewHex') -Force | Out-Null
+    New-ItemProperty -Path `$k -Name UseVncAuthentication  -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -Path `$k -Name AcceptHttpConnections -PropertyType DWord -Value 0 -Force | Out-Null
+    New-ItemProperty -Path `$k -Name AllowLoopback         -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -Path `$k -Name LoopbackOnly          -PropertyType DWord -Value 1 -Force | Out-Null
+}
+# Service harus dimuat ulang supaya membaca setelan baru.
+`$svc = Get-Service tvnserver -ErrorAction SilentlyContinue
+if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service tvnserver -Force -ErrorAction SilentlyContinue }
 "@
             $tmpPs = Join-Path $env:TEMP ("rein_vnc_hklm_" + [guid]::NewGuid().ToString("N") + ".ps1")
             Write-TextNoBom $tmpPs $mirror
             try {
                 Start-Process powershell -Verb RunAs -Wait -ArgumentList `
                     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$tmpPs`""
-                Good "Setelan dicermin ke HKLM - mode service TightVNC ikut jalan."
+                Good "Setelan dicermin ke HKLM (64-bit + WOW6432Node) - mode service ikut jalan."
             } catch {
                 Warn "Gagal menulis HKLM (butuh Administrator). Kalau TightVNC dijalankan"
                 Warn "sebagai SERVICE, dia akan bilang 'Server is not configured properly'."
