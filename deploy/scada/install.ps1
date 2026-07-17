@@ -419,11 +419,17 @@ if ($doVnc) {
             }
         }
 
-        # --- 5b. Password VNC (mode aplikasi membaca HKCU) ------------------
+        # --- 5b. Setelan VNC: password + akses jaringan ---------------------
+        # DUA TEMPAT, sengaja: TightVNC mode APLIKASI membaca HKCU, sedangkan
+        # mode SERVICE membaca HKLM. Kalau hanya salah satu diisi, mode yang
+        # lain melayani koneksi TANPA password -> TightVNC menolak dengan
+        # "Server is not configured properly". Jadi tulis ke KEDUANYA supaya
+        # jalan apa pun modenya (HKLM butuh Administrator).
+        #
         # Password VNC klasik maks 8 karakter, disimpan terenkripsi DES dengan
         # kunci standar VNC (bukan rahasia - sekadar format yang dimengerti
-        # TightVNC). Password VIEW-ONLY inilah yang dipakai channel R-Net;
-        # password KONTROL hanya untuk maintenance Anda sendiri.
+        # TightVNC). Password VIEW-ONLY inilah yang dipakai R-Net; password
+        # KONTROL hanya untuk maintenance Anda sendiri.
         function ConvertTo-VncPass([string]$plain) {
             $data = New-Object byte[] 8
             $src = [Text.Encoding]::ASCII.GetBytes($plain)
@@ -434,26 +440,42 @@ if ($doVnc) {
             $des.Key = [byte[]](0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0)
             return $des.CreateEncryptor().TransformFinalBlock($data, 0, 8)
         }
+        # VNC hanya memakai 8 karakter pertama. Potong DI SINI supaya nilai yang
+        # ditulis ke registry dan ke config.env selalu sama persis - kalau tidak,
+        # user mengetik 9 karakter dan R-Net mengirim password yang beda.
+        function Limit-VncPass([string]$plain) {
+            if ($plain.Length -gt 8) {
+                Warn "Password dipotong jadi 8 karakter (batas protokol VNC): $($plain.Substring(0,8))"
+                return $plain.Substring(0, 8)
+            }
+            return $plain
+        }
 
         $RegVnc = "HKCU:\Software\TightVNC\Server"
         $hasPass = (Test-Path $RegVnc) -and
             (Get-ItemProperty $RegVnc -Name PasswordViewOnly -ErrorAction SilentlyContinue)
+        $ctrlEnc = $null
+        $viewEnc = $null
         if ($hasPass -and -not $Force) {
-            Good "Password TightVNC sudah diset - dipertahankan (ubah lewat GUI TightVNC)."
+            Good "Password TightVNC sudah diset - dipertahankan (pakai -Force untuk set ulang)."
+            $ctrlEnc = (Get-ItemProperty $RegVnc -Name Password         -ErrorAction SilentlyContinue).Password
+            $viewEnc = (Get-ItemProperty $RegVnc -Name PasswordViewOnly -ErrorAction SilentlyContinue).PasswordViewOnly
         } else {
             Write-Host ""
             Info "Password VNC (maks 8 karakter; Enter = buat otomatis):"
             $vncCtrl = Read-Host "   Password KONTROL (maintenance - JANGAN diisi ke R-Net)"
             if ([string]::IsNullOrWhiteSpace($vncCtrl)) { $vncCtrl = (New-Pass).Substring(0, 8); Write-Host "   -> dibuatkan: $vncCtrl" }
-            $vncView = Read-Host "   Password VIEW-ONLY (yang dipakai channel R-Net)"
+            $vncCtrl = Limit-VncPass $vncCtrl
+            $vncView = Read-Host "   Password VIEW-ONLY (yang dipakai R-Net)"
             if ([string]::IsNullOrWhiteSpace($vncView)) { $vncView = (New-Pass).Substring(0, 8); Write-Host "   -> dibuatkan: $vncView" }
+            $vncView = Limit-VncPass $vncView
+            $ctrlEnc = ConvertTo-VncPass $vncCtrl
+            $viewEnc = ConvertTo-VncPass $vncView
             New-Item -Path $RegVnc -Force | Out-Null
-            New-ItemProperty -Path $RegVnc -Name Password         -PropertyType Binary -Value (ConvertTo-VncPass $vncCtrl) -Force | Out-Null
-            New-ItemProperty -Path $RegVnc -Name PasswordViewOnly -PropertyType Binary -Value (ConvertTo-VncPass $vncView) -Force | Out-Null
-            New-ItemProperty -Path $RegVnc -Name UseVncAuthentication  -PropertyType DWord -Value 1 -Force | Out-Null
-            New-ItemProperty -Path $RegVnc -Name AcceptHttpConnections -PropertyType DWord -Value 0 -Force | Out-Null
+            New-ItemProperty -Path $RegVnc -Name Password         -PropertyType Binary -Value $ctrlEnc -Force | Out-Null
+            New-ItemProperty -Path $RegVnc -Name PasswordViewOnly -PropertyType Binary -Value $viewEnc -Force | Out-Null
             Good "Password TightVNC diset (kontrol + view-only)."
-            Warn "CATAT keduanya. View-only untuk channel R-Net; kontrol untuk Anda sendiri."
+            Warn "CATAT keduanya. View-only untuk R-Net; kontrol untuk Anda sendiri."
         }
 
         # --- 5b-2. Akses jaringan: HANYA loopback ---------------------------
@@ -461,12 +483,45 @@ if ($doVnc) {
         # MENOLAK loopback ("Sorry, loopback connections are not enabled").
         # LoopbackOnly=1 sekalian mengunci 5900 supaya tidak bisa dihubungi dari
         # LAN - satu-satunya jalan masuk adalah websocat + tunnel. Selalu
-        # disetel (juga saat password lama dipertahankan) karena tanpa ini
-        # rantainya tidak akan pernah jalan.
+        # disetel (juga saat password lama dipertahankan).
         New-Item -Path $RegVnc -Force | Out-Null
+        New-ItemProperty -Path $RegVnc -Name UseVncAuthentication  -PropertyType DWord -Value 1 -Force | Out-Null
+        New-ItemProperty -Path $RegVnc -Name AcceptHttpConnections -PropertyType DWord -Value 0 -Force | Out-Null
         New-ItemProperty -Path $RegVnc -Name AllowLoopback -PropertyType DWord -Value 1 -Force | Out-Null
         New-ItemProperty -Path $RegVnc -Name LoopbackOnly  -PropertyType DWord -Value 1 -Force | Out-Null
-        Good "TightVNC: loopback diizinkan, dan HANYA loopback (5900 tertutup dari LAN)."
+        Good "TightVNC (mode aplikasi/HKCU): loopback-only + auth diset."
+
+        # --- 5b-3. Cermin setelan ke HKLM (mode service) --------------------
+        # Supaya PC server yang menjalankan TightVNC sebagai service memakai
+        # password + loopback yang SAMA. Tanpa ini: "Server is not configured
+        # properly" (service tidak melihat apa pun di HKCU).
+        if ($ctrlEnc -and $viewEnc) {
+            $ctrlHex = ($ctrlEnc | ForEach-Object { $_.ToString("X2") }) -join ""
+            $viewHex = ($viewEnc | ForEach-Object { $_.ToString("X2") }) -join ""
+            $mirror = @"
+`$k = 'HKLM:\SOFTWARE\TightVNC\Server'
+New-Item -Path `$k -Force | Out-Null
+function Hex2Bytes(`$h) { `$b = New-Object byte[] (`$h.Length/2); for (`$i=0; `$i -lt `$b.Length; `$i++) { `$b[`$i] = [Convert]::ToByte(`$h.Substring(`$i*2,2),16) }; return `$b }
+New-ItemProperty -Path `$k -Name Password             -PropertyType Binary -Value (Hex2Bytes '$ctrlHex') -Force | Out-Null
+New-ItemProperty -Path `$k -Name PasswordViewOnly     -PropertyType Binary -Value (Hex2Bytes '$viewHex') -Force | Out-Null
+New-ItemProperty -Path `$k -Name UseVncAuthentication  -PropertyType DWord -Value 1 -Force | Out-Null
+New-ItemProperty -Path `$k -Name AcceptHttpConnections -PropertyType DWord -Value 0 -Force | Out-Null
+New-ItemProperty -Path `$k -Name AllowLoopback         -PropertyType DWord -Value 1 -Force | Out-Null
+New-ItemProperty -Path `$k -Name LoopbackOnly          -PropertyType DWord -Value 1 -Force | Out-Null
+"@
+            $tmpPs = Join-Path $env:TEMP ("rein_vnc_hklm_" + [guid]::NewGuid().ToString("N") + ".ps1")
+            Write-TextNoBom $tmpPs $mirror
+            try {
+                Start-Process powershell -Verb RunAs -Wait -ArgumentList `
+                    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$tmpPs`""
+                Good "Setelan dicermin ke HKLM - mode service TightVNC ikut jalan."
+            } catch {
+                Warn "Gagal menulis HKLM (butuh Administrator). Kalau TightVNC dijalankan"
+                Warn "sebagai SERVICE, dia akan bilang 'Server is not configured properly'."
+                Warn "Jalankan ulang installer dan setujui prompt Administrator."
+            }
+            Remove-Item $tmpPs -Force -ErrorAction SilentlyContinue
+        }
     }
 
     # --- 5c. websocat.exe (jembatan WebSocket <-> VNC; 1 file, tanpa Python)
@@ -501,6 +556,18 @@ if ($doVnc) {
         $append += "VNC_SOURCE=$($vncSrc.Trim())"
     }
     if ($cfgRaw -notmatch "(?m)^\s*VNC_VIEW_PASSWORD\s*=") {
+        # Password lama dipertahankan? Baca balik dari registry (DES kunci VNC
+        # standar) supaya config.env TIDAK pernah kosong/beda dengan server -
+        # beda sedikit saja, R-Net gagal auth dan susah dilacak.
+        if (-not $vncView -and $viewEnc) {
+            $des = New-Object Security.Cryptography.DESCryptoServiceProvider
+            $des.Mode = [Security.Cryptography.CipherMode]::ECB
+            $des.Padding = [Security.Cryptography.PaddingMode]::None
+            $des.Key = [byte[]](0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0)
+            $plain = $des.CreateDecryptor().TransformFinalBlock($viewEnc, 0, 8)
+            $vncView = ([Text.Encoding]::ASCII.GetString($plain)).TrimEnd([char]0)
+            Info "Password view-only dibaca dari setelan TightVNC yang sudah ada."
+        }
         $append += "# Password VIEW-ONLY TightVNC - saklar start-vnc menuliskannya ke"
         $append += "# sumber VNC di R-Net supaya penonton auto-connect."
         $append += "VNC_VIEW_PASSWORD=$(if ($vncView) { $vncView } else { '' })"
