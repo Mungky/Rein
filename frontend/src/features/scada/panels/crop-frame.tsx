@@ -56,16 +56,27 @@ export function CropFrame({
   const left = (box.w - region.w * scale) / 2 - region.x * scale;
   const top = (box.h - region.h * scale) / 2 - region.y * scale;
 
+  // The child is ALWAYS mounted, even before the box is measured: children may
+  // attach a live connection to their own DOM node in an effect (VncPanel's RFB
+  // does), and unmounting them here would either stop that from ever starting
+  // or tear it down on every resize. Until we have a measurement we just keep
+  // it hidden at natural size.
+  const ready = scale > 0;
+
   return (
     <div ref={ref} className="relative h-full w-full overflow-hidden bg-black">
-      {scale > 0 && (
-        <div
-          className="absolute"
-          style={{ left, top, width: innerW, height: innerH }}
-        >
-          {children}
-        </div>
-      )}
+      <div
+        className="absolute"
+        style={{
+          left: ready ? left : 0,
+          top: ready ? top : 0,
+          width: ready ? innerW : srcW,
+          height: ready ? innerH : srcH,
+          visibility: ready ? "visible" : "hidden",
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }

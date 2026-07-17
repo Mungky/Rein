@@ -12,7 +12,7 @@
  *  server's own view-only / input-block setting.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import RFB from "@novnc/novnc";
 import type { CropRect } from "../types";
@@ -55,7 +55,11 @@ export function VncPanel({
   /** Fired when the live framebuffer size is known (used by the crop editor). */
   onResolution?: (w: number, h: number) => void;
 }) {
-  const screenRef = useRef<HTMLDivElement>(null);
+  // A callback ref in STATE, not a plain ref: the RFB target lives inside
+  // CropFrame and may mount a tick later than this component. A useRef would
+  // still be null when the effect first runs, and the effect would never re-run
+  // — leaving the panel stuck on "connecting" forever, never even dialling.
+  const [screenEl, setScreenEl] = useState<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<VncStatus>({ state: "connecting" });
   const [nonce, setNonce] = useState(0); // manual reconnect
   // Live framebuffer size, detected from the canvas RFB injects — so the crop
@@ -66,7 +70,7 @@ export function VncPanel({
   const pass = password ?? undefined;
 
   useEffect(() => {
-    const screen = screenRef.current;
+    const screen = screenEl;
     if (!screen || !wsUrl) return;
 
     let rfb: RFB | null = null;
@@ -167,7 +171,7 @@ export function VncPanel({
         // already closed
       }
     };
-  }, [wsUrl, pass, nonce]);
+  }, [screenEl, wsUrl, pass, nonce]);
 
   useEffect(() => {
     if (fb) onResolution?.(fb.w, fb.h);
@@ -186,7 +190,7 @@ export function VncPanel({
           pointer-events-none = belt on top of the viewOnly suspenders: the
           wall can never poke the source PC. */}
       <CropFrame srcW={sw} srcH={sh} crop={crop}>
-        <div ref={screenRef} className="pointer-events-none h-full w-full" />
+        <div ref={setScreenEl} className="pointer-events-none h-full w-full" />
       </CropFrame>
 
       {status.state !== "connected" && (
