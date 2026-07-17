@@ -189,12 +189,23 @@ export function VncPanel({
   const sw = fb?.w ?? srcW ?? 1920;
   const sh = fb?.h ?? srcH ?? 1080;
 
+  // The crop was drawn against src_w×src_h (the remote screen at the time).
+  // Rescale it to the LIVE framebuffer so it keeps framing the same region when
+  // the remote resolution changes — e.g. the source PC's desktop is raised to
+  // 4K to make the tiles sharp. Same treatment CroppedVideoPanel gives video.
+  const fx = crop && srcW ? sw / srcW : 1;
+  const fy = crop && srcH ? sh / srcH : 1;
+  const liveCrop =
+    crop && (fx !== 1 || fy !== 1)
+      ? { x: crop.x * fx, y: crop.y * fy, w: crop.w * fx, h: crop.h * fy }
+      : crop;
+
   return (
     <div className="group relative h-full w-full overflow-hidden bg-black">
       {/* RFB attaches its canvas into screenRef; CropFrame scales/positions it.
           pointer-events-none = belt on top of the viewOnly suspenders: the
           wall can never poke the source PC. */}
-      <CropFrame srcW={sw} srcH={sh} crop={crop}>
+      <CropFrame srcW={sw} srcH={sh} crop={liveCrop}>
         <div ref={setScreenEl} className="pointer-events-none h-full w-full" />
       </CropFrame>
 
