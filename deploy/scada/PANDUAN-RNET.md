@@ -322,7 +322,9 @@ Cara tahu biang keroknya — bandingkan di PC server itu sendiri:
 | Gejala | Penyebab umum | Cara cek/atasi |
 |---|---|---|
 | Channel VNC "Menghubungkan…" terus | Saklar belum jalan / URL basi | Jalankan ulang `start-vnc.bat`, refresh halaman R-Net |
-| "Server VNC minta password" | `VNC_VIEW_PASSWORD` kosong/beda dengan TightVNC | Samakan password view-only di config.env (atau di form channel), jalankan ulang saklar |
+| **"Sorry, loopback connections are not enabled"** | TightVNC menolak koneksi dari 127.0.0.1 (bawaannya begitu), padahal websocat konek dari situ | TightVNC → Configuration → centang **Allow loopback connections** (+ **Allow only loopback**), lalu restart TightVNC. Installer versi baru menyetel ini otomatis |
+| "Server VNC minta password" | `VNC_VIEW_PASSWORD` kosong/beda dengan TightVNC | Samakan password view-only di config.env, jalankan ulang saklar |
+| Lupa password VNC | — | Klik kanan ikon TightVNC di tray → Configuration → set ulang; lalu samakan `VNC_VIEW_PASSWORD` di config.env |
 | Layar hitam | PC sumber sleep / monitor mati dengan mode tertentu | Matikan sleep (Settings → Power: Never); layar boleh mati, sesi Windows harus tetap login |
 | Gambar tidak update | Browser cloud SCADA logout (token 24 jam) | Login ulang di PC sumber |
 

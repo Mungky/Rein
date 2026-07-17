@@ -37,6 +37,8 @@ Semua langkah di bawah sudah diotomasi oleh installer universal R-Net:
      prinsip "tidak ada yang hidup diam-diam";
    - menyetel **dua password** (KONTROL untuk maintenance Anda, VIEW-ONLY
      untuk R-Net; maks 8 karakter — batas protokol VNC klasik);
+   - menyalakan **AllowLoopback** (wajib: websocat konek dari 127.0.0.1) dan
+     **LoopbackOnly** (port 5900 tertutup dari LAN);
    - mengunduh **websocat** (jembatan WebSocket, 1 file exe dari GitHub
      resmi, SHA-256 dicetak — pengganti websockify tanpa Python) dan
      **cloudflared** (verifikasi tanda tangan digital);
@@ -71,12 +73,21 @@ Pakai **TightVNC Server** (gratis, ringan):
 2. Buka **TightVNC Server → Configuration**:
    - **Primary password**: untuk maintenance Anda — JANGAN dipakai R-Net.
    - **View-only password**: aktifkan dan set password — password INI yang
-     diisi ke channel R-Net. Klien yang login dengan password view-only
+     diisi ke sumber VNC di R-Net. Klien yang login dengan password view-only
      tidak bisa menggerakkan mouse/keyboard, ditegakkan DI SERVER.
+   - **Allow loopback connections: WAJIB dicentang.** websocat menyambung dari
+     `127.0.0.1`, dan TightVNC secara bawaan MENOLAKNYA — gejalanya di R-Net:
+     *"Sorry, loopback connections are not enabled"*.
+   - **Allow only loopback connections: disarankan dicentang.** Port 5900 jadi
+     hanya bisa dihubungi dari PC itu sendiri; satu-satunya jalan masuk dari
+     luar adalah websocat + tunnel.
    - (Opsional, lebih ketat) Tab Access Control → "Block remote input events"
      untuk menolak input dari SEMUA klien (termasuk Anda sendiri).
-3. Uji dari PC lain di LAN dengan VNC viewer biasa: pastikan bisa lihat tapi
-   tidak bisa klik.
+
+   > Registry-nya (dipakai installer): `HKCU\Software\TightVNC\Server` →
+   > `AllowLoopback=1`, `LoopbackOnly=1`. Restart `tvnserver` setelah diubah.
+
+3. Uji: `netstat` harus menunjukkan `127.0.0.1:5900` (bukan `0.0.0.0:5900`).
 
 > Alternatif: UltraVNC (`[admin] DisableInput=1` / ViewOnly password) atau
 > x11vnc `-viewonly` kalau sumbernya Linux.

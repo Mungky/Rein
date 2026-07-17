@@ -455,6 +455,18 @@ if ($doVnc) {
             Good "Password TightVNC diset (kontrol + view-only)."
             Warn "CATAT keduanya. View-only untuk channel R-Net; kontrol untuk Anda sendiri."
         }
+
+        # --- 5b-2. Akses jaringan: HANYA loopback ---------------------------
+        # WAJIB: websocat menyambung dari 127.0.0.1, dan TightVNC secara bawaan
+        # MENOLAK loopback ("Sorry, loopback connections are not enabled").
+        # LoopbackOnly=1 sekalian mengunci 5900 supaya tidak bisa dihubungi dari
+        # LAN - satu-satunya jalan masuk adalah websocat + tunnel. Selalu
+        # disetel (juga saat password lama dipertahankan) karena tanpa ini
+        # rantainya tidak akan pernah jalan.
+        New-Item -Path $RegVnc -Force | Out-Null
+        New-ItemProperty -Path $RegVnc -Name AllowLoopback -PropertyType DWord -Value 1 -Force | Out-Null
+        New-ItemProperty -Path $RegVnc -Name LoopbackOnly  -PropertyType DWord -Value 1 -Force | Out-Null
+        Good "TightVNC: loopback diizinkan, dan HANYA loopback (5900 tertutup dari LAN)."
     }
 
     # --- 5c. websocat.exe (jembatan WebSocket <-> VNC; 1 file, tanpa Python)
