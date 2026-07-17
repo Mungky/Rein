@@ -101,6 +101,11 @@ export function VncPanel({
       rfb.scaleViewport = true; // fill the (framebuffer-aspect) crop box
       rfb.clipViewport = false;
       rfb.background = "rgb(0,0,0)";
+      // noVNC defaults qualityLevel to 6 — that's JPEG quality, and on a SCADA
+      // screen (text, thin lines, flat colour) JPEG at 6 shows as blocky mush,
+      // worse still once a crop is magnified. 9 costs some bandwidth on a wall
+      // that is mostly static anyway, and keeps text legible.
+      rfb.qualityLevel = 9;
 
       rfb.addEventListener("connect", () => {
         attempt = 0;

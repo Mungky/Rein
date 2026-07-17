@@ -532,6 +532,56 @@ if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service tvnserver -Force -E
             }
             Remove-Item $tmpPs -Force -ErrorAction SilentlyContinue
         }
+
+        # --- 5b-4. Swa-uji: BUKTIKAN setelan benar-benar mendarat -----------
+        # Pelajaran mahal dari lapangan: installer bisa "kelihatan sukses" tapi
+        # password mendarat di hive yang TIDAK dibaca instance yang jalan, dan
+        # gejalanya baru muncul jauh kemudian di R-Net sebagai
+        # "Server is not configured properly". Jadi dibaca ulang dan dilaporkan
+        # apa adanya - termasuk MODE mana yang sedang jalan, karena hive yang
+        # menentukan adalah milik mode itu.
+        Write-Host ""
+        Info "Swa-uji setelan TightVNC:"
+        $svcNow = Get-Service tvnserver -ErrorAction SilentlyContinue
+        $svcRun = ($svcNow -and $svcNow.Status -eq "Running")
+        if ($svcRun) {
+            Info "   Mode aktif: SERVICE  -> yang menentukan: hive HKLM"
+        } else {
+            Info "   Mode aktif: APLIKASI -> yang menentukan: hive HKCU"
+        }
+        $hives = @(
+            @{ Path = "HKCU:\Software\TightVNC\Server";             Label = "HKCU (mode aplikasi)"; Decisive = (-not $svcRun) },
+            @{ Path = "HKLM:\SOFTWARE\TightVNC\Server";             Label = "HKLM 64-bit (service)"; Decisive = $svcRun },
+            @{ Path = "HKLM:\SOFTWARE\WOW6432Node\TightVNC\Server"; Label = "HKLM 32-bit (service)"; Decisive = $svcRun }
+        )
+        $decisiveOk = $false
+        foreach ($h in $hives) {
+            $p = Get-ItemProperty $h.Path -ErrorAction SilentlyContinue
+            if (-not $p) { Info "   $($h.Label): belum ada"; continue }
+            # Password PRIMARY wajib: TightVNC menganggap dirinya "not
+            # configured properly" kalau auth aktif tapi primary kosong.
+            $lengkap = $p.Password -and $p.PasswordViewOnly -and ($p.AllowLoopback -eq 1)
+            if ($lengkap) {
+                Good "   $($h.Label): password + loopback OK"
+                if ($h.Decisive) { $decisiveOk = $true }
+            } else {
+                Warn "   $($h.Label): BELUM lengkap (Primary=$(if ($p.Password) { 'ada' } else { 'KOSONG' }), ViewOnly=$(if ($p.PasswordViewOnly) { 'ada' } else { 'KOSONG' }), AllowLoopback=$($p.AllowLoopback))"
+            }
+        }
+        Write-Host ""
+        if ($decisiveOk) {
+            Good "Sumber VNC siap: hive milik mode yang sedang jalan sudah lengkap."
+        } else {
+            Warn "BELUM SIAP: hive milik mode yang sedang jalan BELUM lengkap."
+            Warn "R-Net akan menampilkan 'Server is not configured properly'."
+            if ($svcRun) {
+                Warn "Perbaiki: jalankan ulang installer & SETUJUI prompt Administrator,"
+                Warn "atau Start Menu > TightVNC Server (Service Mode) > Configuration >"
+                Warn "isi Primary + View-only password, centang Allow loopback."
+            } else {
+                Warn "Perbaiki: jalankan ulang installer dengan -Force."
+            }
+        }
     }
 
     # --- 5c. websocat.exe (jembatan WebSocket <-> VNC; 1 file, tanpa Python)
