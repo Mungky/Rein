@@ -339,7 +339,7 @@ function CreateUserModal({ form, setForm, onCancel, onCreate, creating }: {
 }) {
   const [showPw, setShowPw] = useState(false);
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
+    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
       <div className="modal-panel max-w-md" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="px-6 pt-6 pb-4 border-b border-border-soft flex items-start gap-3">
@@ -431,7 +431,7 @@ function ResetPasswordModal({ target, onClose, onSuccess, onError }: {
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal-panel max-w-sm" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 pt-6 pb-4 border-b border-border-soft flex items-start gap-3">
           <div className="size-10 rounded-[var(--r-lg)] bg-amber-bg text-amber flex items-center justify-center shrink-0 ring-1 ring-amber/20">

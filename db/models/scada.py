@@ -14,6 +14,7 @@ import uuid
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -222,6 +223,139 @@ class ScadaSample(Base):
         DateTime(timezone=True), primary_key=True
     )
     value: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ScadaTagLatest(Base):
+    """Last-known value per tag — the fast "live" lane, decoupled from history.
+
+    UPSERTed at ~1 s cadence by the MQTT bridge (mqtt tags) and by the
+    historian latest_loop (simulator tags). Browser clients subscribe via
+    Supabase Realtime for live numbers; the alarm engine polls it for cheap
+    threshold + sensor-silence evaluation. History stays in scada_samples,
+    written only per each tag's storage_interval_s bucket."""
+
+    __tablename__ = "scada_tag_latest"
+
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scada_tags.id", ondelete="CASCADE"), primary_key=True
+    )
+    ts: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+class ScadaAlarmEvent(UUIDMixin, TimestampMixin, Base):
+    """One alarm occurrence — permanent history, rows are never deleted.
+
+    Lifecycle: opened by the alarm engine (cleared_at NULL = active), optionally
+    acknowledged by a user (ack_*), cleared by the engine when the value returns
+    in bounds / data resumes. The partial unique index uq_scada_alarm_open is
+    the dedup mechanism: at most one OPEN event per (tag, kind); the engine
+    inserts with ON CONFLICT DO NOTHING so restarts and a second backend
+    sharing the DB can never double-open. `notified_at` is the atomic claim
+    marker for external notifications (email/Telegram) — only the engine that
+    wins the claim UPDATE sends."""
+
+    __tablename__ = "scada_alarm_events"
+
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scada_tags.id", ondelete="CASCADE"), nullable=False
+    )
+    # "high" (value > alarm_max) | "low" (value < alarm_min) | "silent"
+    # (no data for > 3× the tag's storage interval)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    triggered_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    # Value that crossed the threshold (NULL for "silent")
+    trigger_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The alarm_max/alarm_min that was crossed (NULL for "silent")
+    threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cleared_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ack_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ack_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    # Snapshot of the acknowledger's display name — history must survive
+    # profile deletion.
+    ack_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notified_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_scada_alarm_open",
+            "tag_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("cleared_at IS NULL"),
+        ),
+        Index("idx_scada_alarm_events_tag_triggered", "tag_id", "triggered_at"),
+        Index(
+            "idx_scada_alarm_events_active",
+            "triggered_at",
+            postgresql_where=text("cleared_at IS NULL"),
+        ),
+    )
+
+
+class ScadaAlarmSettings(Base):
+    """Single-row (id=1) notification settings, editable from the Data tab.
+
+    Secrets stay OUT of this table: the Telegram bot token lives in the
+    backend env (TELEGRAM_BOT_TOKEN) — only operator-tunable knobs are here."""
+
+    __tablename__ = "scada_alarm_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email_enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False
+    )
+    # Comma-separated recipient addresses
+    email_recipients: Mapped[str] = mapped_column(
+        Text, server_default="", nullable=False
+    )
+    telegram_enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False
+    )
+    telegram_chat_id: Mapped[str] = mapped_column(
+        String(64), server_default="", nullable=False
+    )
+    # Minimum minutes between external re-notifications of the same (tag, kind)
+    cooldown_min: Mapped[int] = mapped_column(
+        Integer, server_default="15", nullable=False
+    )
+    sound_enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default="true", nullable=False
+    )
+
+
+class ScadaArchive(Base):
+    """Ledger of archived months (app/services/archiver.py). The month row is
+    INSERTed first as an atomic claim, then the xlsx goes to Google Drive,
+    then drive_file_id is filled and the month's samples are deleted. Purge
+    never touches a month without a COMPLETED row here — no data loss."""
+
+    __tablename__ = "scada_archives"
+
+    # First day of the archived month (UTC)
+    month: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
+    file_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    drive_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    web_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
 
 
 class ScadaWorkbenchColumn(UUIDMixin, TimestampMixin, Base):

@@ -31,6 +31,7 @@ import { CroppedVideoPanel } from "./cropped-video-panel";
 import { OrbitFallback } from "./orbit-fallback";
 import { WebSlot } from "../web-live-layer";
 import { ScreenBox, channelScreen } from "../screen-box";
+import { ShapeDecorPanel, TextDecorPanel } from "./decor-panels";
 
 /** True when a channel is a "screen" whose Source is a web page — the only
  *  channels routed through the keep-alive iframe layer (WebLiveLayer) and
@@ -242,6 +243,10 @@ export function renderPanel(
       return <ActivityPanel />;
     case "web":
       return <WebPanel config={panel.config} />;
+    case "text":
+      return <TextDecorPanel config={panel.config} />;
+    case "shape":
+      return <ShapeDecorPanel config={panel.config} />;
     default:
       return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg-sidebar text-text-muted">

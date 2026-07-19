@@ -50,7 +50,7 @@ export function WorkOrderReportForm({ task, onClose, onSubmitted }: Props) {
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div
         className="modal-panel max-w-xl flex flex-col max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}

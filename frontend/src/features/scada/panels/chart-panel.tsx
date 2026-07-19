@@ -23,6 +23,7 @@ import {
   YAxis,
 } from "recharts";
 import { scadaApi } from "@/lib/api/scada";
+import { useScadaStore } from "../store";
 import type { ChartPanelConfig, ChartRange, HistorySeries, Tag } from "../types";
 import { usePanelRefresh } from "./use-panel-refresh";
 
@@ -84,8 +85,31 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
 
   usePanelRefresh(load);
 
+  // Live tail: the newest realtime value per tag (store, ~1 s) is appended
+  // after the last history bucket, so the curve's right edge moves live
+  // instead of waiting for the next 60 s refetch.
+  const liveValues = useScadaStore((s) => s.liveValues);
+
   const showBand = config.show_minmax && config.tag_ids.length === 1;
-  const rows = useMemo(() => buildRows(series ?? [], showBand), [series, showBand]);
+  const rows = useMemo(() => {
+    const base = buildRows(series ?? [], showBand);
+    if (base.length === 0) return base;
+    const lastT = base[base.length - 1].t;
+    const extras = new Map<number, Row>();
+    for (const tagId of config.tag_ids) {
+      const live = liveValues[tagId];
+      if (!live) continue;
+      const t = new Date(live.ts).getTime();
+      if (t <= lastT) continue;
+      let row = extras.get(t);
+      if (!row) {
+        row = { t } as Row;
+        extras.set(t, row);
+      }
+      row[tagId] = live.value;
+    }
+    return [...base, ...[...extras.values()].sort((a, b) => a.t - b.t)];
+  }, [series, showBand, liveValues, config.tag_ids]);
 
   const tagLabel = (tagId: string, i: number) => {
     const s = series?.find((x) => x.tag_id === tagId);

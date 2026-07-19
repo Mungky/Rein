@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import _load_permissions, require_permission
@@ -52,6 +52,7 @@ from app.schemas.scada import (
     TagListOut,
     TagOut,
     TagUpdateRequest,
+    validate_storage_interval,
     WorkbenchColumnCreateRequest,
     WorkbenchColumnListOut,
     WorkbenchColumnOut,
@@ -67,6 +68,7 @@ from db.models.scada import (
     ScadaSite,
     ScadaStream,
     ScadaTag,
+    ScadaTagLatest,
     ScadaWorkbenchColumn,
 )
 from db.session import get_db
@@ -888,6 +890,10 @@ async def update_tag(
     if tag is None:
         raise HTTPException(status_code=404, detail="Tag tidak ditemukan")
 
+    # A source switch means a DIFFERENT data stream — the old history (e.g.
+    # simulator placeholder values) would only mislead, so it gets purged below.
+    source_changed = body.source is not None and body.source != tag.source
+
     if body.sheet_id is not None:
         await _get_sheet_or_404(db, body.sheet_id)
         tag.sheet_id = body.sheet_id
@@ -911,6 +917,19 @@ async def update_tag(
         tag.config = body.config
     if body.meta is not None:
         tag.meta = body.meta
+
+    # Interval rules depend on the MERGED source+config (either may have just
+    # changed) — schema-level validation can't see the other half.
+    try:
+        validate_storage_interval(tag.source, tag.config)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    if source_changed:
+        await db.execute(delete(ScadaSample).where(ScadaSample.tag_id == tag.id))
+        await db.execute(
+            delete(ScadaTagLatest).where(ScadaTagLatest.tag_id == tag.id)
+        )
 
     await db.flush()
     await db.refresh(tag)

@@ -353,6 +353,13 @@
   background: var(--rein-bg-ctrl);
   border-color: rgba(255,255,255,0.08);
 }
+[data-theme="dark"] .drawer-backdrop {
+  background: rgba(0,0,0,0.65);
+}
+[data-theme="dark"] .drawer-panel {
+  background: var(--rein-bg-ctrl);
+  border-color: rgba(255,255,255,0.08);
+}
 [data-theme="dark"] .field-input,
 [data-theme="dark"] .field-select,
 [data-theme="dark"] .field {
@@ -526,13 +533,38 @@
     border-radius: var(--r-2xl);
     box-shadow: var(--shadow-lg);
     width: 100%;
-    overflow: hidden;
+    /* Never taller than the viewport — long dialogs scroll INSIDE the panel
+       instead of pushing the Simpan button off-screen. */
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
     animation: scaleIn 200ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes scaleIn {
     from { opacity: 0; transform: scale(0.96) translateY(8px); }
     to   { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  /* Right-side drawer — pengganti popup untuk form panjang: latar digelapkan,
+     panel meluncur dari kanan, footer aksi selalu menempel di bawah layar. */
+  .drawer-backdrop {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(15,23,42,0.45);
+    backdrop-filter: blur(2px);
+    display: flex; justify-content: flex-end;
+    animation: fadeIn 160ms ease;
+  }
+  .drawer-panel {
+    background: var(--rein-bg);
+    border-left: 1px solid var(--rein-border);
+    box-shadow: var(--shadow-lg);
+    height: 100%;
+    width: 100%;
+    display: flex; flex-direction: column;
+    animation: slideInRight 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @keyframes slideInRight {
+    from { opacity: 0.4; transform: translateX(48px); }
+    to   { opacity: 1; transform: translateX(0); }
   }
   /* Subtle staggered entrance for file-list rows */
   @keyframes rowIn {

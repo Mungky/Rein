@@ -16,9 +16,9 @@ import {
   RefreshCw,
   ScreenShare,
   Trash2,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Drawer } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
 import type { SourceType, Stream } from "./types";
@@ -369,45 +369,23 @@ export function ManageStreamsDialog({
   );
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal-panel max-w-lg flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="px-6 pt-6 pb-4 border-b border-border-soft flex items-start gap-3 shrink-0">
-          <div className="size-10 rounded-[var(--r-lg)] bg-gradient-to-br from-primary to-primary-hover text-white flex items-center justify-center shrink-0">
-            <MonitorPlay className="size-5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-[16px] font-bold text-text leading-tight">
-              Kelola Screen
-            </h2>
-            <p className="text-[12px] text-text-muted mt-0.5">
-              Sumber tampilan channel: Video Stream · Halaman Web · VNC
-            </p>
-          </div>
+    <Drawer
+      title="Kelola Screen"
+      subtitle="Sumber tampilan channel: Video Stream · Halaman Web · VNC"
+      icon={<MonitorPlay className="size-5" />}
+      onClose={onClose}
+    >
+        <div className="flex flex-col gap-3">
           <button
             type="button"
             onClick={refresh}
             disabled={refreshing}
-            className="btn btn-ghost btn-sm -mt-1 gap-1.5"
+            className="btn btn-ghost btn-sm gap-1.5 self-end"
             title="Ambil alamat terbaru dari database & sambungkan ulang video"
           >
             <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
             Segarkan
           </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn btn-ghost btn-icon btn-sm -mr-1 -mt-1"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="px-6 py-5 flex flex-col gap-3 overflow-y-auto">
           {streams.length === 0 && editingId === null && (
             <p className="text-[12px] text-text-muted text-center py-4">
               Belum ada sumber. Tambahkan Video Stream, Halaman Web, atau VNC.
@@ -486,7 +464,6 @@ export function ManageStreamsDialog({
             </button>
           ) : null}
         </div>
-      </div>
-    </div>
+    </Drawer>
   );
 }

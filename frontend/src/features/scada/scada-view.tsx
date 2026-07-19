@@ -22,6 +22,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  Shapes,
   Star,
   Trash2,
   X,
@@ -40,20 +41,33 @@ import { WebLiveLayer, setWebLayerLock, setWebSolo } from "./web-live-layer";
 import { channelAspect, channelScreen } from "./screen-box";
 import { PanelFrame } from "./panels/panel-frame";
 import { renderPanel, isWebScreenChannel } from "./panels/panel-registry";
+import { Drawer } from "@/components/ui/drawer";
 import { AddPanelDialog } from "./add-panel-dialog";
+import { ScadaComponentsDialog } from "./scada-components-dialog";
 import { ManageStreamsDialog } from "./manage-streams-dialog";
 import { AnalysisView } from "./analysis/analysis-view";
 import { ChannelsView } from "./channels-view";
+import { AlarmBell } from "./alarm-bell";
+import { DataRefresh } from "./data-refresh";
+import { useAlarmEvents } from "./use-alarm-events";
+import { useLiveSamples } from "./analysis/use-live-samples";
 
-// Tab "Data" (workbench analisis) disembunyikan sementara — fitur belum
-// matang untuk presentasi. Set true untuk memunculkannya kembali.
-const SHOW_DATA_TAB = false;
+// Tab "Data" (workbench analisis) — pusat pengaturan sensor, interval
+// penyimpanan, dan alarm. Set false untuk menyembunyikannya lagi.
+const SHOW_DATA_TAB = true;
 
 export function ScadaView() {
   const { role } = useAuthDisplay();
   const canEdit = useCan(role as AppRole, "scada:edit_layout");
   const canManage = useCan(role as AppRole, "scada:manage");
   const { profile, loading: authLoading } = useAuth();
+  const signedIn = !authLoading && !!profile;
+
+  // Live lane (scada_tag_latest) + server alarm state (scada_alarm_events) —
+  // mounted once here so every view mode (Monitor panels, bell, Data tab)
+  // shares one Realtime subscription each.
+  useLiveSamples(signedIn);
+  useAlarmEvents(signedIn);
 
   const store = useScadaStore();
   const active = store.perspectives.find(
@@ -107,6 +121,10 @@ export function ScadaView() {
   const isMobile = useIsMobile();
   const [menuOpen, setMenuOpen] = useState(false);
   const [pagesOpen, setPagesOpen] = useState(false);
+  const [showComponents, setShowComponents] = useState(false);
+  // Drawer form "Halaman Baru" / "Ganti Nama Halaman" (pengganti window.prompt)
+  const [pageForm, setPageForm] = useState<{ mode: "new" | "rename"; name: string } | null>(null);
+  const [pageFormSaving, setPageFormSaving] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const wallRef = useRef<HTMLDivElement>(null);
 
@@ -214,29 +232,38 @@ export function ScadaView() {
     setMenuOpen(false);
   }
 
-  async function handleNewPage() {
-    const name = window.prompt("Nama halaman baru:");
-    if (!name?.trim()) return;
-    try {
-      await store.newPage(name.trim());
-      toast.success(`Halaman "${name.trim()}" dibuat — susun panelnya`);
-    } catch {
-      toast.error("Gagal membuat halaman");
-    }
+  function handleNewPage() {
+    setPageForm({ mode: "new", name: "" });
     setPagesOpen(false);
   }
 
-  async function handleRenamePage() {
+  function handleRenamePage() {
     if (!active) return;
-    const name = window.prompt("Ganti nama halaman:", active.name);
-    if (!name?.trim() || name.trim() === active.name) return;
-    try {
-      await store.renamePage(active.id, name.trim());
-      toast.success("Nama halaman diperbarui");
-    } catch {
-      toast.error("Gagal mengganti nama halaman");
-    }
+    setPageForm({ mode: "rename", name: active.name });
     setPagesOpen(false);
+  }
+
+  async function submitPageForm() {
+    if (!pageForm) return;
+    const name = pageForm.name.trim();
+    if (!name) return;
+    setPageFormSaving(true);
+    try {
+      if (pageForm.mode === "new") {
+        await store.newPage(name);
+        toast.success(`Halaman "${name}" dibuat — susun panelnya`);
+      } else if (active && name !== active.name) {
+        await store.renamePage(active.id, name);
+        toast.success("Nama halaman diperbarui");
+      }
+      setPageForm(null);
+    } catch {
+      toast.error(
+        pageForm.mode === "new" ? "Gagal membuat halaman" : "Gagal mengganti nama halaman"
+      );
+    } finally {
+      setPageFormSaving(false);
+    }
   }
 
   async function handleSetDefault() {
@@ -424,6 +451,11 @@ export function ScadaView() {
 
           <div className="flex-1" />
 
+          {/* Last-updated + manual data refresh, then the alarm bell —
+              visible on every tab */}
+          {!store.editMode && <DataRefresh />}
+          {!store.editMode && <AlarmBell />}
+
           {store.viewMode !== "monitor" ? null : store.editMode ? (
             <>
               {/* Canvas resolution (OBS scene size) */}
@@ -472,6 +504,14 @@ export function ScadaView() {
               >
                 <Plus className="size-3.5" />
                 <span className="hidden sm:inline">Tambah Panel</span>
+              </button>
+              <button
+                onClick={() => setShowComponents(true)}
+                className="btn btn-secondary btn-sm gap-1.5"
+                title="Teks, bentuk, dan komponen data untuk membangun tampilan HMI"
+              >
+                <Shapes className="size-3.5" />
+                <span className="hidden sm:inline">Komponen</span>
               </button>
               <button onClick={handleSave} className="btn btn-primary btn-sm gap-1.5">
                 <Check className="size-3.5" /> Simpan
@@ -832,6 +872,58 @@ export function ScadaView() {
           onAdd={store.addPanel}
           onClose={() => store.setShowAddPanel(false)}
         />
+      )}
+      {showComponents && store.editMode && (
+        <ScadaComponentsDialog onClose={() => setShowComponents(false)} />
+      )}
+      {pageForm && (
+        <Drawer
+          title={pageForm.mode === "new" ? "Halaman Baru" : "Ganti Nama Halaman"}
+          subtitle={
+            pageForm.mode === "new"
+              ? "Halaman kosong baru — langsung masuk mode Atur Layout"
+              : active?.name
+          }
+          icon={<MonitorPlay className="size-5" />}
+          onClose={() => setPageForm(null)}
+          footer={
+            <>
+              <button
+                type="button"
+                onClick={() => setPageForm(null)}
+                className="btn btn-ghost btn-sm"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitPageForm()}
+                disabled={!pageForm.name.trim() || pageFormSaving}
+                className="btn btn-primary btn-sm"
+              >
+                {pageFormSaving && <Loader2 className="size-3.5 animate-spin" />}
+                Simpan
+              </button>
+            </>
+          }
+        >
+          <label className="mb-1.5 block text-[12px] font-semibold text-text-muted">
+            Nama Halaman
+          </label>
+          <input
+            autoFocus
+            className="field-input"
+            placeholder="Mis. Ruang Boiler"
+            value={pageForm.name}
+            maxLength={120}
+            onChange={(e) =>
+              setPageForm((f) => (f ? { ...f, name: e.target.value } : f))
+            }
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void submitPageForm();
+            }}
+          />
+        </Drawer>
       )}
       {store.showManageStreams && (
         <ManageStreamsDialog

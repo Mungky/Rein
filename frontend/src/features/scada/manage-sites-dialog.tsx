@@ -6,8 +6,9 @@
  *  show a placeholder and only send a new value when the field is filled. */
 
 import { useState } from "react";
-import { Loader2, Pencil, Plus, Server, Trash2, X } from "lucide-react";
+import { Loader2, Pencil, Plus, Server, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { Drawer } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
 import type { Site } from "./types";
@@ -124,35 +125,13 @@ export function ManageSitesDialog({
   const editing = editingId === "new" ? null : sites.find((s) => s.id === editingId);
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal-panel max-w-lg flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="px-6 pt-6 pb-4 border-b border-border-soft flex items-start gap-3 shrink-0">
-          <div className="size-10 rounded-[var(--r-lg)] bg-gradient-to-br from-primary to-primary-hover text-white flex items-center justify-center shrink-0">
-            <Server className="size-5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-[16px] font-bold text-text leading-tight">
-              Kelola Site
-            </h2>
-            <p className="text-[12px] text-text-muted mt-0.5">
-              Sumber data MQTT (broker per pabrik/lokasi)
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn btn-ghost btn-icon btn-sm -mr-1 -mt-1"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="px-6 py-5 flex flex-col gap-3 overflow-y-auto">
+    <Drawer
+      title="Kelola Site"
+      subtitle="Sumber data MQTT (broker per pabrik/lokasi)"
+      icon={<Server className="size-5" />}
+      onClose={onClose}
+    >
+        <div className="flex flex-col gap-3">
           {sites.length === 0 && editingId === null && (
             <p className="text-[12px] text-text-muted text-center py-4">
               Belum ada site. Tambahkan broker MQTT pertama.
@@ -320,7 +299,6 @@ export function ManageSitesDialog({
             </button>
           )}
         </div>
-      </div>
-    </div>
+    </Drawer>
   );
 }

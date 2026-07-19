@@ -16,12 +16,20 @@ CONFIG LIVES IN THE DATABASE, NOT HERE
     adding a topic in the UI makes the bridge subscribe within ~30s — no
     restart.
 
-RESOLUTION
-    MQTT is push (messages arrive any time) but the historian stores one row
-    per tag per minute (PK tag_id+ts, ON CONFLICT DO NOTHING). So we buffer the
-    latest value received each minute and flush it minute-aligned. A tag that
-    sends nothing in a given minute produces a gap — exactly what a real
-    sampled historian should show (the UI already flags stale data).
+RESOLUTION — TWO LANES
+    Live lane: every LATEST_FLUSH_S (~1 s) the newest value per tag is UPSERTed
+    into `scada_tag_latest` (one row per tag). That row feeds the browsers'
+    live numbers (Supabase Realtime) and the backend alarm engine — no history
+    rows are created by this lane, however fast a device publishes.
+
+    History lane: each tag has its own storage interval (config
+    `storage_interval_s`, default FLUSH_INTERVAL_S = 60). MQTT is push
+    (messages arrive any time), but we store one row per tag per interval
+    bucket: the latest value received in a bucket is written when the bucket
+    boundary passes, stamped at that boundary (PK tag_id+ts, ON CONFLICT DO
+    NOTHING). A tag that sends nothing in a bucket produces a gap — exactly
+    what a real sampled historian should show (the UI already flags stale
+    data).
 
 RESILIENCE (never crash the box)
     - Broker down / drops     → paho auto-reconnects; on reconnect we
@@ -51,6 +59,7 @@ import os
 import signal
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -77,7 +86,23 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 FLUSH_INTERVAL_S = int(os.getenv("FLUSH_INTERVAL_S", "60"))
 CONFIG_REFRESH_S = int(os.getenv("CONFIG_REFRESH_S", "30"))
 MQTT_KEEPALIVE_S = int(os.getenv("MQTT_KEEPALIVE_S", "60"))
+# Live lane: how often the newest value per tag is UPSERTed into
+# scada_tag_latest. LATEST_ENABLED=0 is the rollback switch (e.g. running this
+# bridge against a DB that predates the scada_tag_latest migration).
+LATEST_FLUSH_S = float(os.getenv("LATEST_FLUSH_S", "1.0"))
+LATEST_ENABLED = os.getenv("LATEST_ENABLED", "1") not in ("0", "false", "False")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# Fastest storage interval a tag may configure (seconds).
+MIN_INTERVAL_S = 5
+
+# Ring mode ("simpan data" NOT ticked): like a CCTV SD card — the tag keeps
+# only its newest RING_KEEP rows in scada_samples, written at 1 s resolution;
+# row #101 in, oldest row out. Ticked tags store per storage_interval_s and
+# are kept 90 days + archived instead.
+RING_INTERVAL_S = 1
+RING_KEEP = int(os.getenv("RING_KEEP", "100"))
+PRUNE_EVERY_S = int(os.getenv("PRUNE_EVERY_S", "60"))
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -102,8 +127,20 @@ class SiteCfg:
     topics: dict[str, str] = field(default_factory=dict)
 
 
-def _aligned_minute() -> datetime:
-    return datetime.now(timezone.utc).replace(second=0, microsecond=0)
+def _parse_interval(config: dict | None) -> tuple[int, bool]:
+    """Per-tag storage plan from config: returns (interval_s, is_ring).
+
+    `store_enabled` truthy → interval mode: one row per `storage_interval_s`
+    (default 60 s), retained long-term. Otherwise → ring mode: one row per
+    second, pruned to the newest RING_KEEP rows (CCTV SD-card behavior)."""
+    cfg = config or {}
+    if not cfg.get("store_enabled"):
+        return RING_INTERVAL_S, True
+    try:
+        interval = int(cfg.get("storage_interval_s"))
+    except (TypeError, ValueError):
+        return FLUSH_INTERVAL_S, False
+    return max(MIN_INTERVAL_S, interval), False
 
 
 def _coerce_value(payload: bytes) -> float | None:
@@ -165,10 +202,22 @@ def _apply_transform(raw: float, xform: Transform) -> float:
 class Bridge:
     def __init__(self, dsn: str) -> None:
         self.dsn = dsn
+        # Random per-process suffix for MQTT client ids (see _make_client)
+        self._instance_id = uuid.uuid4().hex[:6]
         self._lock = threading.Lock()
-        # Values received during the current minute: tag_id -> value. Cleared
-        # on every successful flush so dead sensors produce gaps, not fake data.
+        # History lane: latest value received in the current bucket per tag.
+        # Cleared on every successful store so dead sensors produce gaps, not
+        # fake data.
         self._pending: dict[str, float] = {}
+        # Live lane: newest (ts, value) per tag since the last latest-flush.
+        self._latest_pending: dict[str, tuple[datetime, float]] = {}
+        # tag_id -> storage interval in seconds (from config storage_interval_s)
+        self._interval: dict[str, int] = {}
+        # tag_ids in ring mode (store_enabled off) — pruned to RING_KEEP rows
+        self._ring: set[str] = set()
+        # tag_id -> last bucket index a sample was stored for (or the bucket a
+        # first pending value was "armed" in) — see flush()
+        self._bucket: dict[str, int] = {}
         # site_id -> live paho client
         self._clients: dict[str, mqtt.Client] = {}
         # site_id -> topic -> tag_id (the desired subscription set)
@@ -189,14 +238,19 @@ class Bridge:
             )
         return self._conn
 
-    def load_config(self) -> tuple[dict[str, SiteCfg], dict[str, Transform]]:
+    def load_config(
+        self,
+    ) -> tuple[dict[str, SiteCfg], dict[str, Transform], dict[str, int], set[str]]:
         """Read enabled sites + their enabled MQTT tags from the DB.
 
-        Returns the sites (with their topic→tag_id subscriptions) and a
-        tag_id→transform map used to scale each raw value before storing.
+        Returns the sites (with their topic→tag_id subscriptions), a
+        tag_id→transform map used to scale each raw value before storing, a
+        tag_id→storage-interval map (seconds), and the set of ring-mode tags.
         """
         sites: dict[str, SiteCfg] = {}
         xform: dict[str, Transform] = {}
+        interval: dict[str, int] = {}
+        ring: set[str] = set()
         with self._db().cursor() as cur:
             cur.execute(
                 "SELECT id, mqtt_host, mqtt_port, mqtt_username, mqtt_password "
@@ -217,7 +271,10 @@ class Bridge:
                 if isinstance(topic, str) and topic.strip():
                     site.topics[topic.strip()] = str(tag_id)
                     xform[str(tag_id)] = _parse_transform(config)
-        return sites, xform
+                    interval[str(tag_id)], is_ring = _parse_interval(config)
+                    if is_ring:
+                        ring.add(str(tag_id))
+        return sites, xform, interval, ring
 
     # -- mqtt callbacks (paho v2 signatures) ------------------------------- #
 
@@ -248,13 +305,19 @@ class Bridge:
         value = _apply_transform(raw, self._xform.get(tag_id, (1.0, 0.0, None)))
         with self._lock:
             self._pending[tag_id] = value
+            self._latest_pending[tag_id] = (datetime.now(timezone.utc), value)
 
     # -- client lifecycle -------------------------------------------------- #
 
     def _make_client(self, site: SiteCfg) -> mqtt.Client:
+        # Client id carries a per-PROCESS random suffix. With a fixed id, two
+        # bridge instances (e.g. a forgotten old window + a fresh one) make the
+        # broker kick each other every second — an endless connect/disconnect
+        # ping-pong with data gaps. With unique ids both simply coexist:
+        # duplicate history inserts dedup on the PK (ON CONFLICT DO NOTHING).
         client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
-            client_id=f"rnet-bridge-{site.site_id[:8]}",
+            client_id=f"rnet-bridge-{site.site_id[:8]}-{self._instance_id}",
             userdata=site.site_id,
         )
         if site.username:
@@ -268,7 +331,7 @@ class Bridge:
     def reconcile(self) -> None:
         """Re-read config and align live MQTT clients + subscriptions to it."""
         try:
-            sites, self._xform = self.load_config()
+            sites, self._xform, self._interval, self._ring = self.load_config()
         except Exception:
             log.exception("Gagal membaca konfigurasi dari database")
             return
@@ -318,15 +381,40 @@ class Bridge:
     # -- flush ------------------------------------------------------------- #
 
     def flush(self) -> None:
-        """Write the minute's buffered values into scada_samples."""
-        with self._lock:
-            if not self._pending:
-                return
-            batch = list(self._pending.items())
-            self._pending.clear()
+        """History lane: store buffered values whose interval bucket has passed.
 
-        ts = _aligned_minute()
-        rows = [(tag_id, ts, value) for tag_id, value in batch]
+        Called every ~1 s. For each tag holding a pending value, the sample is
+        written when wall-clock time crosses the tag's next interval boundary,
+        stamped AT that boundary — for 60 s tags this is byte-for-byte the old
+        one-row-per-minute behavior. A value that first appears mid-bucket is
+        "armed" and stored at the next boundary (so ts never lies about when
+        the bucket ended)."""
+        now_epoch = time.time()
+        rows: list[tuple[str, datetime, float]] = []
+        stored: list[str] = []
+        with self._lock:
+            for tag_id, value in self._pending.items():
+                interval = self._interval.get(tag_id, FLUSH_INTERVAL_S)
+                bucket = int(now_epoch // interval)
+                armed = self._bucket.get(tag_id)
+                if armed is None:
+                    # First value for this tag (or after a restart): wait for
+                    # the current bucket to end before storing.
+                    self._bucket[tag_id] = bucket
+                    continue
+                if bucket <= armed:
+                    continue  # boundary not crossed yet
+                ts = datetime.fromtimestamp(bucket * interval, tz=timezone.utc)
+                rows.append((tag_id, ts, value))
+                stored.append(tag_id)
+            for tag_id in stored:
+                self._pending.pop(tag_id, None)
+                self._bucket[tag_id] = int(
+                    now_epoch // self._interval.get(tag_id, FLUSH_INTERVAL_S)
+                )
+
+        if not rows:
+            return
         try:
             with self._db().cursor() as cur:
                 cur.executemany(
@@ -334,13 +422,61 @@ class Bridge:
                     "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
                     rows,
                 )
-            log.info("Flush: %d nilai tersimpan @ %s", len(rows), ts.isoformat())
+            log.info("Flush: %d nilai riwayat tersimpan", len(rows))
         except Exception:
-            # Keep going — put the values back so the next flush retries them
+            # Keep going — put the values back so the next pass retries them
             log.exception("Gagal menyimpan ke database, akan dicoba lagi")
             with self._lock:
-                for tag_id, value in batch:
+                for tag_id, _ts, value in rows:
                     self._pending.setdefault(tag_id, value)
+
+    def prune_ring(self) -> None:
+        """Ring-mode tags keep only their newest RING_KEEP rows — row #101 in,
+        oldest row out (CCTV SD-card model). Runs every PRUNE_EVERY_S."""
+        if not self._ring:
+            return
+        try:
+            with self._db().cursor() as cur:
+                for tag_id in list(self._ring):
+                    cur.execute(
+                        "DELETE FROM scada_samples WHERE tag_id = %s AND ts < ("
+                        "SELECT ts FROM scada_samples WHERE tag_id = %s "
+                        "ORDER BY ts DESC OFFSET %s LIMIT 1)",
+                        (tag_id, tag_id, RING_KEEP - 1),
+                    )
+        except Exception:
+            log.exception("Gagal memangkas data ring, akan dicoba lagi")
+
+    def flush_latest(self) -> None:
+        """Live lane: UPSERT the newest value per tag into scada_tag_latest.
+
+        The ~1 s batching here IS the throttle — however fast a device
+        publishes, at most one row-update per tag per LATEST_FLUSH_S reaches
+        the DB (and Supabase Realtime). Errors are logged and the newest value
+        is kept for the next attempt."""
+        with self._lock:
+            if not self._latest_pending:
+                return
+            batch = list(self._latest_pending.items())
+            self._latest_pending.clear()
+
+        rows = [(tag_id, ts, value) for tag_id, (ts, value) in batch]
+        try:
+            with self._db().cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO scada_tag_latest (tag_id, ts, value) "
+                    "VALUES (%s, %s, %s) "
+                    "ON CONFLICT (tag_id) DO UPDATE "
+                    "SET ts = EXCLUDED.ts, value = EXCLUDED.value, "
+                    "    updated_at = now()",
+                    rows,
+                )
+        except Exception:
+            log.exception("Gagal menyimpan nilai live, akan dicoba lagi")
+            with self._lock:
+                # Don't clobber values that arrived while we were writing
+                for tag_id, pair in batch:
+                    self._latest_pending.setdefault(tag_id, pair)
 
     # -- main loop --------------------------------------------------------- #
 
@@ -349,26 +485,38 @@ class Bridge:
             raise SystemExit("DATABASE_URL belum diisi (lihat .env.example)")
 
         log.info(
-            "R-Net MQTT bridge start — flush tiap %ds, refresh konfig tiap %ds",
+            "R-Net MQTT bridge start — interval per-tag (default %ds), "
+            "live-upsert tiap %.1fs%s, refresh konfig tiap %ds",
             FLUSH_INTERVAL_S,
+            LATEST_FLUSH_S,
+            "" if LATEST_ENABLED else " (NONAKTIF)",
             CONFIG_REFRESH_S,
         )
         self.reconcile()
-        last_flush = last_refresh = time.monotonic()
+        last_latest = last_refresh = last_prune = time.monotonic()
 
         while not self._stop.is_set():
             now = time.monotonic()
             if now - last_refresh >= CONFIG_REFRESH_S:
                 self.reconcile()
                 last_refresh = now
-            if now - last_flush >= FLUSH_INTERVAL_S:
-                self.flush()
-                last_flush = now
+            # History lane: cheap per-tag boundary checks every tick
+            self.flush()
+            if LATEST_ENABLED and now - last_latest >= LATEST_FLUSH_S:
+                self.flush_latest()
+                last_latest = now
+            if now - last_prune >= PRUNE_EVERY_S:
+                self.prune_ring()
+                last_prune = now
             self._stop.wait(1.0)
 
-        # Graceful shutdown: flush what we have, then close everything
+        # Graceful shutdown: push the freshest live values, then close.
+        # Pending history values whose bucket hasn't ended yet are dropped on
+        # purpose — a gap is honest, an early-stamped sample is not.
         log.info("Menghentikan bridge…")
         self.flush()
+        if LATEST_ENABLED:
+            self.flush_latest()
         for site_id in list(self._clients):
             self._teardown_client(site_id)
         if self._conn is not None and not self._conn.closed:

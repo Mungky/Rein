@@ -6,6 +6,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Loader2, Table2 } from "lucide-react";
 import { scadaApi } from "@/lib/api/scada";
+import { useScadaStore } from "../store";
 import type { SummaryItem, Tag, TablePanelConfig } from "../types";
 import { RANGE_LABELS, RANGE_MS } from "./chart-panel";
 import { usePanelRefresh } from "./use-panel-refresh";
@@ -33,10 +34,25 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
 
   usePanelRefresh(load);
 
+  // Live overlay: "Terkini" ticks in realtime from the store; min/rata/maks
+  // stay on the 60 s summary snapshot (they're range aggregates).
+  const liveValues = useScadaStore((s) => s.liveValues);
+
   const unitOf = useMemo(() => {
     const map = new Map(tags.map((t) => [t.id, t.unit]));
     return (item: SummaryItem) => item.unit || map.get(item.tag_id) || "";
   }, [tags]);
+
+  const lastOf = (item: SummaryItem): number | null => {
+    const live = liveValues[item.tag_id];
+    if (
+      live &&
+      (!item.last_ts || new Date(live.ts).getTime() > new Date(item.last_ts).getTime())
+    ) {
+      return live.value;
+    }
+    return item.last;
+  };
 
   if (config.tag_ids.length === 0) {
     return <Center icon>Belum ada tag dipilih untuk tabel ini.</Center>;
@@ -79,7 +95,7 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
                 )}
               </td>
               <td className="px-2 py-1.5 text-right font-semibold tabular-nums text-text">
-                {fmt(item.last)}
+                {fmt(lastOf(item))}
               </td>
               <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
                 {fmt(item.min)}

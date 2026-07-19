@@ -1,21 +1,38 @@
 "use client";
 
-/** Alarm panel — watches a set of tags and flags any whose latest value is
- *  outside its configured alarm band (tag.config.alarm_min / alarm_max, set in
- *  Analisis → Sumber). Breaching tags sort to the top in red; the rest show
- *  Normal. Status always ships icon + text, never color alone. */
+/** Alarm panel — displays the SERVER-side alarm state (scada_alarm_events,
+ *  evaluated 24/7 by the backend engine) for a set of tags. The browser no
+ *  longer computes alarm status itself: open events arrive via the store
+ *  (`activeAlarms`, fed by Realtime + polling), live values via `liveValues`
+ *  (scada_tag_latest) with a getLatest fetch as fallback.
+ *
+ *  Each open event can be acknowledged ("Ack" — saya sudah tahu) by holders
+ *  of scada:ack; who acked and when is stored forever. "Riwayat" opens the
+ *  permanent alarm log. Status always ships icon + text, never color alone. */
 
 import { useCallback, useMemo, useState } from "react";
-import { AlertOctagon, Bell, CheckCircle2, Loader2, MinusCircle } from "lucide-react";
+import {
+  AlertOctagon,
+  Bell,
+  BellOff,
+  CheckCircle2,
+  History,
+  Loader2,
+  MinusCircle,
+  UserCheck,
+} from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
-import type { AlarmPanelConfig, SummaryItem, Tag } from "../types";
-import { RANGE_MS } from "./chart-panel";
+import { useAuthDisplay } from "@/hooks/use-auth";
+import { useCan } from "@/components/providers/permissions-provider";
+import type { AppRole } from "@/lib/utils/roles";
+import { useScadaStore } from "../store";
+import type { AlarmEvent, AlarmPanelConfig, Tag } from "../types";
 import { usePanelRefresh } from "./use-panel-refresh";
+import { AlarmHistoryDialog } from "./alarm-history-dialog";
 
-const STALE_MS = 3 * 60_000;
-
-type Status = "kritis" | "normal" | "nodata" | "notset";
+type Status = "kritis" | "bisu" | "diakui" | "normal" | "nodata" | "notset";
 
 interface Bounds {
   min: number | null;
@@ -31,77 +48,127 @@ function boundsOf(tag: Tag | undefined): Bounds {
   return { min: num(cfg.alarm_min), max: num(cfg.alarm_max) };
 }
 
-function statusOf(last: number | null, b: Bounds): Status {
-  if (last === null) return "nodata";
-  if (b.min === null && b.max === null) return "notset";
-  if ((b.max !== null && last > b.max) || (b.min !== null && last < b.min))
-    return "kritis";
-  return "normal";
-}
-
 const STATUS_UI: Record<
   Status,
   { label: string; icon: typeof CheckCircle2; text: string; row: string }
 > = {
   kritis: { label: "Alarm", icon: AlertOctagon, text: "text-red", row: "bg-red/5" },
+  bisu: { label: "Bisu", icon: BellOff, text: "text-amber", row: "bg-amber/5" },
+  diakui: { label: "Diakui", icon: UserCheck, text: "text-amber", row: "bg-amber/5" },
   normal: { label: "Normal", icon: CheckCircle2, text: "text-green", row: "" },
   nodata: { label: "Tanpa data", icon: MinusCircle, text: "text-text-light", row: "" },
   notset: { label: "Tanpa ambang", icon: MinusCircle, text: "text-text-light", row: "" },
 };
 
-const ORDER: Record<Status, number> = { kritis: 0, nodata: 1, normal: 2, notset: 3 };
+const ORDER: Record<Status, number> = {
+  kritis: 0,
+  bisu: 1,
+  diakui: 2,
+  nodata: 3,
+  normal: 4,
+  notset: 5,
+};
+
+function fmtTime(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleString("id", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: Tag[] }) {
-  const [items, setItems] = useState<SummaryItem[] | null>(null);
-  const [fetchedAt, setFetchedAt] = useState(0);
-  const [error, setError] = useState(false);
+  const { role } = useAuthDisplay();
+  const canAck = useCan(role as AppRole, "scada:ack");
+  const activeAlarms = useScadaStore((s) => s.activeAlarms);
+  const liveValues = useScadaStore((s) => s.liveValues);
+  const setLiveValue = useScadaStore((s) => s.setLiveValue);
+  const refreshActiveAlarms = useScadaStore((s) => s.refreshActiveAlarms);
+  const [showHistory, setShowHistory] = useState(false);
+  const [ackingId, setAckingId] = useState<string | null>(null);
 
+  // Fallback for live values when Realtime is unavailable: fetch the latest
+  // lane on the shared panel cadence.
   const load = useCallback(async () => {
     if (config.tag_ids.length === 0) return;
     try {
-      const end = new Date();
-      const start = new Date(end.getTime() - RANGE_MS[config.range]);
-      const res = await scadaApi.getSummary(config.tag_ids, start, end);
-      setItems(res.items);
-      setFetchedAt(end.getTime());
-      setError(false);
+      const res = await scadaApi.getLatest(config.tag_ids);
+      for (const item of res.items) {
+        setLiveValue(item.tag_id, { value: item.value, ts: item.ts });
+      }
     } catch {
-      setError(true);
+      /* best-effort — Realtime/polling elsewhere keeps things moving */
     }
-  }, [config.tag_ids, config.range]);
+  }, [config.tag_ids, setLiveValue]);
 
   usePanelRefresh(load);
 
   const tagById = useMemo(() => new Map(tags.map((t) => [t.id, t])), [tags]);
 
-  const rows = useMemo(() => {
-    if (!items) return [];
-    return items
-      .map((item) => {
-        const tag = tagById.get(item.tag_id);
-        const bounds = boundsOf(tag);
-        const status = statusOf(item.last, bounds);
-        return { item, tag, bounds, status, unit: item.unit || tag?.unit || "" };
-      })
-      .sort((a, b) => ORDER[a.status] - ORDER[b.status]);
-  }, [items, tagById]);
+  const eventsByTag = useMemo(() => {
+    const map = new Map<string, AlarmEvent[]>();
+    for (const e of activeAlarms) {
+      const list = map.get(e.tag_id);
+      if (list) list.push(e);
+      else map.set(e.tag_id, [e]);
+    }
+    return map;
+  }, [activeAlarms]);
 
-  const alarmCount = rows.filter((r) => r.status === "kritis").length;
+  const rows = useMemo(() => {
+    return config.tag_ids
+      .map((tagId) => {
+        const tag = tagById.get(tagId);
+        const bounds = boundsOf(tag);
+        const live = liveValues[tagId];
+        const events = eventsByTag.get(tagId) ?? [];
+        const valueEvent = events.find((e) => e.kind !== "silent") ?? null;
+        const silentEvent = events.find((e) => e.kind === "silent") ?? null;
+        const primary = valueEvent ?? silentEvent;
+
+        let status: Status;
+        if (primary) {
+          status = primary.ack_at
+            ? "diakui"
+            : primary.kind === "silent"
+              ? "bisu"
+              : "kritis";
+        } else if (bounds.min === null && bounds.max === null) {
+          status = "notset";
+        } else if (!live) {
+          status = "nodata";
+        } else {
+          status = "normal";
+        }
+        return { tagId, tag, bounds, live, event: primary, status };
+      })
+      .filter((r) => r.tag !== undefined || r.event !== null)
+      .sort((a, b) => ORDER[a.status] - ORDER[b.status]);
+  }, [config.tag_ids, tagById, liveValues, eventsByTag]);
+
+  const alarmCount = rows.filter(
+    (r) => r.status === "kritis" || r.status === "bisu"
+  ).length;
+
+  async function ack(event: AlarmEvent) {
+    setAckingId(event.id);
+    try {
+      await scadaApi.ackAlarm(event.id);
+      await refreshActiveAlarms();
+      toast.success("Alarm diakui — tercatat atas nama Anda");
+    } catch {
+      toast.error("Gagal meng-ack alarm");
+    } finally {
+      setAckingId(null);
+    }
+  }
 
   if (config.tag_ids.length === 0) {
     return <Center icon>Belum ada tag dipilih untuk alarm ini.</Center>;
   }
-  if (error && !items) {
-    return <Center>Gagal memuat status — mencoba lagi…</Center>;
-  }
-  if (items === null) {
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-bg">
-        <Loader2 className="size-5 animate-spin text-text-light" />
-      </div>
-    );
-  }
-  if (items.length === 0) {
+  if (rows.length === 0) {
     return <Center>Tag tidak ditemukan (mungkin dinonaktifkan).</Center>;
   }
 
@@ -115,23 +182,30 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
         )}
       >
         <Bell className="size-3.5" />
-        {alarmCount > 0
-          ? `${alarmCount} alarm aktif`
-          : "Semua normal"}
+        <span className="flex-1">
+          {alarmCount > 0 ? `${alarmCount} alarm aktif` : "Semua normal"}
+        </span>
+        <button
+          type="button"
+          onClick={() => setShowHistory(true)}
+          className="inline-flex cursor-pointer items-center gap-1 rounded-[var(--r-sm)] px-1.5 py-0.5 text-[10.5px] font-semibold text-text-muted hover:bg-bg-hover hover:text-text"
+          title="Riwayat alarm"
+        >
+          <History className="size-3" /> Riwayat
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-[12px]">
           <tbody>
-            {rows.map(({ item, bounds, status, unit }) => {
+            {rows.map(({ tagId, tag, bounds, live, event, status }) => {
               const ui = STATUS_UI[status];
               const Icon = ui.icon;
-              const lastTs = item.last_ts ? new Date(item.last_ts) : null;
-              const stale = lastTs !== null && fetchedAt - lastTs.getTime() > STALE_MS;
+              const unit = tag?.unit ?? event?.tag_unit ?? "";
               return (
-                <tr key={item.tag_id} className={cn("border-t border-border-soft", ui.row)}>
+                <tr key={tagId} className={cn("border-t border-border-soft", ui.row)}>
                   <td className="max-w-0 truncate px-3 py-1.5 font-medium text-text">
-                    {item.label}
+                    {tag?.label ?? event?.tag_label ?? "?"}
                     {(bounds.min !== null || bounds.max !== null) && (
                       <span className="ml-1 text-[10px] font-normal text-text-light">
                         {bounds.min !== null ? bounds.min.toLocaleString("id") : "−∞"}
@@ -139,23 +213,49 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
                         {bounds.max !== null ? bounds.max.toLocaleString("id") : "∞"}
                       </span>
                     )}
+                    {status === "diakui" && event?.ack_name && (
+                      <span className="ml-1 block truncate text-[10px] font-normal text-text-light">
+                        oleh {event.ack_name}
+                        {event.ack_at ? ` · ${fmtTime(event.ack_at)}` : ""}
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-1.5 text-right font-semibold tabular-nums text-text">
-                    {item.last === null ? "—" : item.last.toLocaleString("id")}
-                    {unit && item.last !== null && (
+                    {!live ? "—" : live.value.toLocaleString("id")}
+                    {unit && live && (
                       <span className="ml-0.5 text-[10px] font-normal text-text-light">
                         {unit}
                       </span>
                     )}
-                    {stale && (
-                      <span className="ml-1 text-[9.5px] font-normal text-amber">usang</span>
-                    )}
                   </td>
-                  <td className="px-3 py-1.5 text-right">
-                    <span className={cn("inline-flex items-center gap-1 text-[11px] font-semibold", ui.text)}>
+                  <td className="px-2 py-1.5 text-right">
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 text-[11px] font-semibold",
+                        ui.text
+                      )}
+                    >
                       <Icon className="size-3.5" />
                       {ui.label}
                     </span>
+                  </td>
+                  <td className="w-0 px-2 py-1.5 text-right">
+                    {event && !event.ack_at && canAck && (
+                      <button
+                        type="button"
+                        onClick={() => void ack(event)}
+                        disabled={ackingId === event.id}
+                        className="btn btn-secondary btn-sm h-6 gap-1 px-2 text-[10.5px]"
+                        title="Tandai sudah diketahui (acknowledge)"
+                      >
+                        {ackingId === event.id ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <UserCheck className="size-3" />
+                        )}
+                        Ack
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -163,6 +263,10 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
           </tbody>
         </table>
       </div>
+
+      {showHistory && (
+        <AlarmHistoryDialog tags={tags} onClose={() => setShowHistory(false)} />
+      )}
     </div>
   );
 }

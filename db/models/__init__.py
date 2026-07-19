@@ -35,6 +35,10 @@ from .scada import (
     ScadaSheet,
     ScadaTag,
     ScadaSample,
+    ScadaTagLatest,
+    ScadaAlarmEvent,
+    ScadaAlarmSettings,
+    ScadaArchive,
     ScadaWorkbenchColumn,
 )
 
@@ -101,5 +105,9 @@ __all__ = [
     "ScadaSheet",
     "ScadaTag",
     "ScadaSample",
+    "ScadaTagLatest",
+    "ScadaAlarmEvent",
+    "ScadaAlarmSettings",
+    "ScadaArchive",
     "ScadaWorkbenchColumn",
 ]

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
+import { useScadaStore } from "../store";
 import type { GaugePanelConfig, SummaryItem, Tag } from "../types";
 import { usePanelRefresh } from "./use-panel-refresh";
 
@@ -77,6 +78,10 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
 
   usePanelRefresh(load);
 
+  // Live overlay: the store's realtime value (scada_tag_latest) beats the
+  // 60 s summary snapshot whenever it's newer — the big number ticks live.
+  const live = useScadaStore((s) => s.liveValues[config.tag_id]);
+
   const tag = tags.find((t) => t.id === config.tag_id);
   const unit = item?.unit || tag?.unit || "";
   const label = item?.label || tag?.label || "Tag";
@@ -91,17 +96,26 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
       </div>
     );
   }
-  if (item === null) {
+  if (item === null && !live) {
     return <Center>Tag tidak ditemukan (mungkin dinonaktifkan).</Center>;
   }
-  if (item.last === null) {
+
+  const liveNewer =
+    live &&
+    (!item?.last_ts || new Date(live.ts).getTime() > new Date(item.last_ts).getTime());
+  const value = liveNewer ? live!.value : item?.last ?? null;
+  const valueTsIso = liveNewer ? live!.ts : item?.last_ts ?? null;
+
+  if (value === null) {
     return <Center icon>Belum ada data untuk {label}.</Center>;
   }
 
-  const status = statusOf(item.last, config);
+  const status = statusOf(value, config);
   const ui = STATUS_UI[status];
   const StatusIcon = ui.icon;
-  const lastTs = item.last_ts ? new Date(item.last_ts) : null;
+  const lastTs = valueTsIso ? new Date(valueTsIso) : null;
+  // fetchedAt refreshes every 60 s; a live value newer than it yields a
+  // negative delta → never stale. (No Date.now() in render — purity rule.)
   const stale = lastTs !== null && fetchedAt - lastTs.getTime() > STALE_MS;
 
   return (
@@ -112,7 +126,7 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
 
       <div className="flex items-baseline gap-1.5">
         <span className="text-[clamp(24px,12cqh,44px)] font-bold leading-none tabular-nums text-text">
-          {item.last.toLocaleString("id")}
+          {value.toLocaleString("id")}
         </span>
         {unit && <span className="text-[13px] text-text-muted">{unit}</span>}
       </div>
@@ -129,7 +143,7 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
       </span>
 
       <span className={cn("text-[10px]", stale ? "text-amber" : "text-text-light")}>
-        {item.min !== null && item.max !== null && (
+        {item !== null && item.min !== null && item.max !== null && (
           <>
             24 jam: {item.min.toLocaleString("id")}–{item.max.toLocaleString("id")}
             {" · "}

@@ -1,8 +1,12 @@
 "use client";
 
 /** Create/edit form for ONE TV-style channel (halaman Channel).
- *  A channel = number + nickname + one source definition; every field that
- *  used to live in the old "Tambah Panel" popup is configured here instead. */
+ *  A channel = number + nickname + ONE screen source. Per user decision
+ *  (2026-07-19): channels are ONLY for screens — the three ways a screen can
+ *  arrive (Halaman Web / Video Stream / VNC mirror) are configured in
+ *  "Kelola Screen", so the old "Jenis Sumber" picker and the data-panel kinds
+ *  (chart/gauge/…) are gone from this form. Data visuals live on the Monitor
+ *  wall via the Data tab instead. */
 
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -11,7 +15,6 @@ import {
   Bell,
   Gauge,
   Globe,
-  Loader2,
   MonitorPlay,
   ScreenShare,
   Table2,
@@ -20,17 +23,13 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
-import { RANGE_LABELS } from "./panels/chart-panel";
 import type {
   Channel,
   ChannelKind,
-  ChartRange,
   CropRect,
-  GaugePanelConfig,
   ScreenChannelConfig,
   SourceType,
   Stream,
-  Tag,
 } from "./types";
 import { CropEditor } from "./crop-editor";
 
@@ -63,43 +62,23 @@ export function channelKindLabel(kind: ChannelKind): string {
   return CHANNEL_KINDS.find((k) => k.kind === kind)?.label ?? kind;
 }
 
-const TAG_LIMITS: Record<"chart" | "table" | "bar" | "alarm", { min: number; max: number }> = {
-  chart: { min: 1, max: 4 },
-  table: { min: 1, max: 8 },
-  bar: { min: 2, max: 8 },
-  alarm: { min: 1, max: 8 },
-};
-
-/** Common screen resolutions — a channel IS a screen ("resolusi layar"). */
-const SCREEN_PRESETS = [
-  { label: "HD", w: 1280, h: 720 },
-  { label: "FHD", w: 1920, h: 1080 },
-  { label: "2K", w: 2560, h: 1440 },
-  { label: "4K", w: 3840, h: 2160 },
-] as const;
-
 export function ChannelForm({
   initial,
   channels,
   streams,
-  tags,
   onSaved,
-  onCancel,
   onDraftChange,
 }: {
   /** Existing channel when editing; null when creating. */
   initial: Channel | null;
   channels: Channel[];
   streams: Stream[];
-  tags: Tag[];
   onSaved: () => Promise<void>;
-  onCancel: () => void;
   /** Live draft — fired on every field change so the preview above updates
    *  immediately (WYSIWYG editing). */
   onDraftChange?: (draft: Channel) => void;
 }) {
   const enabledStreams = streams.filter((s) => s.enabled);
-  const enabledTags = tags.filter((t) => t.enabled);
 
   const nextFreeNumber = useMemo(() => {
     const used = new Set(channels.map((c) => c.number));
@@ -111,7 +90,9 @@ export function ChannelForm({
   const init = initial;
   const [number, setNumber] = useState<number>(init?.number ?? nextFreeNumber);
   const [name, setName] = useState(init?.name ?? "");
-  const [kind, setKind] = useState<ChannelKind>(init?.kind ?? "screen");
+  // Channels are screens, period — editing an old data-kind channel converts
+  // it to a screen on save.
+  const kind: ChannelKind = "screen";
   const [enabled, setEnabled] = useState(init?.enabled ?? true);
   const [saving, setSaving] = useState(false);
 
@@ -126,39 +107,15 @@ export function ChannelForm({
   const [srcW, setSrcW] = useState<number | null>(screenCfg?.src_w ?? null);
   const [srcH, setSrcH] = useState<number | null>(screenCfg?.src_h ?? null);
 
-  // "Resolusi Layar" — universal: every channel is a screen (any kind)
+  // Screen resolution kept internally (CropEditor needs it for web sources);
+  // no longer user-editable — the default 1920×1080 covers the real cases.
   const initScreen = init?.config as
     | { view_w?: number | null; view_h?: number | null }
     | undefined;
-  const [viewW, setViewW] = useState<number>(initScreen?.view_w ?? 1920);
-  const [viewH, setViewH] = useState<number>(initScreen?.view_h ?? 1080);
-
-  const dataCfg =
-    init && ["chart", "table", "bar", "alarm"].includes(init.kind)
-      ? (init.config as { tag_ids: string[]; range: ChartRange })
-      : null;
-  const [tagIds, setTagIds] = useState<string[]>(dataCfg?.tag_ids ?? []);
-  const [range, setRange] = useState<ChartRange>(dataCfg?.range ?? "24h");
-
-  const gaugeCfg = init?.kind === "gauge" ? (init.config as GaugePanelConfig) : null;
-  const [gaugeTagId, setGaugeTagId] = useState(
-    gaugeCfg?.tag_id ?? enabledTags[0]?.id ?? ""
-  );
-  const [warning, setWarning] = useState(
-    gaugeCfg?.warning != null ? String(gaugeCfg.warning) : ""
-  );
-  const [critical, setCritical] = useState(
-    gaugeCfg?.critical != null ? String(gaugeCfg.critical) : ""
-  );
-  const [direction, setDirection] = useState<"above" | "below">(
-    gaugeCfg?.direction ?? "above"
-  );
+  const viewW = initScreen?.view_w ?? 1920;
+  const viewH = initScreen?.view_h ?? 1080;
 
   const selectedStream = enabledStreams.find((s) => s.id === streamId);
-
-  const isTagKind =
-    kind === "chart" || kind === "table" || kind === "bar" || kind === "alarm";
-  const limits = isTagKind ? TAG_LIMITS[kind] : null;
 
   // Reset the crop when the chosen source changes — a crop drawn against one
   // source's resolution is meaningless on another.
@@ -169,74 +126,25 @@ export function ChannelForm({
     setSrcH(null);
   }
 
-  function toggleTag(id: string) {
-    setTagIds((prev) =>
-      prev.includes(id)
-        ? prev.filter((t) => t !== id)
-        : limits && prev.length >= limits.max
-          ? prev
-          : [...prev, id]
-    );
-  }
-
   const numberTaken = channels.some(
     (c) => c.number === number && c.id !== init?.id
   );
-  const canSubmit =
-    !numberTaken &&
-    number >= 1 &&
-    name.trim() !== "" &&
-    (kind === "screen"
-      ? streamId !== ""
-      : kind === "gauge"
-        ? gaugeTagId !== ""
-        : kind === "activity"
-          ? true
-          : limits !== null && tagIds.length >= limits.min);
+  const canSubmit = !numberTaken && number >= 1 && name.trim() !== "" && streamId !== "";
 
   function buildConfig(): Record<string, unknown> {
-    // Every channel is a screen — resolution rides along on all kinds.
-    const screen = {
+    return {
       view_w: Math.min(7680, Math.max(320, viewW || 1920)),
       view_h: Math.min(4320, Math.max(180, viewH || 1080)),
+      stream_id: streamId,
+      crop,
+      src_w: srcW,
+      src_h: srcH,
     };
-    switch (kind) {
-      case "screen":
-        return {
-          ...screen,
-          stream_id: streamId,
-          crop,
-          src_w: srcW,
-          src_h: srcH,
-        };
-      case "gauge":
-        return {
-          ...screen,
-          tag_id: gaugeTagId,
-          warning: warning.trim() === "" ? null : Number(warning),
-          critical: critical.trim() === "" ? null : Number(critical),
-          direction,
-        };
-      case "activity":
-        return { ...screen };
-      case "chart":
-        return {
-          ...screen,
-          tag_ids: tagIds,
-          range,
-          show_minmax: tagIds.length === 1,
-        };
-      case "bar":
-        return { ...screen, tag_ids: tagIds, range, metric: "avg" };
-      default: // table, alarm
-        return { ...screen, tag_ids: tagIds, range };
-    }
   }
 
   // Live draft → the preview above updates as you type (WYSIWYG)
   const draftKey = JSON.stringify([
-    number, name, kind, enabled, streamId, crop, srcW, srcH,
-    viewW, viewH, tagIds, range, gaugeTagId, warning, critical, direction,
+    number, name, enabled, streamId, crop, srcW, srcH,
   ]);
   useEffect(() => {
     onDraftChange?.({
@@ -286,13 +194,10 @@ export function ChannelForm({
 
   return (
     <form
+      id="channel-form-drawer"
       onSubmit={submit}
-      className="flex flex-col gap-3 rounded-[var(--r-lg)] border border-primary/40 bg-primary/5 p-4"
+      className="flex flex-col gap-3"
     >
-      <div className="text-[13px] font-bold text-text">
-        {init ? `Ubah Channel ${init.number}` : "Channel Baru"}
-      </div>
-
       <div className="grid grid-cols-[110px_1fr] gap-3">
         <div>
           <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
@@ -325,35 +230,9 @@ export function ChannelForm({
         </div>
       </div>
 
-      <div>
-        <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-          Jenis Sumber
-        </label>
-        <div className="grid grid-cols-4 gap-1.5">
-          {CHANNEL_KINDS.map(({ kind: k, label, icon: Icon }) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setKind(k)}
-              className={cn(
-                "flex flex-col items-center gap-1 rounded-[var(--r)] border px-1.5 py-2",
-                kind === k
-                  ? "border-primary bg-primary/5 text-text"
-                  : "border-border-soft bg-bg text-text-muted cursor-pointer hover:border-border"
-              )}
-            >
-              <Icon className="size-4" />
-              <span className="text-center text-[10.5px] font-semibold leading-tight">
-                {label}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* ── Screen source: pick a Source (web / stream / vnc) + crop ── */}
 
-      {/* ── Screen source: pick a Source (any type) + crop ── */}
-
-      {kind === "screen" && (
+      {(
         <>
           <div>
             <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
@@ -407,210 +286,6 @@ export function ChannelForm({
         </>
       )}
 
-      {/* Resolusi Layar — universal: channel = monitor dengan resolusi tetap */}
-      <div className="rounded-[var(--r)] border border-border-soft bg-bg p-3">
-        <div className="text-[12px] font-semibold text-text mb-0.5">
-          Resolusi Layar
-        </div>
-        <p className="text-[11px] text-text-light mb-2.5">
-          Seperti resolusi source di OBS: channel ini adalah &ldquo;layar&rdquo;
-          dengan bentuk tetap. Di Monitor dia hanya diperbesar/diperkecil utuh —
-          tidak pernah gepeng. Fullscreen milik situs web juga hanya mengisi
-          layar ini.
-        </p>
-        <div className="mb-2 flex gap-1.5">
-          {SCREEN_PRESETS.map((p) => (
-            <button
-              key={p.label}
-              type="button"
-              onClick={() => {
-                setViewW(p.w);
-                setViewH(p.h);
-              }}
-              className={cn(
-                "flex-1 rounded-[var(--r)] border px-1 py-1.5 text-[11px] font-semibold",
-                viewW === p.w && viewH === p.h
-                  ? "border-primary bg-primary/5 text-text"
-                  : "border-border-soft text-text-muted cursor-pointer hover:border-border"
-              )}
-            >
-              {p.label}
-              <span className="block text-[9.5px] font-normal text-text-light">
-                {p.w}×{p.h}
-              </span>
-            </button>
-          ))}
-        </div>
-        <div className="grid grid-cols-2 gap-2.5">
-          <div>
-            <label className="text-[11px] font-semibold text-text-muted mb-1 block">
-              Lebar (px)
-            </label>
-            <input
-              type="number"
-              min={320}
-              max={7680}
-              className="field-input"
-              value={viewW}
-              onChange={(e) => setViewW(Number(e.target.value) || 1920)}
-            />
-          </div>
-          <div>
-            <label className="text-[11px] font-semibold text-text-muted mb-1 block">
-              Tinggi (px)
-            </label>
-            <input
-              type="number"
-              min={180}
-              max={4320}
-              className="field-input"
-              value={viewH}
-              onChange={(e) => setViewH(Number(e.target.value) || 1080)}
-            />
-          </div>
-        </div>
-      </div>
-
-      {isTagKind && (
-        <>
-          <div>
-            <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-              Tag Sensor (
-              {kind === "bar" ? `2–${limits!.max}` : `maks. ${limits!.max}`})
-              <span className="text-red"> *</span>
-            </label>
-            {enabledTags.length === 0 ? (
-              <p className="text-[11.5px] text-text-muted">
-                Belum ada tag — tambahkan lewat tab Data.
-              </p>
-            ) : (
-              <div className="flex max-h-40 flex-col gap-1 overflow-y-auto rounded-[var(--r)] border border-border-soft bg-bg p-1.5">
-                {enabledTags.map((t) => {
-                  const checked = tagIds.includes(t.id);
-                  const full = !checked && limits !== null && tagIds.length >= limits.max;
-                  return (
-                    <label
-                      key={t.id}
-                      className={cn(
-                        "flex cursor-pointer items-center gap-2 rounded-[var(--r-sm)] px-2 py-1.5 text-[12.5px]",
-                        checked
-                          ? "bg-primary/5 text-text"
-                          : full
-                            ? "cursor-not-allowed text-text-light"
-                            : "text-text-muted hover:bg-bg-hover"
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={full}
-                        onChange={() => toggleTag(t.id)}
-                        className="accent-[var(--rein-primary)]"
-                      />
-                      <span className="min-w-0 flex-1 truncate">
-                        {t.label}
-                        {t.unit ? ` (${t.unit})` : ""}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-          <div>
-            <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-              Rentang Waktu
-            </label>
-            <select
-              className="field-select cursor-pointer"
-              value={range}
-              onChange={(e) => setRange(e.target.value as ChartRange)}
-            >
-              {(Object.keys(RANGE_LABELS) as ChartRange[]).map((r) => (
-                <option key={r} value={r}>
-                  {RANGE_LABELS[r]} terakhir
-                </option>
-              ))}
-            </select>
-          </div>
-        </>
-      )}
-
-      {kind === "gauge" && (
-        <>
-          <div>
-            <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-              Tag Sensor <span className="text-red">*</span>
-            </label>
-            {enabledTags.length === 0 ? (
-              <p className="text-[11.5px] text-text-muted">
-                Belum ada tag — tambahkan lewat tab Data.
-              </p>
-            ) : (
-              <select
-                className="field-select cursor-pointer"
-                value={gaugeTagId}
-                onChange={(e) => setGaugeTagId(e.target.value)}
-              >
-                {enabledTags.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label}
-                    {t.unit ? ` (${t.unit})` : ""}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                Ambang Waspada
-              </label>
-              <input
-                type="number"
-                step="any"
-                className="field-input"
-                placeholder="Kosong = tanpa"
-                value={warning}
-                onChange={(e) => setWarning(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                Ambang Kritis
-              </label>
-              <input
-                type="number"
-                step="any"
-                className="field-input"
-                placeholder="Kosong = tanpa"
-                value={critical}
-                onChange={(e) => setCritical(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                Arah Bahaya
-              </label>
-              <select
-                className="field-select cursor-pointer"
-                value={direction}
-                onChange={(e) => setDirection(e.target.value as "above" | "below")}
-              >
-                <option value="above">Terlalu tinggi</option>
-                <option value="below">Terlalu rendah</option>
-              </select>
-            </div>
-          </div>
-        </>
-      )}
-
-      {kind === "activity" && (
-        <p className="text-[11.5px] text-text-light rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2">
-          Menampilkan siapa yang sedang membuka REIN & sudah berapa lama —
-          tanpa pengaturan tambahan.
-        </p>
-      )}
 
       <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-text-muted">
         <input
@@ -620,20 +295,11 @@ export function ChannelForm({
         />
         Channel aktif
       </label>
-
-      <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="btn btn-ghost btn-sm">
-          Batal
-        </button>
-        <button
-          type="submit"
-          disabled={!canSubmit || saving}
-          className="btn btn-primary btn-sm"
-        >
-          {saving && <Loader2 className="size-3.5 animate-spin" />}
-          Simpan
-        </button>
-      </div>
+      {saving && (
+        <p className="text-[11.5px] text-text-muted">Menyimpan…</p>
+      )}
+      {/* Tombol Simpan/Batal hidup di footer drawer (channels-view) —
+          disambungkan lewat atribut form="channel-form-drawer". */}
     </form>
   );
 }

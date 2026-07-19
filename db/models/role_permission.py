@@ -67,6 +67,7 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     "scada:view",                # open /scada, watch streams
     "scada:edit_layout",         # arrange & save own perspectives
     "scada:manage",              # manage stream sources (URL, credentials)
+    "scada:ack",                 # acknowledge alarms ("saya sudah tahu")
 )
 
 
@@ -92,6 +93,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "scada:view": "Lihat R-Net",
     "scada:edit_layout": "Atur Layout R-Net",
     "scada:manage": "Kelola Stream R-Net",
+    "scada:ack": "Ack Alarm R-Net",
 }
 
 
@@ -107,7 +109,7 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:manage_clients", "dcc:chat",
         "workspace:view", "workspace:manage",
-        "scada:view", "scada:edit_layout",
+        "scada:view", "scada:edit_layout", "scada:ack",
     ),
     AppRole.finance: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
@@ -122,15 +124,15 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
     ),
     AppRole.engineer_mechanical: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-        "workspace:view", "workspace:complete_task", "scada:view",
+        "workspace:view", "workspace:complete_task", "scada:view", "scada:ack",
     ),
     AppRole.engineer_process: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-        "workspace:view", "workspace:complete_task", "scada:view",
+        "workspace:view", "workspace:complete_task", "scada:view", "scada:ack",
     ),
     AppRole.engineer_electrical: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
-        "workspace:view", "workspace:complete_task", "scada:view",
+        "workspace:view", "workspace:complete_task", "scada:view", "scada:ack",
     ),
     AppRole.purchasing: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search", "dcc:chat",
@@ -139,6 +141,6 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
     AppRole.operational_manager: (
         "dashboard:view", "dcc:view", "dcc:upload", "dcc:search",
         "dcc:approve", "dcc:chat", "workspace:view", "workspace:manage",
-        "scada:view", "scada:edit_layout",
+        "scada:view", "scada:edit_layout", "scada:ack",
     ),
 }

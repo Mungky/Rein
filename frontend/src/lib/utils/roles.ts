@@ -45,7 +45,8 @@ export type Permission =
   | "workspace:close_project"
   | "scada:view"
   | "scada:edit_layout"
-  | "scada:manage";
+  | "scada:manage"
+  | "scada:ack";
 
 export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "Administrator",

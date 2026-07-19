@@ -36,9 +36,10 @@ from app.routers import (
     workspace,
     library,
     scada,
+    scada_alarms,
 )
 from app.services.task_queue import task_queue, TaskType
-from app.services import historian
+from app.services import alarm_engine, archiver, historian
 
 logger = logging.getLogger(__name__)
 
@@ -108,13 +109,34 @@ async def lifespan(app: FastAPI):
     historian_task = (
         asyncio.create_task(historian.historian_loop()) if historian.ENABLED else None
     )
+    # The historian live lane only serves simulator tags — skip it entirely
+    # when the simulator is off (mqtt tags get live values from the bridge).
+    latest_task = (
+        asyncio.create_task(historian.latest_loop())
+        if historian.ENABLED and historian.SIM_ENABLED
+        else None
+    )
+    alarm_task = (
+        asyncio.create_task(alarm_engine.alarm_loop()) if alarm_engine.ENABLED else None
+    )
+    archiver_task = (
+        asyncio.create_task(archiver.archiver_loop()) if archiver.ENABLED else None
+    )
     logger.info("REIN API started — task queue active, cleanup every %ds", CLEANUP_INTERVAL)
     if historian_task is None:
         logger.warning("Historian sampler DISABLED via HISTORIAN_ENABLED")
+    if alarm_task is None:
+        logger.warning("Alarm engine DISABLED via ALARM_ENGINE_ENABLED")
     yield
     cleanup_task.cancel()
     if historian_task:
         historian_task.cancel()
+    if latest_task:
+        latest_task.cancel()
+    if alarm_task:
+        alarm_task.cancel()
+    if archiver_task:
+        archiver_task.cancel()
     await task_queue.stop()
     logger.info("REIN API shutting down")
 
@@ -193,3 +215,4 @@ app.include_router(dcc_activity.router, prefix="/api/dcc/activity", tags=["dcc"]
 app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
 app.include_router(scada.router, prefix="/api/scada", tags=["scada"])
+app.include_router(scada_alarms.router, prefix="/api/scada", tags=["scada"])

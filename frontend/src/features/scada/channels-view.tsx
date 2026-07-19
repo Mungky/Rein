@@ -20,6 +20,7 @@ import {
   Tv,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Drawer } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
 import { useScadaStore } from "./store";
@@ -95,6 +96,11 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
 
   async function onSaved() {
     await store.refreshChannels();
+    setEditingId(null);
+    setDraft(null);
+  }
+
+  function closeForm() {
     setEditingId(null);
     setDraft(null);
   }
@@ -186,21 +192,7 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
                     <KindIcon className="size-3 shrink-0 text-text-light" />
                     {canManage && (
                       <>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedId(c.id);
-                            setEditingId(editingId === c.id ? null : c.id);
-                          }}
-                          className={cn(
-                            "hidden size-6 shrink-0 items-center justify-center rounded-[var(--r-xs)] text-text-light hover:bg-bg-hover hover:text-text group-hover:flex",
-                            editingId === c.id && "flex text-primary"
-                          )}
-                          title="Ubah"
-                        >
-                          <Pencil className="size-3" />
-                        </button>
+                        {/* "Ubah" hidup di panel preview — daftar cukup hapus */}
                         <button
                           type="button"
                           onClick={(e) => {
@@ -296,37 +288,42 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
               </div>
             ) : null}
 
-            {/* Form — BELOW the preview so changes are visible immediately */}
-            {editingId === "new" ? (
-              <ChannelForm
-                initial={null}
-                channels={store.channels}
-                streams={store.streams}
-                tags={store.tags}
-                onSaved={onSaved}
-                onCancel={() => {
-                  setEditingId(null);
-                  setDraft(null);
-                }}
-                onDraftChange={setDraft}
-              />
-            ) : editingChannel ? (
-              <ChannelForm
-                initial={editingChannel}
-                channels={store.channels}
-                streams={store.streams}
-                tags={store.tags}
-                onSaved={onSaved}
-                onCancel={() => {
-                  setEditingId(null);
-                  setDraft(null);
-                }}
-                onDraftChange={setDraft}
-              />
-            ) : null}
           </div>
         </div>
       </section>
+
+      {/* Form tambah/ubah channel — drawer dari kanan; preview di belakang
+          tetap live (WYSIWYG) walau latar digelapkan */}
+      {(editingId === "new" || editingChannel) && (
+        <Drawer
+          title={editingId === "new" ? "Channel Baru" : `Ubah Channel ${editingChannel?.number}`}
+          subtitle="Channel = layar dari komputer (web / stream / mirror VNC)"
+          icon={<Tv className="size-5" />}
+          onClose={closeForm}
+          footer={
+            <>
+              <button type="button" onClick={closeForm} className="btn btn-ghost btn-sm">
+                Batal
+              </button>
+              <button
+                type="submit"
+                form="channel-form-drawer"
+                className="btn btn-primary btn-sm"
+              >
+                Simpan
+              </button>
+            </>
+          }
+        >
+          <ChannelForm
+            initial={editingId === "new" ? null : editingChannel}
+            channels={store.channels}
+            streams={store.streams}
+            onSaved={onSaved}
+            onDraftChange={setDraft}
+          />
+        </Drawer>
+      )}
 
       {/* ── 3. Sources ── */}
       <section className="flex min-h-0 shrink-0 flex-col bg-bg lg:w-[300px] lg:border-l lg:border-border-soft">

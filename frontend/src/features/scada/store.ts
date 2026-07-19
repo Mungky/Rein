@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import { scadaApi } from "@/lib/api/scada";
 import type {
+  AlarmEvent,
   CanvasSize,
   Channel,
   Panel,
@@ -51,6 +52,18 @@ interface ScadaState {
   workbenchColumns: WorkbenchColumn[];
   /** tag_id → freshest sample, fed by the Supabase Realtime hook */
   liveValues: Record<string, LiveValue>;
+  /** tag_id → rolling buffer of live points accumulated THIS session (max
+   *  100), so sparklines/data lists tick in realtime between refetches. */
+  liveBuffers: Record<string, LiveValue[]>;
+  /** Open alarm events from the server-side engine (cleared_at null), fed by
+   *  use-alarm-events (Realtime + polling fallback). */
+  activeAlarms: AlarmEvent[];
+  /** Epoch ms of the last time fresh DATA arrived (live value / alarm /
+   *  manual refresh) — shown as "Diperbarui HH:MM" next to the bell. */
+  dataUpdatedAt: number | null;
+  /** Bumped by the manual refresh button; data consumers (recent-sample
+   *  loaders) re-fetch when it changes. */
+  dataRefreshNonce: number;
   /** Bumped by "Segarkan Stream" to force every VideoPanel to tear down and
    *  reconnect — needed after start-scada rotates the tunnel URL, even if a
    *  stream's hls_url string happens to be unchanged. */
@@ -120,6 +133,11 @@ interface ScadaState {
   setViewMode: (v: "monitor" | "channels" | "analysis") => void;
   setMaximizedPanel: (id: string | null) => void;
   setLiveValue: (tagId: string, value: LiveValue) => void;
+  setActiveAlarms: (events: AlarmEvent[]) => void;
+  refreshActiveAlarms: () => Promise<void>;
+  /** Manual data refresh (the button next to the bell): re-pulls tags,
+   *  latest values, and active alarms — data only, layout untouched. */
+  refreshData: () => Promise<void>;
   /** Append a panel to the active perspective and persist immediately —
    *  used by the Analisis action bar ("Buat Grafik/Gauge/Bar"). */
   addPanelToActive: (panel: Panel) => Promise<void>;
@@ -169,6 +187,10 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   activeSheetId: null,
   workbenchColumns: [],
   liveValues: {},
+  liveBuffers: {},
+  activeAlarms: [],
+  dataUpdatedAt: null,
+  dataRefreshNonce: 0,
   streamReconnectNonce: 0,
   publishedExists: false,
 
@@ -517,8 +539,58 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
 
   setMaximizedPanel: (id) => set({ maximizedPanelId: id }),
 
-  setLiveValue: (tagId, value) =>
-    set({ liveValues: { ...get().liveValues, [tagId]: value } }),
+  setLiveValue: (tagId, value) => {
+    const prev = get().dataUpdatedAt;
+    const now = Date.now();
+    // Append to the session buffer (skip exact-duplicate timestamps), cap 100
+    const buffers = get().liveBuffers;
+    const buf = buffers[tagId] ?? [];
+    const isDup = buf.length > 0 && buf[buf.length - 1].ts === value.ts;
+    set({
+      liveValues: { ...get().liveValues, [tagId]: value },
+      liveBuffers: isDup
+        ? buffers
+        : { ...buffers, [tagId]: [...buf, value].slice(-100) },
+      // Throttled so a burst of realtime events doesn't thrash the toolbar
+      dataUpdatedAt: prev === null || now - prev > 1000 ? now : prev,
+    });
+  },
+
+  setActiveAlarms: (events) => set({ activeAlarms: events }),
+
+  refreshActiveAlarms: async () => {
+    try {
+      const res = await scadaApi.listActiveAlarms();
+      set({ activeAlarms: res.items });
+    } catch {
+      /* best-effort — polling/Realtime will retry */
+    }
+  },
+
+  refreshData: async () => {
+    const { refreshTags, refreshActiveAlarms } = get();
+    await Promise.all([refreshTags(), refreshActiveAlarms()]);
+    // Re-seed latest values so quiet sensors update their "last known" too
+    try {
+      const ids = get()
+        .tags.map((t) => t.id)
+        .slice(0, 100);
+      if (ids.length > 0) {
+        const res = await scadaApi.getLatest(ids);
+        const liveValues = { ...get().liveValues };
+        for (const item of res.items) {
+          liveValues[item.tag_id] = { value: item.value, ts: item.ts };
+        }
+        set({ liveValues });
+      }
+    } catch {
+      /* best-effort */
+    }
+    set({
+      dataRefreshNonce: get().dataRefreshNonce + 1,
+      dataUpdatedAt: Date.now(),
+    });
+  },
 
   addPanelToActive: async (panel) => {
     const { activePerspectiveId, perspectives } = get();

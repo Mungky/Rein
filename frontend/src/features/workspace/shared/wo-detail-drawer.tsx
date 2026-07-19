@@ -190,7 +190,7 @@ export function WoDetailDrawer({
 
   if (loading || !task) {
     return (
-      <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
         <div className="surface w-full max-w-2xl mx-4 p-12 flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
           <Loader2 className="size-6 animate-spin text-primary" />
         </div>

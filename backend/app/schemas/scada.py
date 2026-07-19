@@ -242,6 +242,54 @@ class ChannelPanel(BaseModel):
     config: ChannelPanelConfig
 
 
+# ── SCADA HMI decor components (Tahap awal "SCADA beneran") ────────────────
+# Static drawing elements for the Monitor canvas: custom text labels and
+# basic shapes (kotak / lingkaran / garis). Pure decoration — no data source.
+
+HEX_COLOR = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+
+
+class TextPanelConfig(BaseModel):
+    # Plain text ONLY — rendered as text content, never HTML.
+    model_config = {"extra": "forbid"}
+    content: str = Field(min_length=1, max_length=500)
+    # Font size in CANVAS pixels (the whole canvas scales uniformly)
+    size: int = Field(default=24, ge=8, le=240)
+    # None = follow theme text color
+    color: str | None = Field(default=None, pattern=HEX_COLOR)
+    align: Literal["left", "center", "right"] = "center"
+    bold: bool = True
+
+
+class TextPanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["text"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
+    config: TextPanelConfig
+
+
+class ShapePanelConfig(BaseModel):
+    model_config = {"extra": "forbid"}
+    shape: Literal["rect", "circle", "line"] = "rect"
+    # None = transparent fill / no border
+    fill: str | None = Field(default=None, pattern=HEX_COLOR)
+    stroke: str | None = Field(default=None, pattern=HEX_COLOR)
+    stroke_w: int = Field(default=2, ge=0, le=40)
+    # Corner rounding for "rect" (canvas px)
+    radius: int = Field(default=8, ge=0, le=200)
+
+
+class ShapePanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["shape"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
+    config: ShapePanelConfig
+
+
 Panel = Annotated[
     Union[
         VideoPanel,
@@ -254,6 +302,8 @@ Panel = Annotated[
         ActivityPanel,
         WebPanel,
         ChannelPanel,
+        TextPanel,
+        ShapePanel,
     ],
     Field(discriminator="type"),
 ]
@@ -497,6 +547,7 @@ class TagCreateRequest(BaseModel):
                 raise ValueError("Tag MQTT harus punya site")
             if not str(self.config.get("mqtt_topic", "")).strip():
                 raise ValueError("Tag MQTT harus punya topic")
+        validate_storage_interval(self.source, self.config)
         return self
 
 
@@ -726,3 +777,101 @@ class WorkbenchColumnListOut(BaseModel):
 
 class DeletedOut(BaseModel):
     deleted: str
+
+
+# ---------------------------------------------------------------------------
+# Alarms (server-side engine — see app/services/alarm_engine.py)
+# ---------------------------------------------------------------------------
+
+AlarmKind = Literal["high", "low", "silent"]
+
+
+class AlarmEventOut(BaseModel):
+    id: str
+    tag_id: str
+    tag_label: str
+    tag_unit: str
+    kind: str
+    triggered_at: str
+    trigger_value: float | None
+    threshold: float | None
+    cleared_at: str | None
+    ack_at: str | None
+    ack_name: str | None
+
+
+class AlarmActiveOut(BaseModel):
+    items: list[AlarmEventOut]
+
+
+class AlarmHistoryOut(BaseModel):
+    items: list[AlarmEventOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class AlarmSettingsOut(BaseModel):
+    email_enabled: bool
+    email_recipients: str
+    telegram_enabled: bool
+    telegram_chat_id: str
+    cooldown_min: int
+    sound_enabled: bool
+    # Whether TELEGRAM_BOT_TOKEN is configured in the backend env (the token
+    # itself is never exposed) — lets the UI hint that Telegram can't work yet.
+    telegram_token_set: bool
+
+
+class AlarmSettingsUpdateRequest(BaseModel):
+    email_enabled: bool | None = None
+    email_recipients: str | None = Field(default=None, max_length=1000)
+    telegram_enabled: bool | None = None
+    telegram_chat_id: str | None = Field(default=None, max_length=64)
+    cooldown_min: int | None = Field(default=None, ge=0, le=1440)
+    sound_enabled: bool | None = None
+
+
+class ArchiveOut(BaseModel):
+    month: str  # first day of the archived month, e.g. "2026-04-01"
+    file_name: str
+    web_link: str | None
+    row_count: int
+    created_at: str | None
+
+
+class ArchiveListOut(BaseModel):
+    items: list[ArchiveOut]
+
+
+class LatestItemOut(BaseModel):
+    tag_id: str
+    ts: str
+    value: float
+
+
+class LatestOut(BaseModel):
+    items: list[LatestItemOut]
+
+
+# Storage-interval choices offered by the UI (SourceDialog): 5 s … 24 h.
+ALLOWED_STORAGE_INTERVALS = {5, 10, 30, 60, 300, 900, 3600, 21600, 86400}
+
+
+def validate_storage_interval(source: str, config: dict | None) -> None:
+    """Shared by TagCreateRequest and the PATCH /tags router (which must
+    validate the MERGED source+config). Raises ValueError in Bahasa Indonesia
+    like the other tag validators."""
+    raw = (config or {}).get("storage_interval_s")
+    if raw is None:
+        return
+    try:
+        interval = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("Interval penyimpanan tidak valid")
+    if interval not in ALLOWED_STORAGE_INTERVALS:
+        raise ValueError("Interval penyimpanan tidak termasuk pilihan yang diizinkan")
+    if source == "simulator" and interval < 60:
+        raise ValueError(
+            "Interval di bawah 1 menit hanya untuk tag MQTT (simulator berjalan per menit)"
+        )

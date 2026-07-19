@@ -2,10 +2,14 @@
 
 import { apiClient } from "./client";
 import type {
+  AlarmEvent,
+  AlarmSettings,
+  Archive,
   Channel,
   ChannelKind,
   ColumnKind,
   HistorySeries,
+  LatestItem,
   Perspective,
   PerspectiveLayout,
   PublishedLayout,
@@ -212,6 +216,64 @@ export const scadaApi = {
       `/api/scada/summary?${params.toString()}`
     );
   },
+
+  /* ── Alarms (server-side engine — see backend scada_alarms router) ── */
+  listActiveAlarms: () =>
+    apiClient.get<{ items: AlarmEvent[] }>("/api/scada/alarms/active"),
+
+  listAlarmHistory: (opts: {
+    page?: number;
+    pageSize?: number;
+    tagId?: string;
+    kind?: string;
+    start?: Date;
+    end?: Date;
+  } = {}) => {
+    const params = new URLSearchParams();
+    params.set("page", String(opts.page ?? 1));
+    params.set("page_size", String(opts.pageSize ?? 25));
+    if (opts.tagId) params.set("tag_id", opts.tagId);
+    if (opts.kind) params.set("kind", opts.kind);
+    if (opts.start) params.set("start", opts.start.toISOString());
+    if (opts.end) params.set("end", opts.end.toISOString());
+    return apiClient.get<{
+      items: AlarmEvent[];
+      total: number;
+      page: number;
+      page_size: number;
+    }>(`/api/scada/alarms/history?${params.toString()}`);
+  },
+
+  ackAlarm: (eventId: string) =>
+    apiClient.post<AlarmEvent>(`/api/scada/alarms/${eventId}/ack`, {}),
+
+  /** Last-known live value per tag (scada_tag_latest) — cheap, cap 100 tags. */
+  getLatest: (tagIds: string[]) =>
+    apiClient.get<{ items: LatestItem[] }>(
+      `/api/scada/latest?tag_ids=${tagIds.join(",")}`
+    ),
+
+  /** Monthly Drive archives — where data older than 90 days lives on. */
+  listArchives: () =>
+    apiClient.get<{ items: Archive[] }>("/api/scada/archives"),
+
+  runArchiver: () =>
+    apiClient.post<{ archived: unknown[] }>("/api/scada/archives/run", {}),
+
+  getAlarmSettings: () =>
+    apiClient.get<AlarmSettings>("/api/scada/alarm-settings"),
+
+  updateAlarmSettings: (data: {
+    email_enabled?: boolean;
+    email_recipients?: string;
+    telegram_enabled?: boolean;
+    telegram_chat_id?: string;
+    cooldown_min?: number;
+    sound_enabled?: boolean;
+  }) => apiClient.put<AlarmSettings>("/api/scada/alarm-settings", data),
+
+  sendTestAlarm: () =>
+    apiClient.post<{ sent: string[] }>("/api/scada/alarm-settings/test", {}),
 
   /* ── Workbench: shared custom formula columns (Analisis view) ── */
   listColumns: () =>

@@ -125,6 +125,29 @@ export interface ChannelPanelConfig {
   channel_id: string;
 }
 
+/* ── SCADA HMI decor components (text + shapes) ── */
+
+/** Static text label on the canvas. Plain text only — never HTML. */
+export interface TextPanelConfig {
+  content: string;
+  /** Font size in CANVAS pixels (the canvas scales uniformly). */
+  size: number;
+  /** null = follow theme text color. */
+  color: string | null;
+  align: "left" | "center" | "right";
+  bold: boolean;
+}
+
+export interface ShapePanelConfig {
+  shape: "rect" | "circle" | "line";
+  /** null = transparent fill / no border. */
+  fill: string | null;
+  stroke: string | null;
+  stroke_w: number;
+  /** Corner rounding for "rect" (canvas px). */
+  radius: number;
+}
+
 /** Discriminated union on `type`. Implemented: "video", "chart", "table",
  *  "gauge", "bar", "alarm", "wall", "activity". The backend rejects unknown
  *  types at save time. */
@@ -138,7 +161,9 @@ export type Panel =
   | (PanelBase & { type: "wall"; config: WallPanelConfig })
   | (PanelBase & { type: "activity"; config: ActivityPanelConfig })
   | (PanelBase & { type: "web"; config: WebPanelConfig })
-  | (PanelBase & { type: "channel"; config: ChannelPanelConfig });
+  | (PanelBase & { type: "channel"; config: ChannelPanelConfig })
+  | (PanelBase & { type: "text"; config: TextPanelConfig })
+  | (PanelBase & { type: "shape"; config: ShapePanelConfig });
 
 /* ── Channels (TV-style registry) ── */
 
@@ -333,4 +358,54 @@ export interface WorkbenchColumn {
 export interface RecentSample {
   ts: string;
   value: number;
+}
+
+/* ── Alarms (server-side engine) ─────────────────────────────────────── */
+
+/** "high" = di atas alarm_max, "low" = di bawah alarm_min,
+ *  "silent" = sensor berhenti mengirim data. */
+export type AlarmKind = "high" | "low" | "silent";
+
+/** One alarm occurrence from scada_alarm_events. Open (active) while
+ *  cleared_at is null; the row itself is permanent history. */
+export interface AlarmEvent {
+  id: string;
+  tag_id: string;
+  tag_label: string;
+  tag_unit: string;
+  kind: AlarmKind;
+  triggered_at: string;
+  trigger_value: number | null;
+  threshold: number | null;
+  cleared_at: string | null;
+  ack_at: string | null;
+  ack_name: string | null;
+}
+
+export interface AlarmSettings {
+  email_enabled: boolean;
+  email_recipients: string;
+  telegram_enabled: boolean;
+  telegram_chat_id: string;
+  cooldown_min: number;
+  sound_enabled: boolean;
+  /** Whether TELEGRAM_BOT_TOKEN is configured server-side (token itself is
+   *  never exposed) — used to hint that Telegram can't work yet. */
+  telegram_token_set: boolean;
+}
+
+/** Last-known live value per tag (scada_tag_latest). */
+export interface LatestItem {
+  tag_id: string;
+  ts: string;
+  value: number;
+}
+
+/** One archived month on Google Drive (scada_archives). */
+export interface Archive {
+  month: string; // first day of the month, e.g. "2026-04-01"
+  file_name: string;
+  web_link: string | null;
+  row_count: number;
+  created_at: string | null;
 }

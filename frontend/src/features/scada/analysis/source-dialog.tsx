@@ -1,21 +1,20 @@
 "use client";
 
 /** "Atur Sumber" — where a tag's data comes from, edited inline in Analisis.
- *  Two modes:
- *   - Simulator: pick a preset waveform (demo data).
- *   - MQTT: pick a site (broker), type the topic, and optional alarm min/max.
- *  Saving PATCHes the tag; the standalone bridge picks up MQTT tags within
- *  ~30s (no restart). Operators never touch Supabase — this is the whole UI. */
+ *  One path only: **Node-RED** (over MQTT under the hood) — Node-RED is the
+ *  universal translator that speaks to any PLC/device and forwards values to
+ *  the broker; R-Net just listens. Pick a site (broker), type the topic, set
+ *  alarm bounds + storage interval. Saving PATCHes the tag; the standalone
+ *  bridge picks it up within ~30s (no restart). The old "Simulator" mode
+ *  (fake demo data) was removed — Node-RED's fake-factory flow is the test
+ *  rig now, so no misleading placeholder values ever appear. */
 
 import { useState } from "react";
-import { Loader2, Radio, X } from "lucide-react";
+import { Loader2, Radio } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { Drawer } from "@/components/ui/drawer";
 import { scadaApi } from "@/lib/api/scada";
 import type { Site, Tag } from "../types";
-import { PRESETS, presetOf, type PresetKey } from "../presets";
-
-type Mode = "simulator" | "mqtt";
 
 export function SourceDialog({
   tag,
@@ -31,8 +30,6 @@ export function SourceDialog({
   const cfg = tag.config as Record<string, unknown>;
   const enabledSites = sites.filter((s) => s.enabled || s.id === tag.site_id);
 
-  const [mode, setMode] = useState<Mode>(tag.source === "mqtt" ? "mqtt" : "simulator");
-  const [preset, setPreset] = useState<PresetKey>(presetOf(tag.config));
   const [siteId, setSiteId] = useState(tag.site_id ?? enabledSites[0]?.id ?? "");
   const [topic, setTopic] = useState(String(cfg.mqtt_topic ?? ""));
   const [alarmMin, setAlarmMin] = useState(
@@ -67,42 +64,40 @@ export function SourceDialog({
       })()
     : "—";
 
-  const canSave =
-    mode === "simulator" ||
-    (siteId !== "" && topic.trim() !== "" && enabledSites.length > 0);
+  const canSave = siteId !== "" && topic.trim() !== "" && enabledSites.length > 0;
 
   async function save() {
     if (!canSave) return;
     setSaving(true);
     try {
-      if (mode === "simulator") {
-        await scadaApi.updateTag(tag.id, {
-          source: "simulator",
-          config: { ...PRESETS[preset].config },
-          unit: PRESETS[preset].unit,
-        });
-      } else {
-        const config: Record<string, unknown> = { mqtt_topic: topic.trim() };
-        const min = alarmMin.trim().replace(",", ".");
-        const max = alarmMax.trim().replace(",", ".");
-        if (min !== "" && Number.isFinite(Number(min))) config.alarm_min = Number(min);
-        if (max !== "" && Number.isFinite(Number(max))) config.alarm_max = Number(max);
-        // Scaling / calibration — omit no-op values to keep config clean
-        const sc = scale.trim().replace(",", ".");
-        const of = offset.trim().replace(",", ".");
-        const dec = decimals.trim();
-        if (sc !== "" && Number.isFinite(Number(sc)) && Number(sc) !== 1)
-          config.scale = Number(sc);
-        if (of !== "" && Number.isFinite(Number(of)) && Number(of) !== 0)
-          config.offset = Number(of);
-        if (dec !== "" && Number.isInteger(Number(dec)))
-          config.decimals = Number(dec);
-        await scadaApi.updateTag(tag.id, {
-          source: "mqtt",
-          site_id: siteId,
-          config,
-        });
-      }
+      // Preserve settings owned by the row-detail dropdown (store_enabled,
+      // storage_interval_s) — this dialog only owns topic/alarm/scaling.
+      const config: Record<string, unknown> = { ...cfg, mqtt_topic: topic.trim() };
+      delete config.alarm_min;
+      delete config.alarm_max;
+      delete config.scale;
+      delete config.offset;
+      delete config.decimals;
+      delete config.silent_alarm; // sensor-bisu is automatic now
+      const min = alarmMin.trim().replace(",", ".");
+      const max = alarmMax.trim().replace(",", ".");
+      if (min !== "" && Number.isFinite(Number(min))) config.alarm_min = Number(min);
+      if (max !== "" && Number.isFinite(Number(max))) config.alarm_max = Number(max);
+      // Scaling / calibration — omit no-op values to keep config clean
+      const sc = scale.trim().replace(",", ".");
+      const of = offset.trim().replace(",", ".");
+      const dec = decimals.trim();
+      if (sc !== "" && Number.isFinite(Number(sc)) && Number(sc) !== 1)
+        config.scale = Number(sc);
+      if (of !== "" && Number.isFinite(Number(of)) && Number(of) !== 0)
+        config.offset = Number(of);
+      if (dec !== "" && Number.isInteger(Number(dec)))
+        config.decimals = Number(dec);
+      await scadaApi.updateTag(tag.id, {
+        source: "mqtt",
+        site_id: siteId,
+        config,
+      });
       await onSaved();
       onClose();
     } catch {
@@ -113,84 +108,34 @@ export function SourceDialog({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal-panel max-w-md flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="px-6 pt-6 pb-4 border-b border-border-soft flex items-start gap-3 shrink-0">
-          <div className="size-10 rounded-[var(--r-lg)] bg-gradient-to-br from-primary to-primary-hover text-white flex items-center justify-center shrink-0">
-            <Radio className="size-5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-[16px] font-bold text-text leading-tight">
-              Sumber Data
-            </h2>
-            <p className="text-[12px] text-text-muted mt-0.5 truncate">
-              {tag.label} — dari mana nilainya diambil
-            </p>
-          </div>
+    <Drawer
+      title="Sumber Data — Node-RED"
+      subtitle={`${tag.label} — dari mana nilainya diambil`}
+      icon={<Radio className="size-5" />}
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
+            Batal
+          </button>
           <button
             type="button"
-            onClick={onClose}
-            className="btn btn-ghost btn-icon btn-sm -mr-1 -mt-1"
+            onClick={save}
+            disabled={!canSave || saving}
+            className="btn btn-primary btn-sm"
           >
-            <X className="size-4" />
+            {saving && <Loader2 className="size-3.5 animate-spin" />}
+            Simpan
           </button>
-        </div>
-
-        {/* Body */}
-        <div className="px-6 py-5 flex flex-col gap-4">
-          {/* Mode toggle */}
-          <div className="grid grid-cols-2 gap-2">
-            {(
-              [
-                { m: "simulator", label: "Simulator", desc: "Data contoh" },
-                { m: "mqtt", label: "MQTT", desc: "Sensor asli" },
-              ] as const
-            ).map(({ m, label, desc }) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setMode(m)}
-                className={cn(
-                  "flex flex-col items-start gap-0.5 rounded-[var(--r-lg)] border px-3 py-2.5 text-left",
-                  mode === m
-                    ? "border-primary bg-primary/5 text-text"
-                    : "border-border-soft bg-bg text-text-muted cursor-pointer hover:border-border"
-                )}
-              >
-                <span className="text-[13px] font-semibold">{label}</span>
-                <span className="text-[11px] text-text-light">{desc}</span>
-              </button>
-            ))}
-          </div>
-
-          {mode === "simulator" ? (
-            <div>
-              <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                Jenis Simulator
-              </label>
-              <select
-                className="field-select cursor-pointer"
-                value={preset}
-                onChange={(e) => setPreset(e.target.value as PresetKey)}
-              >
-                {(Object.keys(PRESETS) as PresetKey[]).map((key) => (
-                  <option key={key} value={key}>
-                    {PRESETS[key].label} ({PRESETS[key].unit})
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1.5 text-[11px] text-text-light">
-                Mengganti jenis akan menyetel ulang unit dan pola datanya.
-              </p>
-            </div>
-          ) : enabledSites.length === 0 ? (
+        </>
+      }
+    >
+        <div className="flex flex-col gap-4">
+          {enabledSites.length === 0 ? (
             <p className="text-[12px] text-text-muted rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2.5">
-              Belum ada site MQTT. Buat dulu lewat tombol{" "}
-              <span className="font-semibold">Kelola Site</span> di toolbar Analisis.
+              Belum ada site (broker). Buat dulu lewat tombol{" "}
+              <span className="font-semibold">Kelola Site</span> di toolbar Analisis
+              — isi alamat broker yang sama dengan yang dipakai Node-RED.
             </p>
           ) : (
             <>
@@ -212,15 +157,18 @@ export function SourceDialog({
               </div>
               <div>
                 <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                  Topik MQTT <span className="text-red">*</span>
+                  Topik <span className="text-red">*</span>
                 </label>
                 <input
                   className="field-input font-mono"
-                  placeholder="rnet/tanobel/boiler1/temperature"
+                  placeholder="rnet/pabrik1/boiler1/temperature"
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
                   maxLength={300}
                 />
+                <p className="mt-1.5 text-[11px] text-text-light">
+                  Samakan persis dengan topik di node <span className="font-mono">mqtt out</span> Node-RED.
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -317,23 +265,6 @@ export function SourceDialog({
             </>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="px-6 pb-6 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
-            Batal
-          </button>
-          <button
-            type="button"
-            onClick={save}
-            disabled={!canSave || saving}
-            className="btn btn-primary btn-sm"
-          >
-            {saving && <Loader2 className="size-3.5 animate-spin" />}
-            Simpan
-          </button>
-        </div>
-      </div>
-    </div>
+    </Drawer>
   );
 }

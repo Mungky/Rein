@@ -5,7 +5,8 @@
  *  halaman Channel. This dialog is just the remote control's channel list. */
 
 import { useMemo, useState } from "react";
-import { Search, Tv, X } from "lucide-react";
+import { Search, Tv } from "lucide-react";
+import { Drawer } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
 import { CHANNEL_KINDS, channelKindLabel } from "./channel-form";
 import { channelScreen } from "./screen-box";
@@ -67,49 +68,26 @@ export function AddPanelDialog({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal-panel max-w-md flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="px-6 pt-6 pb-4 border-b border-border-soft flex items-start gap-3 shrink-0">
-          <div className="size-10 rounded-[var(--r-lg)] bg-gradient-to-br from-primary to-primary-hover text-white flex items-center justify-center shrink-0">
-            <Tv className="size-5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-[16px] font-bold text-text leading-tight">
-              Pilih Channel
-            </h2>
-            <p className="text-[12px] text-text-muted mt-0.5">
-              Klik channel untuk menaruhnya di layout
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn btn-ghost btn-icon btn-sm -mr-1 -mt-1"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-
+    <Drawer
+      title="Pilih Channel"
+      subtitle="Klik channel untuk menaruhnya di layout"
+      icon={<Tv className="size-5" />}
+      onClose={onClose}
+    >
         {/* Search */}
-        <div className="px-6 pt-4 shrink-0">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-light" />
-            <input
-              autoFocus
-              className="field-input pl-8"
-              placeholder="Cari nomor / nama channel…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
+        <div className="relative mb-3">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-light" />
+          <input
+            autoFocus
+            className="field-input pl-8"
+            placeholder="Cari nomor / nama channel…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
         </div>
 
         {/* Channel list */}
-        <div className="px-6 py-4 flex flex-col gap-1.5 overflow-y-auto min-h-[120px] max-h-[50vh]">
+        <div className="flex flex-col gap-1.5">
           {channels.length === 0 ? (
             <p className="text-[12px] text-text-muted rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2.5">
               Belum ada channel. Buat dulu di tab{" "}
@@ -149,7 +127,6 @@ export function AddPanelDialog({
             })
           )}
         </div>
-      </div>
-    </div>
+    </Drawer>
   );
 }

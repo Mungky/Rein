@@ -50,7 +50,7 @@ export function CreateProjectModal({ templates, onClose, onCreated }: {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <form
         onSubmit={submit}
         className="modal-panel max-w-lg flex flex-col"

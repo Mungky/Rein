@@ -45,3 +45,16 @@ def test_scada_endpoints_registered():
         "/api/scada/streams/{stream_id}",
     ):
         assert expected in paths, f"Route SCADA hilang: {expected}"
+
+
+def test_scada_alarm_endpoints_registered():
+    paths = _route_paths()
+    for expected in (
+        "/api/scada/alarms/active",
+        "/api/scada/alarms/history",
+        "/api/scada/alarms/{event_id}/ack",
+        "/api/scada/latest",
+        "/api/scada/alarm-settings",
+        "/api/scada/alarm-settings/test",
+    ):
+        assert expected in paths, f"Route alarm hilang: {expected}"

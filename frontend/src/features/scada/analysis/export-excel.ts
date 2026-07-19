@@ -4,95 +4,99 @@
 
 import { format } from "date-fns";
 import { scadaApi } from "@/lib/api/scada";
-import type { ChartRange, Tag, WorkbenchColumn } from "../types";
-import { RANGE_MS } from "../panels/chart-panel";
+import type { Tag } from "../types";
 
 const HISTORY_CHUNK = 4; // /history accepts max 4 tags per call
+const HISTORY_WINDOW_MS = 44 * 24 * 3600_000; // /history caps spans at 45 days
 
-export interface ExportRow {
-  tag: Tag;
-  last: number | null;
-  min: number | null;
-  avg: number | null;
-  max: number | null;
-  custom: Record<string, number | string | null>;
+export type ExportRangeKey = "today" | "week" | "month" | "all";
+
+export const EXPORT_RANGE_LABELS: Record<ExportRangeKey, string> = {
+  today: "Hari ini",
+  week: "Minggu ini",
+  month: "Bulan ini",
+  all: "Semua (90 hari)",
+};
+
+function rangeStart(range: ExportRangeKey, now: Date): Date {
+  const d = new Date(now);
+  if (range === "today") {
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  if (range === "week") {
+    d.setHours(0, 0, 0, 0);
+    const day = (d.getDay() + 6) % 7; // Monday = 0
+    d.setDate(d.getDate() - day);
+    return d;
+  }
+  if (range === "month") {
+    d.setHours(0, 0, 0, 0);
+    d.setDate(1);
+    return d;
+  }
+  // "all" = the DB's 90-day window; older months live in the Drive archive
+  return new Date(now.getTime() - 90 * 24 * 3600_000);
 }
 
-/** Sheet 1 "Analisis": snapshot of the visible table.
- *  Sheet 2 "Riwayat": wide time-series (Waktu | tag1 | tag2 | …) over range. */
-export async function exportSheetToExcel(opts: {
+/** Wide time-series export (Waktu | tag1 | tag2 | …) for the chosen range.
+ *  Long ranges are fetched in ≤44-day windows (the /history span cap) and
+ *  merged; tags are chunked by 4 (the /history tag cap). */
+export async function exportRangeToExcel(opts: {
+  tags: Tag[];
   sheetName: string;
-  rows: ExportRow[];
-  columns: WorkbenchColumn[];
-  range: ChartRange;
+  range: ExportRangeKey;
 }): Promise<void> {
   const XLSX = await import("xlsx");
-  const { sheetName, rows, columns, range } = opts;
-
-  /* ── Sheet 1: Analisis snapshot ── */
-  const header = [
-    "Nama",
-    "Perangkat",
-    "Unit",
-    "Terkini",
-    "Min",
-    "Rata-rata",
-    "Maks",
-    ...columns.map((c) => (c.unit ? `${c.name} (${c.unit})` : c.name)),
-  ];
-  const body = rows.map((r) => [
-    r.tag.label,
-    r.tag.device_key,
-    r.tag.unit,
-    r.last,
-    r.min,
-    r.avg,
-    r.max,
-    ...columns.map((c) => r.custom[c.id] ?? null),
-  ]);
-  const analysisWs = XLSX.utils.aoa_to_sheet([header, ...body]);
-
-  /* ── Sheet 2: Riwayat (wide) ── */
-  const tagIds = rows.map((r) => r.tag.id);
+  const { tags, sheetName, range } = opts;
   const end = new Date();
-  const start = new Date(end.getTime() - RANGE_MS[range]);
+  const start = rangeStart(range, end);
+  const tagIds = tags.map((t) => t.id);
+
+  const windows: [Date, Date][] = [];
+  for (let t = start.getTime(); t < end.getTime(); t += HISTORY_WINDOW_MS) {
+    windows.push([new Date(t), new Date(Math.min(t + HISTORY_WINDOW_MS, end.getTime()))]);
+  }
   const chunks: string[][] = [];
   for (let i = 0; i < tagIds.length; i += HISTORY_CHUNK) {
     chunks.push(tagIds.slice(i, i + HISTORY_CHUNK));
   }
-  const results = await Promise.all(
-    chunks.map((ids) => scadaApi.getHistory(ids, start, end, 720))
-  );
-  const series = results.flatMap((res) => res.series);
 
   const byTime = new Map<string, Record<string, number>>();
-  for (const s of series) {
-    for (const p of s.points) {
-      let row = byTime.get(p.t);
-      if (!row) {
-        row = {};
-        byTime.set(p.t, row);
+  for (const [ws, we] of windows) {
+    const results = await Promise.all(
+      chunks.map((ids) => scadaApi.getHistory(ids, ws, we, 720))
+    );
+    for (const res of results) {
+      for (const s of res.series) {
+        for (const p of s.points) {
+          let row = byTime.get(p.t);
+          if (!row) {
+            row = {};
+            byTime.set(p.t, row);
+          }
+          row[s.tag_id] = p.avg;
+        }
       }
-      row[s.tag_id] = p.avg;
     }
   }
+
   const times = [...byTime.keys()].sort();
-  const historyHeader = [
+  const header = [
     "Waktu",
-    ...rows.map((r) => (r.tag.unit ? `${r.tag.label} (${r.tag.unit})` : r.tag.label)),
+    ...tags.map((t) => (t.unit ? `${t.label} (${t.unit})` : t.label)),
   ];
-  const historyBody = times.map((t) => [
+  const body = times.map((t) => [
     format(new Date(t), "yyyy-MM-dd HH:mm"),
     ...tagIds.map((id) => byTime.get(t)?.[id] ?? null),
   ]);
-  const historyWs = XLSX.utils.aoa_to_sheet([historyHeader, ...historyBody]);
+  const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, analysisWs, "Analisis");
-  XLSX.utils.book_append_sheet(wb, historyWs, "Riwayat");
+  XLSX.utils.book_append_sheet(wb, ws, "Data");
   XLSX.writeFile(
     wb,
-    `rnet-${sheetName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${format(end, "yyyyMMdd-HHmm")}.xlsx`
+    `rnet-${sheetName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${range}-${format(end, "yyyyMMdd-HHmm")}.xlsx`
   );
 }
 

@@ -81,5 +81,10 @@ class Settings:
     # Comma-separated. Falls back to smtp_from if empty.
     librarian_emails: str = os.getenv("LIBRARIAN_EMAILS", "")
 
+    # R-Net alarm notifications — Telegram bot token (from @BotFather). The
+    # SECRET lives here in env; the chat id + enable flags are operator-tunable
+    # in the scada_alarm_settings table (edited from the Data tab).
+    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
 
 settings = Settings()
