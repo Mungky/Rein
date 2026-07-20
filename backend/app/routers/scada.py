@@ -17,11 +17,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import TypeAdapter
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import _load_permissions, require_permission
 from app.schemas.scada import (
+    Panel,
+    PerspectiveLayout,
     ChannelCreateRequest,
     ChannelListOut,
     ChannelOut,
@@ -81,11 +84,44 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
+_PANEL_ADAPTER = TypeAdapter(Panel)
+_EMPTY_LAYOUT = {"version": 2, "canvas": {"w": 1920, "h": 1080}, "panels": []}
+
+
+def _safe_layout(layout: object) -> dict:
+    """Jalur BACA yang toleran: layout tersimpan yang tidak lolos skema versi
+    ini (mis. berisi tipe panel dari rilis yang lebih baru, karena DB dipakai
+    bersama saat backend belum di-redeploy) tidak boleh membuat seluruh
+    daftar perspective 500. Panel yang tak dikenal DILEWATI, sisanya tetap
+    tampil; layout yang benar-benar rusak jatuh ke layout kosong. Jalur TULIS
+    tetap divalidasi ketat seperti biasa."""
+    try:
+        PerspectiveLayout.model_validate(layout)
+        return layout  # type: ignore[return-value]
+    except Exception:
+        pass
+    if not isinstance(layout, dict):
+        return dict(_EMPTY_LAYOUT)
+    kept = []
+    for p in layout.get("panels") or []:
+        try:
+            _PANEL_ADAPTER.validate_python(p)
+            kept.append(p)
+        except Exception:
+            continue
+    candidate = {**layout, "panels": kept}
+    try:
+        PerspectiveLayout.model_validate(candidate)
+        return candidate
+    except Exception:
+        return dict(_EMPTY_LAYOUT)
+
+
 def _perspective_dict(p: ScadaPerspective) -> dict:
     return {
         "id": str(p.id),
         "name": p.name,
-        "layout": p.layout,
+        "layout": _safe_layout(p.layout),
         "is_default": p.is_default,
         "is_published": p.is_published,
         "created_at": str(p.created_at) if p.created_at else None,
@@ -223,7 +259,11 @@ async def get_published_perspective(
     published = await _get_published(db)
     if not published:
         return {"exists": False, "name": None, "layout": None}
-    return {"exists": True, "name": published[0].name, "layout": published[0].layout}
+    return {
+        "exists": True,
+        "name": published[0].name,
+        "layout": _safe_layout(published[0].layout),
+    }
 
 
 @router.post("/perspectives", response_model=PerspectiveOut, status_code=201)

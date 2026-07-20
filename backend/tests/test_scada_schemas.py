@@ -453,6 +453,56 @@ def test_image_panel_unknown_field_rejected():
         )
 
 
+# ── _safe_layout: jalur baca toleran (skema drift ≠ 500) ────────────────────
+
+
+def _rect_panel(ptype: str, config: dict, pid: str = "p1") -> dict:
+    return {
+        "id": pid,
+        "type": ptype,
+        "title": "",
+        "rect": {"x": 0, "y": 0, "w": 400, "h": 300},
+        "config": config,
+    }
+
+
+def test_safe_layout_passes_valid_layout_through():
+    from app.routers.scada import _safe_layout
+
+    layout = {
+        "version": 2,
+        "canvas": {"w": 1920, "h": 1080},
+        "panels": [_rect_panel("gauge", {"tag_id": str(uuid.uuid4())})],
+    }
+    assert _safe_layout(layout) is layout
+
+
+def test_safe_layout_drops_unknown_panel_keeps_rest():
+    # Simulasi drift versi: DB berisi tipe panel dari rilis yang lebih baru
+    from app.routers.scada import _safe_layout
+
+    layout = {
+        "version": 2,
+        "canvas": {"w": 1920, "h": 1080},
+        "panels": [
+            _rect_panel("gauge", {"tag_id": str(uuid.uuid4())}, "a"),
+            _rect_panel("panel-masa-depan", {"apa": "saja"}, "b"),
+            _rect_panel("text", {"content": "Halo"}, "c"),
+        ],
+    }
+    out = _safe_layout(layout)
+    assert [p["id"] for p in out["panels"]] == ["a", "c"]
+
+
+def test_safe_layout_garbage_falls_back_to_empty():
+    from app.routers.scada import _safe_layout
+
+    for garbage in (None, "bukan dict", {"version": 99, "panels": "x"}):
+        out = _safe_layout(garbage)
+        assert out["version"] == 2
+        assert out["panels"] == []
+
+
 # ── Channel kind "screen" (references a Source: stream/web/vnc) ──────────────
 
 
