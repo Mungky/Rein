@@ -45,9 +45,9 @@ credentials/
 # Misc
 design_archive.tar.gz
 rein/
-# Streaming secrets (Supabase service key) - jangan pernah commit
+# Kredensial deploy PC lokal (satu file: config.env) - jangan pernah commit
 config.env
-deploy/scada/config.env
+deploy/config.env
 
 # Archives / backups
 *.rar

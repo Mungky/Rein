@@ -9,6 +9,36 @@
 
 ---
 
+> ## ⚠️ PERINTAH BERUBAH (2026-07) — baca ini dulu
+>
+> Folder `deploy` dirombak jadi **4 tombol + 1 file kredensial**. Konsep
+> (OBS/MediaMTX/broker/bridge/VNC) di bawah tetap sama, hanya cara
+> menyalakannya yang lebih ringkas. Peta perintah:
+>
+> | Dulu | Sekarang |
+> |---|---|
+> | `install.ps1` (menu 1–5) | **`install.bat`** (menu paket: stream / mirror / data) |
+> | `start-scada.bat` | **`start.bat`** (menu; atau `start.bat stream data`) |
+> | `stop-scada.bat` | **`stop.bat`** (menu; atau `stop.bat semua`) |
+> | `start-vnc.bat` / `stop-vnc.bat` | jadi bagian paket **mirror**: `start.bat mirror` / `stop.bat mirror` |
+> | `start-nodered.bat` + `start-bridge` | jadi bagian paket **data**: `start.bat data` |
+> | (baru) | **`uninstall.bat`** — copot dari PC ini |
+>
+> **Kredensial:** dulu tersebar; sekarang **satu file** `C:\rein-scada\config.env`.
+>
+> **Tunnel produksi:** isi `TUNNEL_TOKEN` di `config.env` supaya alamat
+> stream/mirror **permanen** (tidak ganti tiap start) — lihat
+> [PANDUAN-TUNNEL.md](./PANDUAN-TUNNEL.md). Tanpa token = mode tes (URL acak).
+>
+> **Broker MQTT:** tetap **satu** Mosquitto per PC — V-Box dan Node-RED
+> memakai broker yang sama, dibedakan **topik** (`vbox/...` vs `rnet/...`),
+> bukan dua broker. Bridge = kurir yang menyalin topik `rnet/...` ke database.
+>
+> Di mana pun panduan di bawah menyebut `start-scada.bat`/`start-vnc.bat` dsb.,
+> pakai padanan di tabel ini.
+
+---
+
 ## 1. Gambaran Besar — Tiga Jalur
 
 R-Net punya tiga jalur yang berdiri sendiri (boleh pasang salah satu saja):

@@ -5,6 +5,11 @@ Data yang masuk otomatis muncul di semua panel R-Net (Grafik, Gauge, Tabel,
 Bar, Analisis) — **tidak ada database kedua**, semuanya masuk ke tabel
 `scada_samples` yang sudah dipakai dashboard.
 
+> **Cara menjalankan (paket DATA):** `DATABASE_URL` diambil dari **satu file
+> kredensial** `..\config.env` (bukan `.env` lagi). Saklar `start.bat data`
+> menjalankan `run-bridge.ps1` yang membaca config.env lalu menjalankan
+> `bridge.py`. Untuk server Linux/Docker, lihat `_arsip/bridge-Dockerfile`.
+
 ## Cara kerja singkat
 
 ```
