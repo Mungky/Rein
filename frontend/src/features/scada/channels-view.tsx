@@ -24,7 +24,7 @@ import { Drawer } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
 import { useScadaStore } from "./store";
-import { ChannelForm, CHANNEL_KINDS, channelKindLabel } from "./channel-form";
+import { ChannelForm, channelSourceMeta } from "./channel-form";
 import { renderChannelContent } from "./panels/panel-registry";
 import { channelScreen } from "./screen-box";
 import type { Channel, ScreenChannelConfig, SourceType } from "./types";
@@ -159,8 +159,8 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
           ) : (
             <div className="flex flex-col gap-1">
               {sorted.map((c) => {
-                const KindIcon =
-                  CHANNEL_KINDS.find((k) => k.kind === c.kind)?.icon ?? Tv;
+                const source = channelSourceMeta(c, store.streams);
+                const KindIcon = source.icon;
                 const isSelected = selected?.id === c.id;
                 return (
                   <div
@@ -189,7 +189,9 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
                     <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-text">
                       {c.name}
                     </span>
-                    <KindIcon className="size-3 shrink-0 text-text-light" />
+                    <span title={source.label} className="flex shrink-0 items-center">
+                      <KindIcon className="size-3 text-text-light" />
+                    </span>
                     {canManage && (
                       <>
                         {/* "Ubah" hidup di panel preview — daftar cukup hapus */}
@@ -247,9 +249,9 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-text-muted">
                   <span>
-                    Jenis:{" "}
+                    Sumber:{" "}
                     <span className="font-semibold text-text">
-                      {channelKindLabel(previewChannel.kind)}
+                      {channelSourceMeta(previewChannel, store.streams).label}
                     </span>
                   </span>
                   <span>

@@ -12,7 +12,13 @@
  *  edges, center lines, other panels' edges) + numeric inspector. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Maximize2, MousePointer2, RefreshCw, Trash2 } from "lucide-react";
+import {
+  Maximize2,
+  MousePointer2,
+  RefreshCw,
+  Settings2,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CanvasSize, Panel, PanelRect } from "../types";
 import {
@@ -23,6 +29,18 @@ import {
 
 const MIN_SIZE = 48; // canvas px
 const SNAP_SCREEN_PX = 8;
+
+/** Uniform letterbox fit of the canvas inside a box — shared with the
+ *  component palette so drag-drop can map pointer → canvas coordinates. */
+export function stageTransform(boxW: number, boxH: number, canvas: CanvasSize) {
+  const scale =
+    boxW > 0 && boxH > 0 ? Math.min(boxW / canvas.w, boxH / canvas.h) : 0;
+  return {
+    scale,
+    offX: (boxW - canvas.w * scale) / 2,
+    offY: (boxH - canvas.h * scale) / 2,
+  };
+}
 
 /* ── Quick-split presets ── */
 
@@ -110,6 +128,7 @@ export function CanvasStage({
   onRectChange,
   onRemove,
   onMaximize,
+  onEditPanel,
 }: {
   canvas: CanvasSize;
   panels: Panel[];
@@ -127,6 +146,8 @@ export function CanvasStage({
   onRectChange?: (id: string, rect: PanelRect) => void;
   onRemove?: (id: string) => void;
   onMaximize?: (id: string) => void;
+  /** Edit mode: open the panel inspector (double-click / gear button). */
+  onEditPanel?: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -148,12 +169,7 @@ export function CanvasStage({
     return () => ro.disconnect();
   }, []);
 
-  const scale =
-    box.w > 0 && box.h > 0
-      ? Math.min(box.w / canvas.w, box.h / canvas.h)
-      : 0;
-  const offX = (box.w - canvas.w * scale) / 2;
-  const offY = (box.h - canvas.h * scale) / 2;
+  const { scale, offX, offY } = stageTransform(box.w, box.h, canvas);
 
   const shown = panels.filter((p) => p.rect);
 
@@ -378,23 +394,24 @@ export function CanvasStage({
   return (
     <div
       ref={containerRef}
-      className="relative h-full w-full overflow-hidden bg-black"
+      className="relative h-full w-full overflow-hidden"
+      // Light mode = abu lembut (panel putih tidak silau); fullscreen tetap
+      // hitam karena itu dinding TV.
+      style={{ background: fullscreen ? "#000" : "var(--rnet-stage-bg)" }}
       onPointerDown={() => editMode && setSelectedId(null)}
     >
       {scale > 0 && (
         <>
           {/* Canvas area (letterboxed) */}
           <div
-            className={cn(
-              "absolute",
-              editMode && "outline outline-1 outline-white/20"
-            )}
+            className={cn("absolute", editMode && "outline outline-1")}
             style={{
               left: offX,
               top: offY,
               width: canvas.w * scale,
               height: canvas.h * scale,
-              background: fullscreen ? "#000" : "#0a0a0c",
+              background: fullscreen ? "#000" : "var(--rnet-canvas-bg)",
+              outlineColor: "var(--rnet-cell-ring)",
             }}
           />
 
@@ -406,7 +423,7 @@ export function CanvasStage({
             return (
               <div
                 key={panel.id}
-                className="absolute z-10 overflow-hidden ring-1 ring-white/15"
+                className="absolute z-10 overflow-hidden ring-1 ring-[var(--rnet-cell-ring)]"
                 style={{
                   left: offX + r.x * scale,
                   top: offY + r.y * scale,
@@ -437,7 +454,9 @@ export function CanvasStage({
                     ? "cursor-move"
                     : "pointer-events-none",
                   editMode &&
-                    (isSel ? "ring-2 ring-primary" : "ring-1 ring-white/25")
+                    (isSel
+                      ? "ring-2 ring-primary"
+                      : "ring-1 ring-[var(--rnet-cell-ring)]")
                 )}
                 style={{
                   left: offX + r.x * scale,
@@ -447,6 +466,14 @@ export function CanvasStage({
                 }}
                 onPointerDown={
                   editMode ? (e) => startDrag(e, panel, "move") : undefined
+                }
+                onDoubleClick={
+                  editMode && onEditPanel
+                    ? (e) => {
+                        e.stopPropagation();
+                        onEditPanel(panel.id);
+                      }
+                    : undefined
                 }
               >
                 {/* View-mode chrome — buttons stay faintly visible so nobody
@@ -547,6 +574,16 @@ export function CanvasStage({
                   />
                 </label>
               ))}
+              {onEditPanel && (
+                <button
+                  type="button"
+                  onClick={() => onEditPanel(selected.id)}
+                  className="flex size-6 items-center justify-center rounded-full text-white/80 hover:bg-white/15"
+                  title="Atur komponen ini (atau klik dua kali panelnya)"
+                >
+                  <Settings2 className="size-3.5" />
+                </button>
+              )}
               {onRemove && (
                 <button
                   type="button"

@@ -22,7 +22,6 @@ import {
   Plus,
   RotateCcw,
   Send,
-  Shapes,
   Star,
   Trash2,
   X,
@@ -42,8 +41,8 @@ import { channelAspect, channelScreen } from "./screen-box";
 import { PanelFrame } from "./panels/panel-frame";
 import { renderPanel, isWebScreenChannel } from "./panels/panel-registry";
 import { Drawer } from "@/components/ui/drawer";
-import { AddPanelDialog } from "./add-panel-dialog";
-import { ScadaComponentsDialog } from "./scada-components-dialog";
+import { ComponentPalette } from "./component-palette";
+import { PanelInspector } from "./panel-inspector";
 import { ManageStreamsDialog } from "./manage-streams-dialog";
 import { AnalysisView } from "./analysis/analysis-view";
 import { ChannelsView } from "./channels-view";
@@ -121,7 +120,12 @@ export function ScadaView() {
   const isMobile = useIsMobile();
   const [menuOpen, setMenuOpen] = useState(false);
   const [pagesOpen, setPagesOpen] = useState(false);
-  const [showComponents, setShowComponents] = useState(false);
+  // Panel yang sedang dibuka di inspector (mode Atur Layout, klik dua kali)
+  const [inspectorId, setInspectorId] = useState<string | null>(null);
+  // Pembungkus CanvasStage — target drop untuk drag dari Palet Komponen.
+  // (Inspector menutup sendiri saat mode edit berakhir — render-nya di-guard
+  // store.editMode; id basi dibersihkan di setiap transisi masuk/keluar edit.)
+  const stageBoxRef = useRef<HTMLDivElement>(null);
   // Drawer form "Halaman Baru" / "Ganti Nama Halaman" (pengganti window.prompt)
   const [pageForm, setPageForm] = useState<{ mode: "new" | "rename"; name: string } | null>(null);
   const [pageFormSaving, setPageFormSaving] = useState(false);
@@ -212,6 +216,7 @@ export function ScadaView() {
   }, []);
 
   async function handleSave() {
+    setInspectorId(null);
     try {
       await store.save();
       toast.success("Layout tersimpan");
@@ -325,6 +330,46 @@ export function ScadaView() {
     }
     setMenuOpen(false);
   }
+
+  /* Fixed canvas (OBS-style): the page scales as ONE unit on every
+     screen/zoom — positions never reflow. Dipakai di mode lihat maupun edit
+     (mode edit membungkusnya dengan Palet Komponen di sisi kiri). */
+  const stageEl = (
+    <CanvasStage
+      canvas={
+        store.editMode
+          ? store.draftCanvas ?? DEFAULT_CANVAS
+          : active?.layout.canvas ?? DEFAULT_CANVAS
+      }
+      panels={panels}
+      editMode={store.editMode}
+      fullscreen={fullscreen}
+      panelTitle={panelTitle}
+      renderContent={(panel) =>
+        renderPanel(panel, store.streams, store.tags, {
+          channels: store.channels,
+          webLive: true,
+          // Hidden wall (other tab): web stays alive, video pauses.
+          videoSuspended: store.viewMode !== "monitor",
+        })
+      }
+      webChannelIdOf={(panel) => {
+        if (panel.type !== "channel") return null;
+        const ch = store.channels.find((c) => c.id === panel.config.channel_id);
+        return ch && isWebScreenChannel(ch, store.streams) ? ch.id : null;
+      }}
+      panelAspect={(panel) => {
+        if (panel.type !== "channel") return null;
+        const ch = store.channels.find((c) => c.id === panel.config.channel_id);
+        return ch ? channelAspect(ch) : null;
+      }}
+      hideChrome={maximizedPanel !== null && !store.editMode}
+      onRectChange={store.editMode ? store.updatePanelRect : undefined}
+      onRemove={store.editMode ? store.removePanel : undefined}
+      onMaximize={store.editMode ? undefined : (id) => store.setMaximizedPanel(id)}
+      onEditPanel={store.editMode ? setInspectorId : undefined}
+    />
+  );
 
   if (store.loading) {
     return (
@@ -498,26 +543,14 @@ export function ScadaView() {
                   </option>
                 ))}
               </select>
-              <button
-                onClick={() => store.setShowAddPanel(true)}
-                className="btn btn-secondary btn-sm gap-1.5"
-              >
-                <Plus className="size-3.5" />
-                <span className="hidden sm:inline">Tambah Panel</span>
-              </button>
-              <button
-                onClick={() => setShowComponents(true)}
-                className="btn btn-secondary btn-sm gap-1.5"
-                title="Teks, bentuk, dan komponen data untuk membangun tampilan HMI"
-              >
-                <Shapes className="size-3.5" />
-                <span className="hidden sm:inline">Komponen</span>
-              </button>
               <button onClick={handleSave} className="btn btn-primary btn-sm gap-1.5">
                 <Check className="size-3.5" /> Simpan
               </button>
               <button
-                onClick={() => store.cancelEdit()}
+                onClick={() => {
+                  setInspectorId(null);
+                  store.cancelEdit();
+                }}
                 className="btn btn-ghost btn-sm gap-1.5"
               >
                 <X className="size-3.5" /> Batal
@@ -527,7 +560,10 @@ export function ScadaView() {
             <>
               {canEdit && !isMobile && (
                 <button
-                  onClick={() => store.enterEdit()}
+                  onClick={() => {
+                    setInspectorId(null);
+                    store.enterEdit();
+                  }}
                   className="btn btn-secondary btn-sm gap-1.5"
                   disabled={!active}
                 >
@@ -610,7 +646,9 @@ export function ScadaView() {
       {store.editMode && !fullscreen && (
         <div className="flex shrink-0 items-center gap-2 border-b border-primary/20 bg-primary/5 px-4 py-1.5 text-[11.5px] font-medium text-primary">
           <Move className="size-3.5 shrink-0" />
-          Geser panel lewat bar judulnya · tarik sudut kanan-bawah untuk mengubah ukuran · klik Simpan kalau sudah pas
+          Seret komponen dari palet kiri ke kanvas · klik dua kali komponen untuk
+          mengaturnya · geser/tarik sudut untuk memindah & mengubah ukuran ·
+          Simpan kalau sudah pas
         </div>
       )}
 
@@ -635,24 +673,34 @@ export function ScadaView() {
           fullscreen ? "bg-black" : "bg-bg-sidebar",
           store.viewMode !== "monitor" && !fullscreen && "hidden"
         )}
+        // Panel di dinding Monitor pakai permukaan off-white lembut di light
+        // mode (dark mode: nilai sama dengan --rein-bg, tak berubah).
+        style={{ "--rein-bg": "var(--rnet-panel-bg)" } as React.CSSProperties}
       >
-        {rectPanelCount === 0 ? (
+        {store.editMode && !isMobile ? (
+          /* Mode Atur Layout: Palet Komponen (kiri) + kanvas. Seret kartu ke
+             kanvas atau klik + — komponen data membuka inspector otomatis. */
+          <div className="flex h-full">
+            <ComponentPalette
+              stageBoxRef={stageBoxRef}
+              onPlaced={(id, openInspector) => {
+                if (openInspector) setInspectorId(id);
+              }}
+            />
+            <div ref={stageBoxRef} className="relative min-w-0 flex-1">
+              {stageEl}
+            </div>
+          </div>
+        ) : rectPanelCount === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <MonitorPlay className="size-10 text-text-light" />
             <p className="text-[13px] font-semibold text-text">
               Belum ada panel di layout ini
             </p>
-            {store.editMode ? (
-              <button
-                onClick={() => store.setShowAddPanel(true)}
-                className="btn btn-primary btn-sm gap-1.5"
-              >
-                <Plus className="size-3.5" /> Tambah Panel
-              </button>
-            ) : canEdit ? (
+            {canEdit ? (
               <p className="text-[12px] text-text-muted">
-                Klik &ldquo;Atur Layout&rdquo; lalu pilih channel yang mau
-                ditampilkan (channel dibuat di tab Channel).
+                Klik &ldquo;Atur Layout&rdquo; lalu seret komponen (channel,
+                gauge, grafik, teks, gambar) dari palet kiri ke kanvas.
               </p>
             ) : (
               <p className="text-[12px] text-text-muted">
@@ -701,47 +749,7 @@ export function ScadaView() {
               })}
           </div>
         ) : (
-          /* Fixed canvas (OBS-style): the page scales as ONE unit on every
-             screen/zoom — positions never reflow. */
-          <CanvasStage
-            canvas={
-              store.editMode
-                ? store.draftCanvas ?? DEFAULT_CANVAS
-                : active?.layout.canvas ?? DEFAULT_CANVAS
-            }
-            panels={panels}
-            editMode={store.editMode}
-            fullscreen={fullscreen}
-            panelTitle={panelTitle}
-            renderContent={(panel) =>
-              renderPanel(panel, store.streams, store.tags, {
-                channels: store.channels,
-                webLive: true,
-                // Hidden wall (other tab): web stays alive, video pauses.
-                videoSuspended: store.viewMode !== "monitor",
-              })
-            }
-            webChannelIdOf={(panel) => {
-              if (panel.type !== "channel") return null;
-              const ch = store.channels.find(
-                (c) => c.id === panel.config.channel_id
-              );
-              return ch && isWebScreenChannel(ch, store.streams) ? ch.id : null;
-            }}
-            panelAspect={(panel) => {
-              if (panel.type !== "channel") return null;
-              const ch = store.channels.find(
-                (c) => c.id === panel.config.channel_id
-              );
-              return ch ? channelAspect(ch) : null;
-            }}
-            hideChrome={maximizedPanel !== null && !store.editMode}
-            onRectChange={store.editMode ? store.updatePanelRect : undefined}
-            onRemove={store.editMode ? store.removePanel : undefined}
-            onMaximize={
-              store.editMode ? undefined : (id) => store.setMaximizedPanel(id)
-            }
-          />
+          stageEl
         )}
 
         {/* Keep-alive web embeds — iframes survive page flips (no V-Net
@@ -864,18 +872,21 @@ export function ScadaView() {
       </div>
 
       {/* Dialogs */}
-      {store.showAddPanel && store.draftPanels && (
-        <AddPanelDialog
-          channels={store.channels}
-          existingPanels={store.draftPanels}
-          canvas={store.draftCanvas ?? DEFAULT_CANVAS}
-          onAdd={store.addPanel}
-          onClose={() => store.setShowAddPanel(false)}
-        />
-      )}
-      {showComponents && store.editMode && (
-        <ScadaComponentsDialog onClose={() => setShowComponents(false)} />
-      )}
+      {store.editMode &&
+        inspectorId &&
+        (() => {
+          const p = store.draftPanels?.find((x) => x.id === inspectorId);
+          if (!p) return null;
+          return (
+            <PanelInspector
+              panel={p}
+              tags={store.tags}
+              channels={store.channels}
+              onChange={(patch) => store.updatePanel(p.id, patch)}
+              onClose={() => setInspectorId(null)}
+            />
+          );
+        })()}
       {pageForm && (
         <Drawer
           title={pageForm.mode === "new" ? "Halaman Baru" : "Ganti Nama Halaman"}

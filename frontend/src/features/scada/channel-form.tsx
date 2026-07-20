@@ -62,6 +62,25 @@ export function channelKindLabel(kind: ChannelKind): string {
   return CHANNEL_KINDS.find((k) => k.kind === kind)?.label ?? kind;
 }
 
+/** Ikon + label yang menyatakan SUMBER channel yang sebenarnya: channel
+ *  "screen" mengikuti source_type dari Source yang dirujuknya (Video Stream /
+ *  Halaman Web / VNC), bukan label generik "Video Screen"; kind data lama
+ *  tetap pakai meta kind-nya. */
+export function channelSourceMeta(
+  channel: Channel,
+  streams: Stream[]
+): { label: string; icon: React.ComponentType<{ className?: string }> } {
+  if (channel.kind === "screen") {
+    const src = streams.find(
+      (s) => s.id === (channel.config as ScreenChannelConfig).stream_id
+    );
+    if (src) return SOURCE_TYPE_META[src.source_type];
+    return { label: "Sumber hilang", icon: MonitorPlay };
+  }
+  const k = CHANNEL_KINDS.find((x) => x.kind === channel.kind);
+  return { label: k?.label ?? channel.kind, icon: k?.icon ?? MonitorPlay };
+}
+
 export function ChannelForm({
   initial,
   channels,

@@ -76,11 +76,13 @@ def test_valid_alarm_panel_passes():
     assert layout.panels[0].config.range == "24h"  # default
 
 
-def test_alarm_panel_requires_tag():
-    with pytest.raises(ValidationError):
-        PerspectiveLayout.model_validate(
-            {"version": 1, "panels": [_chart_panel(type="alarm", config={"tag_ids": []})]}
-        )
+def test_alarm_panel_empty_tags_is_placeholder():
+    # Palet Komponen memasang panel "kosong" dulu (diatur via inspector) —
+    # daftar tag kosong valid dan dirender sebagai placeholder di UI.
+    layout = PerspectiveLayout.model_validate(
+        {"version": 1, "panels": [_chart_panel(type="alarm", config={"tag_ids": []})]}
+    )
+    assert layout.panels[0].config.tag_ids == []
 
 
 def test_valid_chart_panel_passes():
@@ -92,10 +94,10 @@ def test_valid_chart_panel_passes():
 
 
 def test_chart_panel_tag_count_bounds():
-    with pytest.raises(ValidationError):  # zero tags
-        PerspectiveLayout.model_validate(
-            {"version": 1, "panels": [_chart_panel(config={"tag_ids": []})]}
-        )
+    # zero tags = placeholder yang sah (drop-dulu-atur-kemudian)
+    PerspectiveLayout.model_validate(
+        {"version": 1, "panels": [_chart_panel(config={"tag_ids": []})]}
+    )
     with pytest.raises(ValidationError):  # five tags (max 4)
         PerspectiveLayout.model_validate(
             {
@@ -120,10 +122,10 @@ def test_valid_table_panel_passes():
 
 
 def test_table_panel_tag_count_bounds():
-    with pytest.raises(ValidationError):  # zero tags
-        PerspectiveLayout.model_validate(
-            {"version": 1, "panels": [_chart_panel(type="table", config={"tag_ids": []})]}
-        )
+    # zero tags = placeholder yang sah
+    PerspectiveLayout.model_validate(
+        {"version": 1, "panels": [_chart_panel(type="table", config={"tag_ids": []})]}
+    )
     with pytest.raises(ValidationError):  # nine tags (max 8)
         PerspectiveLayout.model_validate(
             {
@@ -153,11 +155,83 @@ def test_valid_gauge_panel_passes():
     assert layout.panels[0].config.direction == "above"  # default
 
 
-def test_gauge_panel_requires_tag_id():
+def test_gauge_panel_without_tag_is_placeholder():
+    layout = PerspectiveLayout.model_validate(
+        {"version": 1, "panels": [_chart_panel(type="gauge", config={})]}
+    )
+    assert layout.panels[0].config.tag_id is None
+    assert layout.panels[0].config.style == "stat"  # default = tampilan lama
+
+
+def test_gauge_panel_arc_style_with_scale_and_color():
+    layout = PerspectiveLayout.model_validate(
+        {
+            "version": 1,
+            "panels": [
+                _chart_panel(
+                    type="gauge",
+                    config={
+                        "tag_id": str(uuid.uuid4()),
+                        "style": "arc",
+                        "min": 0,
+                        "max": 250,
+                        "warning": 180,
+                        "critical": 220,
+                        "color": "#2a78d6",
+                        "decimals": 1,
+                        "unit": "bar",
+                    },
+                )
+            ],
+        }
+    )
+    cfg = layout.panels[0].config
+    assert cfg.style == "arc"
+    assert cfg.max == 250
+
+
+def test_gauge_panel_bad_color_rejected():
     with pytest.raises(ValidationError):
         PerspectiveLayout.model_validate(
-            {"version": 1, "panels": [_chart_panel(type="gauge", config={})]}
+            {
+                "version": 1,
+                "panels": [
+                    _chart_panel(
+                        type="gauge",
+                        config={"tag_id": str(uuid.uuid4()), "color": "merah"},
+                    )
+                ],
+            }
         )
+
+
+def test_chart_panel_line_colors_and_axis():
+    layout = PerspectiveLayout.model_validate(
+        {
+            "version": 1,
+            "panels": [
+                _chart_panel(
+                    config={
+                        "tag_ids": [str(uuid.uuid4()), str(uuid.uuid4())],
+                        "colors": ["#dc2626", None],
+                        "y_min": 0,
+                        "y_max": 100,
+                        "line_style": "smooth",
+                        "show_legend": False,
+                    }
+                )
+            ],
+        }
+    )
+    cfg = layout.panels[0].config
+    assert cfg.colors == ["#dc2626", None]
+    assert cfg.line_style == "smooth"
+    # Config lama tanpa field baru tetap valid dengan bawaan tampilan lama
+    old = PerspectiveLayout.model_validate(
+        {"version": 1, "panels": [_chart_panel()]}
+    )
+    assert old.panels[0].config.line_style == "linear"
+    assert old.panels[0].config.show_grid is True
 
 
 def test_valid_bar_panel_passes():
@@ -176,15 +250,15 @@ def test_valid_bar_panel_passes():
 
 
 def test_bar_panel_tag_count_bounds():
-    with pytest.raises(ValidationError):  # one tag — comparison needs two
-        PerspectiveLayout.model_validate(
-            {
-                "version": 1,
-                "panels": [
-                    _chart_panel(type="bar", config={"tag_ids": [str(uuid.uuid4())]})
-                ],
-            }
-        )
+    # satu tag kini sah (panel palet diisi bertahap); UI tetap menyarankan ≥2
+    PerspectiveLayout.model_validate(
+        {
+            "version": 1,
+            "panels": [
+                _chart_panel(type="bar", config={"tag_ids": [str(uuid.uuid4())]})
+            ],
+        }
+    )
     with pytest.raises(ValidationError):  # nine tags (max 8)
         PerspectiveLayout.model_validate(
             {
@@ -279,9 +353,104 @@ def test_v2_default_canvas_filled():
 
 
 def test_too_many_panels_rejected():
-    panels = [_video_panel(id=f"p{i}") for i in range(25)]
+    # Batas naik ke 64 — HMI penuh teks/bentuk/gambar cepat melewati 24
+    PerspectiveLayout.model_validate(
+        {"version": 1, "panels": [_video_panel(id=f"p{i}") for i in range(64)]}
+    )
     with pytest.raises(ValidationError):
-        PerspectiveLayout.model_validate({"version": 1, "panels": panels})
+        PerspectiveLayout.model_validate(
+            {"version": 1, "panels": [_video_panel(id=f"p{i}") for i in range(65)]}
+        )
+
+
+# ── Komponen baru: level, led, image ────────────────────────────────────────
+
+
+def test_valid_level_panel_passes():
+    layout = PerspectiveLayout.model_validate(
+        {
+            "version": 1,
+            "panels": [
+                _chart_panel(
+                    type="level",
+                    config={
+                        "tag_id": str(uuid.uuid4()),
+                        "min": 0,
+                        "max": 5000,
+                        "warning": 4000,
+                        "color": "#2a78d6",
+                    },
+                )
+            ],
+        }
+    )
+    assert layout.panels[0].config.max == 5000
+
+
+def test_level_panel_inverted_scale_rejected():
+    with pytest.raises(ValidationError):
+        PerspectiveLayout.model_validate(
+            {
+                "version": 1,
+                "panels": [
+                    _chart_panel(type="level", config={"min": 100, "max": 100})
+                ],
+            }
+        )
+
+
+def test_valid_led_panel_defaults():
+    layout = PerspectiveLayout.model_validate(
+        {
+            "version": 1,
+            "panels": [
+                _chart_panel(
+                    type="led",
+                    config={"tag_id": str(uuid.uuid4()), "threshold": 80},
+                )
+            ],
+        }
+    )
+    cfg = layout.panels[0].config
+    assert cfg.direction == "above"
+    assert cfg.on_label == "AKTIF"
+    assert cfg.show_value is True
+
+
+def _image_panel(**config) -> dict:
+    return _chart_panel(
+        type="image",
+        config={"src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==", **config},
+    )
+
+
+def test_valid_image_panel_data_uri_and_url():
+    layout = PerspectiveLayout.model_validate(
+        {"version": 1, "panels": [_image_panel()]}
+    )
+    assert layout.panels[0].config.fit == "contain"  # default
+    PerspectiveLayout.model_validate(
+        {
+            "version": 1,
+            "panels": [_image_panel(src="https://contoh.com/logo.png", fit="cover")],
+        }
+    )
+
+
+def test_image_panel_bad_src_rejected():
+    # javascript:/data:text tidak pernah boleh jadi src gambar
+    for bad in ("javascript:alert(1)", "data:text/html;base64,PGI+", "file:///x.png"):
+        with pytest.raises(ValidationError):
+            PerspectiveLayout.model_validate(
+                {"version": 1, "panels": [_image_panel(src=bad)]}
+            )
+
+
+def test_image_panel_unknown_field_rejected():
+    with pytest.raises(ValidationError):
+        PerspectiveLayout.model_validate(
+            {"version": 1, "panels": [_image_panel(onclick="x")]}
+        )
 
 
 # ── Channel kind "screen" (references a Source: stream/web/vnc) ──────────────

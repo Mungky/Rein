@@ -45,6 +45,11 @@ export const RANGE_LABELS: Record<ChartRange, string> = {
 
 const SERIES_COLORS = [1, 2, 3, 4].map((n) => `var(--rnet-chart-${n})`);
 
+/** Warna garis ke-i: pilihan user (config.colors) menang, slot bawaan menyusul. */
+export function seriesColor(config: ChartPanelConfig, i: number): string {
+  return config.colors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length];
+}
+
 type Row = Record<string, number | [number, number]> & { t: number };
 
 function buildRows(series: HistorySeries[], showBand: boolean): Row[] {
@@ -127,7 +132,8 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
   if (config.tag_ids.length === 0) {
     return (
       <Empty icon>
-        Belum ada tag dipilih untuk grafik ini.
+        Grafik belum diatur — buka mode Atur Layout lalu klik dua kali panel
+        ini untuk memilih sensor.
       </Empty>
     );
   }
@@ -145,16 +151,24 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
     return <Empty>Belum ada data pada rentang {RANGE_LABELS[config.range]}.</Empty>;
   }
 
+  // Bawaan "linear" — persis tampilan lama; smooth/step adalah opsi baru.
+  const lineType =
+    config.line_style === "smooth"
+      ? "monotone"
+      : config.line_style === "step"
+        ? "stepAfter"
+        : "linear";
+
   return (
     <div className="flex h-full w-full flex-col bg-bg">
       {/* Legend — identity via swatch + text (text stays in ink tokens) */}
-      {config.tag_ids.length > 1 && (
+      {config.tag_ids.length > 1 && config.show_legend !== false && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 pt-1.5">
           {config.tag_ids.map((tagId, i) => (
             <span key={tagId} className="flex items-center gap-1.5 text-[10.5px] text-text-muted">
               <span
                 className="inline-block h-[3px] w-3.5 rounded-full"
-                style={{ background: SERIES_COLORS[i] }}
+                style={{ background: seriesColor(config, i) }}
               />
               {tagLabel(tagId, i)}
             </span>
@@ -165,7 +179,9 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
       <div className="min-h-0 flex-1 px-1 pb-1">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid vertical={false} stroke="var(--rein-border-soft)" />
+            {config.show_grid !== false && (
+              <CartesianGrid vertical={false} stroke="var(--rein-border-soft)" />
+            )}
             <XAxis
               dataKey="t"
               type="number"
@@ -179,7 +195,10 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
             />
             <YAxis
               width={42}
-              domain={["auto", "auto"]}
+              domain={[
+                config.y_min ?? "auto",
+                config.y_max ?? "auto",
+              ]}
               tick={{ fontSize: 10, fill: "var(--rein-text-light)" }}
               tickLine={false}
               axisLine={false}
@@ -209,7 +228,7 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
               <Area
                 dataKey={`${config.tag_ids[0]}:band`}
                 stroke="none"
-                fill={SERIES_COLORS[0]}
+                fill={seriesColor(config, 0)}
                 fillOpacity={0.12}
                 isAnimationActive={false}
                 name="Min–Maks"
@@ -218,9 +237,10 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
             {config.tag_ids.map((tagId, i) => (
               <Line
                 key={tagId}
+                type={lineType}
                 dataKey={tagId}
                 name={tagLabel(tagId, i)}
-                stroke={SERIES_COLORS[i]}
+                stroke={seriesColor(config, i)}
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 4 }}

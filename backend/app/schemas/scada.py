@@ -59,6 +59,11 @@ class VideoPanel(BaseModel):
 
 ChartRange = Literal["1h", "6h", "24h", "7d", "30d"]
 
+# Warna hex CSS (#rgb / #rrggbb / #rrggbbaa) — dipakai semua komponen HMI.
+HEX_COLOR = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+
+HexColor = Annotated[str, Field(pattern=HEX_COLOR)]
+
 
 class ScreenSize(BaseModel):
     """Mixin: "Resolusi Layar" — every CHANNEL is a screen with a fixed
@@ -70,9 +75,19 @@ class ScreenSize(BaseModel):
 
 
 class ChartPanelConfig(ScreenSize):
-    tag_ids: list[uuid.UUID] = Field(min_length=1, max_length=4)
+    # 0 tag = komponen baru dari palet yang belum diatur (placeholder di UI)
+    tag_ids: list[uuid.UUID] = Field(default_factory=list, max_length=4)
     range: ChartRange = "24h"
     show_minmax: bool = False
+    # Warna per garis, sejajar dengan tag_ids; None = warna slot bawaan
+    colors: list[HexColor | None] = Field(default_factory=list, max_length=4)
+    # Batas sumbu Y; None = otomatis
+    y_min: float | None = None
+    y_max: float | None = None
+    # Bawaan "linear" = persis tampilan lama; smooth/step opsi baru
+    line_style: Literal["smooth", "linear", "step"] = "linear"
+    show_legend: bool = True
+    show_grid: bool = True
 
 
 class ChartPanel(BaseModel):
@@ -85,7 +100,7 @@ class ChartPanel(BaseModel):
 
 
 class TablePanelConfig(ScreenSize):
-    tag_ids: list[uuid.UUID] = Field(min_length=1, max_length=8)
+    tag_ids: list[uuid.UUID] = Field(default_factory=list, max_length=8)
     range: ChartRange = "24h"
 
 
@@ -99,13 +114,25 @@ class TablePanel(BaseModel):
 
 
 class GaugePanelConfig(ScreenSize):
-    tag_id: uuid.UUID
+    # None = dipasang dari palet tapi belum diatur (UI merender placeholder)
+    tag_id: uuid.UUID | None = None
     # Status thresholds (optional). `direction` says which side is bad:
     # "above" → value ≥ warning is Waspada, ≥ critical is Kritis;
     # "below" → value ≤ warning is Waspada, ≤ critical is Kritis.
     warning: float | None = None
     critical: float | None = None
     direction: Literal["above", "below"] = "above"
+    # Bentuk tampilan: "stat" (angka besar), "arc" (jarum), "donut" (cincin)
+    style: Literal["stat", "arc", "donut"] = "stat"
+    # Skala gauge untuk arc/donut; None = 0–100
+    min: float | None = None
+    max: float | None = None
+    # Override label/satuan tag; None = ikut tag
+    label: str | None = Field(default=None, max_length=120)
+    unit: str | None = Field(default=None, max_length=30)
+    # Warna zona normal; None = hijau tema
+    color: HexColor | None = None
+    decimals: int | None = Field(default=None, ge=0, le=6)
 
 
 class GaugePanel(BaseModel):
@@ -118,10 +145,15 @@ class GaugePanel(BaseModel):
 
 
 class BarPanelConfig(ScreenSize):
-    # Comparison across tags ("plant 1 vs plant 2") — needs at least two bars
-    tag_ids: list[uuid.UUID] = Field(min_length=2, max_length=8)
+    # Comparison across tags ("plant 1 vs plant 2") — idealnya ≥2 batang;
+    # 0 = belum diatur (placeholder di UI)
+    tag_ids: list[uuid.UUID] = Field(default_factory=list, max_length=8)
     range: ChartRange = "24h"
     metric: Literal["avg", "last", "min", "max"] = "avg"
+    # Warna batang (satu ukuran = satu warna); None = warna chart bawaan
+    color: HexColor | None = None
+    # "horizontal" = batang mendatar (bawaan), "vertical" = batang tegak
+    orientation: Literal["horizontal", "vertical"] = "horizontal"
 
 
 class BarPanel(BaseModel):
@@ -136,7 +168,7 @@ class BarPanel(BaseModel):
 class AlarmPanelConfig(ScreenSize):
     # Watch a set of tags; thresholds are read from each tag's own
     # config.alarm_min / config.alarm_max (set in Analisis), not here.
-    tag_ids: list[uuid.UUID] = Field(min_length=1, max_length=8)
+    tag_ids: list[uuid.UUID] = Field(default_factory=list, max_length=8)
     range: ChartRange = "24h"
 
 
@@ -242,11 +274,92 @@ class ChannelPanel(BaseModel):
     config: ChannelPanelConfig
 
 
+# ── Komponen data lanjutan (gaya node-red-dashboard) ───────────────────────
+
+
+class LevelPanelConfig(ScreenSize):
+    """Level/tangki: isi naik-turun mengikuti nilai sensor pada skala min–max."""
+
+    tag_id: uuid.UUID | None = None
+    min: float = 0
+    max: float = 100
+    warning: float | None = None
+    critical: float | None = None
+    direction: Literal["above", "below"] = "above"
+    # Warna cairan saat normal; None = warna chart bawaan
+    color: HexColor | None = None
+    label: str | None = Field(default=None, max_length=120)
+    unit: str | None = Field(default=None, max_length=30)
+
+    @model_validator(mode="after")
+    def _scale_sane(self) -> "LevelPanelConfig":
+        if self.max <= self.min:
+            raise ValueError("Skala level: max harus lebih besar dari min")
+        return self
+
+
+class LevelPanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["level"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
+    config: LevelPanelConfig
+
+
+class LedPanelConfig(ScreenSize):
+    """LED indikator: menyala saat nilai berada di sisi `direction` dari ambang."""
+
+    tag_id: uuid.UUID | None = None
+    threshold: float = 0
+    direction: Literal["above", "below"] = "above"
+    on_color: HexColor | None = None
+    off_color: HexColor | None = None
+    on_label: str = Field(default="AKTIF", max_length=40)
+    off_label: str = Field(default="MATI", max_length=40)
+    label: str | None = Field(default=None, max_length=120)
+    show_value: bool = True
+
+
+class LedPanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["led"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
+    config: LedPanelConfig
+
+
+class ImagePanelConfig(BaseModel):
+    """Gambar/logo pemanis HMI. `src` = data URI hasil impor (browser sudah
+    mengecilkannya) atau URL http(s). Dirender lewat <img> saja — atribut
+    di-escape React dan script dalam SVG tidak pernah dieksekusi di <img>."""
+
+    model_config = {"extra": "forbid"}
+    # ~800 rb karakter ≈ 600 KB gambar terenkode base64 — cukup untuk logo,
+    # terlalu kecil untuk menjejalkan foto raksasa ke layout JSONB.
+    src: str = Field(
+        min_length=10,
+        max_length=800_000,
+        pattern=r"^(data:image/(png|jpe?g|webp|gif);base64,|https?://)",
+    )
+    fit: Literal["contain", "cover", "fill"] = "contain"
+    opacity: float = Field(default=1.0, ge=0.1, le=1.0)
+    radius: int = Field(default=0, ge=0, le=200)
+
+
+class ImagePanel(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["image"]
+    title: str = Field(default="", max_length=120)
+    grid: PanelGrid | None = None
+    rect: PanelRect | None = None
+    config: ImagePanelConfig
+
+
 # ── SCADA HMI decor components (Tahap awal "SCADA beneran") ────────────────
 # Static drawing elements for the Monitor canvas: custom text labels and
 # basic shapes (kotak / lingkaran / garis). Pure decoration — no data source.
-
-HEX_COLOR = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
 
 
 class TextPanelConfig(BaseModel):
@@ -304,6 +417,9 @@ Panel = Annotated[
         ChannelPanel,
         TextPanel,
         ShapePanel,
+        LevelPanel,
+        LedPanel,
+        ImagePanel,
     ],
     Field(discriminator="type"),
 ]
@@ -315,7 +431,8 @@ class PerspectiveLayout(BaseModel):
 
     version: Literal[1, 2] = 2
     canvas: CanvasSize | None = None
-    panels: list[Panel] = Field(default_factory=list, max_length=24)
+    # 64: membangun HMI (teks + bentuk + gambar + gauge) cepat melewati 24
+    panels: list[Panel] = Field(default_factory=list, max_length=64)
 
     @model_validator(mode="after")
     def _check_placement(self) -> "PerspectiveLayout":

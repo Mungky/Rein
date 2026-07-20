@@ -44,29 +44,81 @@ export interface VideoPanelConfig {
 export type ChartRange = "1h" | "6h" | "24h" | "7d" | "30d";
 
 export interface ChartPanelConfig {
-  tag_ids: string[]; // 1–4 historian tags
+  tag_ids: string[]; // 0–4 historian tags (0 = belum diatur, placeholder)
   range: ChartRange;
   show_minmax: boolean;
+  /** Warna per garis, sejajar dengan tag_ids; null = warna slot bawaan. */
+  colors?: (string | null)[];
+  /** Batas sumbu Y; null = otomatis. */
+  y_min?: number | null;
+  y_max?: number | null;
+  line_style?: "smooth" | "linear" | "step";
+  show_legend?: boolean;
+  show_grid?: boolean;
 }
 
 export interface TablePanelConfig {
-  tag_ids: string[]; // 1–8 historian tags
+  tag_ids: string[]; // 0–8 historian tags
   range: ChartRange;
 }
 
+export type GaugeStyle = "stat" | "arc" | "donut";
+
 export interface GaugePanelConfig {
-  tag_id: string;
+  tag_id: string | null; // null = belum diatur (dipasang dari palet, diatur lewat inspector)
   warning: number | null;
   critical: number | null;
   direction: "above" | "below"; // which side of the threshold is bad
+  /** Bentuk tampilan: "stat" (angka besar, bawaan), "arc" (jarum), "donut". */
+  style?: GaugeStyle;
+  /** Skala gauge untuk arc/donut; null = 0–100. */
+  min?: number | null;
+  max?: number | null;
+  /** Override label/satuan tag; null = ikut tag. */
+  label?: string | null;
+  unit?: string | null;
+  /** Warna zona normal; null = hijau tema. */
+  color?: string | null;
+  decimals?: number | null;
 }
 
 export type BarMetric = "avg" | "last" | "min" | "max";
 
 export interface BarPanelConfig {
-  tag_ids: string[]; // 2–8 tags — a comparison needs at least two bars
+  tag_ids: string[]; // idealnya ≥2 (perbandingan); 0 = belum diatur
   range: ChartRange;
   metric: BarMetric;
+  /** Warna batang (satu ukuran = satu warna); null = warna chart bawaan. */
+  color?: string | null;
+  /** "horizontal" = batang mendatar (bawaan), "vertical" = batang tegak. */
+  orientation?: "horizontal" | "vertical";
+}
+
+/** Level/tangki: isi naik-turun mengikuti nilai sensor (min–max = 0–100%). */
+export interface LevelPanelConfig {
+  tag_id: string | null;
+  min: number;
+  max: number;
+  warning: number | null;
+  critical: number | null;
+  direction: "above" | "below";
+  /** Warna cairan saat normal; null = warna chart bawaan. */
+  color?: string | null;
+  label?: string | null;
+  unit?: string | null;
+}
+
+/** LED indikator: menyala saat nilai berada di sisi `direction` dari ambang. */
+export interface LedPanelConfig {
+  tag_id: string | null;
+  threshold: number;
+  direction: "above" | "below";
+  on_color?: string | null; // default hijau tema
+  off_color?: string | null; // default abu redup
+  on_label?: string;
+  off_label?: string;
+  label?: string | null;
+  show_value?: boolean;
 }
 
 export interface AlarmPanelConfig {
@@ -148,6 +200,18 @@ export interface ShapePanelConfig {
   radius: number;
 }
 
+/** Gambar/logo pemanis HMI. `src` = data URI hasil impor (dikecilkan di
+ *  browser) atau URL http(s) langsung. Dirender lewat <img> — aman dari
+ *  script; SVG tidak dieksekusi di dalam <img>. */
+export interface ImagePanelConfig {
+  src: string;
+  fit: "contain" | "cover" | "fill";
+  /** 0.1–1; default 1. */
+  opacity?: number;
+  /** Corner rounding (canvas px). */
+  radius?: number;
+}
+
 /** Discriminated union on `type`. Implemented: "video", "chart", "table",
  *  "gauge", "bar", "alarm", "wall", "activity". The backend rejects unknown
  *  types at save time. */
@@ -163,7 +227,10 @@ export type Panel =
   | (PanelBase & { type: "web"; config: WebPanelConfig })
   | (PanelBase & { type: "channel"; config: ChannelPanelConfig })
   | (PanelBase & { type: "text"; config: TextPanelConfig })
-  | (PanelBase & { type: "shape"; config: ShapePanelConfig });
+  | (PanelBase & { type: "shape"; config: ShapePanelConfig })
+  | (PanelBase & { type: "level"; config: LevelPanelConfig })
+  | (PanelBase & { type: "led"; config: LedPanelConfig })
+  | (PanelBase & { type: "image"; config: ImagePanelConfig });
 
 /* ── Channels (TV-style registry) ── */
 

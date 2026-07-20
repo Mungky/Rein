@@ -78,7 +78,6 @@ interface ScadaState {
   /** Canvas resolution being edited (layout v2 — OBS-style fixed canvas). */
   draftCanvas: CanvasSize | null;
 
-  showAddPanel: boolean;
   showManageStreams: boolean;
   showManageSites: boolean;
 
@@ -141,7 +140,6 @@ interface ScadaState {
   /** Append a panel to the active perspective and persist immediately —
    *  used by the Analisis action bar ("Buat Grafik/Gauge/Bar"). */
   addPanelToActive: (panel: Panel) => Promise<void>;
-  setShowAddPanel: (v: boolean) => void;
   setShowManageStreams: (v: boolean) => void;
   setShowManageSites: (v: boolean) => void;
 }
@@ -198,7 +196,6 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   draftPanels: null,
   draftCanvas: null,
 
-  showAddPanel: false,
   showManageStreams: false,
   showManageSites: false,
 
@@ -318,7 +315,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   addPanel: (panel) => {
     const { draftPanels } = get();
     if (!draftPanels) return;
-    set({ draftPanels: [...draftPanels, panel], showAddPanel: false });
+    set({ draftPanels: [...draftPanels, panel] });
   },
 
   removePanel: (panelId) => {
@@ -618,7 +615,6 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     });
   },
 
-  setShowAddPanel: (v) => set({ showAddPanel: v }),
   setShowManageStreams: (v) => set({ showManageStreams: v }),
   setShowManageSites: (v) => set({ showManageSites: v }),
 }));

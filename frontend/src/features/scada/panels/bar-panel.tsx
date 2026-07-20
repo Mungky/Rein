@@ -54,6 +54,8 @@ export function BarPanel({ config, tags }: { config: BarPanelConfig; tags: Tag[]
 
   usePanelRefresh(load);
 
+  const unconfigured = config.tag_ids.length === 0;
+
   const rows: Row[] = useMemo(() => {
     if (!items) return [];
     return items
@@ -66,6 +68,14 @@ export function BarPanel({ config, tags }: { config: BarPanelConfig; tags: Tag[]
       .sort((a, b) => b.value - a.value);
   }, [items, tags, config.metric]);
 
+  if (unconfigured) {
+    return (
+      <Center icon>
+        Bar belum diatur — buka mode Atur Layout lalu klik dua kali panel ini
+        untuk memilih sensor.
+      </Center>
+    );
+  }
   if (error && !items) {
     return <Center>Gagal memuat perbandingan — mencoba lagi…</Center>;
   }
@@ -82,6 +92,9 @@ export function BarPanel({ config, tags }: { config: BarPanelConfig; tags: Tag[]
 
   const top = rows[0].value;
   const mean = rows.reduce((s, r) => s + r.value, 0) / rows.length;
+  // "vertical" = batang tegak (recharts layout "horizontal"); bawaan mendatar
+  const upright = config.orientation === "vertical";
+  const barFill = config.color ?? "var(--rnet-chart-1)";
 
   return (
     <div className="flex h-full w-full flex-col bg-bg">
@@ -92,24 +105,45 @@ export function BarPanel({ config, tags }: { config: BarPanelConfig; tags: Tag[]
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={rows}
-            layout="vertical"
-            margin={{ top: 4, right: 48, bottom: 0, left: 8 }}
+            layout={upright ? "horizontal" : "vertical"}
+            margin={
+              upright
+                ? { top: 20, right: 12, bottom: 0, left: 0 }
+                : { top: 4, right: 48, bottom: 0, left: 8 }
+            }
           >
-            <CartesianGrid horizontal={false} stroke="var(--rein-border-soft)" />
+            <CartesianGrid
+              horizontal={upright}
+              vertical={!upright}
+              stroke="var(--rein-border-soft)"
+            />
             <XAxis
-              type="number"
-              tick={{ fontSize: 10, fill: "var(--rein-text-light)" }}
+              type={upright ? "category" : "number"}
+              dataKey={upright ? "label" : undefined}
+              tick={{
+                fontSize: upright ? 11 : 10,
+                fill: upright ? "var(--rein-text-muted)" : "var(--rein-text-light)",
+              }}
               tickLine={false}
               axisLine={{ stroke: "var(--rein-border)" }}
-              tickFormatter={(v: number) => v.toLocaleString("id")}
+              tickFormatter={
+                upright ? undefined : (v: number) => v.toLocaleString("id")
+              }
+              interval={upright ? 0 : undefined}
             />
             <YAxis
-              type="category"
-              dataKey="label"
-              width={110}
-              tick={{ fontSize: 11, fill: "var(--rein-text-muted)" }}
+              type={upright ? "number" : "category"}
+              dataKey={upright ? undefined : "label"}
+              width={upright ? 42 : 110}
+              tick={{
+                fontSize: upright ? 10 : 11,
+                fill: upright ? "var(--rein-text-light)" : "var(--rein-text-muted)",
+              }}
               tickLine={false}
               axisLine={false}
+              tickFormatter={
+                upright ? (v: number) => v.toLocaleString("id") : undefined
+              }
             />
             <Tooltip
               cursor={{ fill: "var(--rein-bg-hover)" }}
@@ -137,14 +171,14 @@ export function BarPanel({ config, tags }: { config: BarPanelConfig; tags: Tag[]
             />
             <Bar
               dataKey="value"
-              fill="var(--rnet-chart-1)"
-              barSize={18}
-              radius={[0, 4, 4, 0]}
+              fill={barFill}
+              barSize={upright ? 28 : 18}
+              radius={upright ? [4, 4, 0, 0] : [0, 4, 4, 0]}
               isAnimationActive={false}
             >
               <LabelList
                 dataKey="value"
-                position="right"
+                position={upright ? "top" : "right"}
                 formatter={(v) =>
                   typeof v === "number" ? v.toLocaleString("id") : String(v ?? "")
                 }

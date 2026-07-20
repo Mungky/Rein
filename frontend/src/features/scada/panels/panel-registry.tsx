@@ -25,6 +25,9 @@ import { GaugePanel } from "./gauge-panel";
 import { BarPanel } from "./bar-panel";
 import { AlarmPanel } from "./alarm-panel";
 import { ActivityPanel } from "./activity-panel";
+import { LevelPanel } from "./level-panel";
+import { LedPanel } from "./led-panel";
+import { ImagePanel } from "./image-panel";
 import { WebPanel } from "./web-panel";
 import { VncPanel } from "./vnc-panel";
 import { CroppedVideoPanel } from "./cropped-video-panel";
@@ -247,6 +250,12 @@ export function renderPanel(
       return <TextDecorPanel config={panel.config} />;
     case "shape":
       return <ShapeDecorPanel config={panel.config} />;
+    case "level":
+      return <LevelPanel config={panel.config} tags={tags} />;
+    case "led":
+      return <LedPanel config={panel.config} tags={tags} />;
+    case "image":
+      return <ImagePanel config={panel.config} />;
     default:
       return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg-sidebar text-text-muted">

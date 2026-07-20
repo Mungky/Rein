@@ -238,6 +238,15 @@
   --rnet-chart-2: #1baf7a;
   --rnet-chart-3: #eda100;
   --rnet-chart-4: #008300;
+
+  /* R-Net Monitor stage — light mode pakai abu lembut (bukan hitam) supaya
+     panel putih tidak silau; fullscreen tetap hitam (dinding TV). */
+  --rnet-stage-bg: #dde2e9;   /* area di luar kanvas (letterbox) */
+  --rnet-canvas-bg: #eef1f5;  /* kanvas halaman */
+  --rnet-cell-ring: rgba(15, 23, 42, 0.12);
+  /* Permukaan panel di dinding Monitor: off-white lembut (bukan #fff murni,
+     mata pegal) — di-scope lewat override --rein-bg pada container wall. */
+  --rnet-panel-bg: #f6f8fa;
 }
 
 [data-theme="dark"] {
@@ -284,6 +293,12 @@
   --rnet-chart-2: #199e70;
   --rnet-chart-3: #c98500;
   --rnet-chart-4: #008300;
+
+  /* R-Net Monitor stage — dark tetap near-black seperti semula */
+  --rnet-stage-bg: #000000;
+  --rnet-canvas-bg: #0a0a0c;
+  --rnet-cell-ring: rgba(255, 255, 255, 0.15);
+  --rnet-panel-bg: var(--rein-bg);
 
   /* Shadows — deep but not too smudgy */
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.40);
