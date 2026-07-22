@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import RFB from "@novnc/novnc";
 import type { CropRect } from "../types";
 import { OrbitFallback } from "./orbit-fallback";
@@ -25,6 +25,15 @@ export function vncSocketUrl(raw: string): string | null {
   const url = raw.trim();
   if (!/^(https?|wss?):\/\//i.test(url)) return null;
   return url.replace(/^http/i, "ws");
+}
+
+/** True when the page is HTTPS but the socket would be plain ws:// — browsers
+ *  block that as mixed content, and `new WebSocket()` throws SecurityError.
+ *  Detected up front because the thrown error is indistinguishable from a
+ *  malformed URL, and reporting it as "alamat tidak valid" sends people off to
+ *  reconfigure the tunnel when the only fix is writing https:// in the Source. */
+export function isMixedContent(wsUrl: string, pageProtocol: string): boolean {
+  return pageProtocol === "https:" && /^ws:\/\//i.test(wsUrl);
 }
 
 type VncStatus =
@@ -68,10 +77,16 @@ export function VncPanel({
 
   const wsUrl = vncSocketUrl(rawUrl);
   const pass = password ?? undefined;
+  // Read in an effect-free way but guard SSR: on the server there is no
+  // location, and mixed content is a browser-only rule.
+  const mixed =
+    wsUrl !== null &&
+    typeof window !== "undefined" &&
+    isMixedContent(wsUrl, window.location.protocol);
 
   useEffect(() => {
     const screen = screenEl;
-    if (!screen || !wsUrl) return;
+    if (!screen || !wsUrl || mixed) return;
 
     let rfb: RFB | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -176,11 +191,20 @@ export function VncPanel({
         // already closed
       }
     };
-  }, [screenEl, wsUrl, pass, nonce]);
+  }, [screenEl, wsUrl, pass, nonce, mixed]);
 
   useEffect(() => {
     if (fb) onResolution?.(fb.w, fb.h);
   }, [fb, onResolution]);
+
+  if (mixed) {
+    return (
+      <OrbitFallback
+        kind="error"
+        reason="Alamat sumber VNC memakai http:// — browser memblokirnya dari halaman https. Ubah jadi https:// di Kelola Screen (tunnel tetap HTTP ke localhost:6080)."
+      />
+    );
+  }
 
   if (!wsUrl) {
     return <OrbitFallback kind="error" reason="Alamat VNC tidak valid" />;
@@ -212,10 +236,11 @@ export function VncPanel({
       {status.state !== "connected" && (
         <div className="absolute inset-0">
           {status.state === "connecting" ? (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg-sidebar text-text-muted">
-              <Loader2 className="size-6 animate-spin" />
-              <span className="text-[12px]">Menghubungkan ke sumber VNC…</span>
-            </div>
+            <OrbitFallback
+              kind="idle"
+              label="Menghubungkan"
+              reason="Menghubungkan ke sumber VNC…"
+            />
           ) : (
             <OrbitFallback
               kind="error"

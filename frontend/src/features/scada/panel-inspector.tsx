@@ -20,6 +20,18 @@ import { cn } from "@/lib/utils";
 import { importImageAsDataUri } from "./image-import";
 import { RANGE_LABELS } from "./panels/chart-panel";
 import { METRIC_LABELS } from "./panels/bar-panel";
+import {
+  TABLE_COLUMNS,
+  TABLE_COLUMNS_DEFAULT,
+} from "./panels/table-panel";
+import {
+  ALARM_COLUMNS,
+  ALARM_COLUMNS_DEFAULT,
+} from "./panels/alarm-panel";
+import { LAYOUT_PRESETS, layoutKindOf } from "./panels/elements";
+import type { LayoutKind } from "./panels/elements";
+import { LayoutEditor } from "./layout-editor";
+import { ColumnEditor } from "./column-editor";
 import type {
   BarPanelConfig,
   ChartPanelConfig,
@@ -30,9 +42,13 @@ import type {
   LedPanelConfig,
   LevelPanelConfig,
   Panel,
+  PanelElements,
   ShapePanelConfig,
   TablePanelConfig,
+  AlarmColumn,
   AlarmPanelConfig,
+  PanelLayout,
+  TableColumn,
   Tag,
   TextPanelConfig,
 } from "./types";
@@ -290,6 +306,55 @@ function OptionButtons<T extends string>({
   );
 }
 
+/* ── Elemen Tampilan: centang apa yang tampil; posisi & ukurannya diatur di
+ *    Kanvas Komponen (layout-editor.tsx) ── */
+
+function ElementsForm({
+  kind,
+  elements,
+  patch,
+}: {
+  kind: LayoutKind;
+  elements: PanelElements | undefined;
+  /** Patch ke config panel (bukan ke elements langsung). */
+  patch: (p: object) => void;
+}) {
+  const specs = LAYOUT_PRESETS[kind].filter((s) => s.key !== "graphic");
+  const set = (k: string, v: unknown) =>
+    patch({ elements: { ...(elements ?? {}), [k]: v } });
+  return (
+    <div className="flex flex-col gap-2 rounded-[var(--r)] border border-border-soft bg-bg-sidebar/50 p-3">
+      <span className="text-[12px] font-bold text-text">Elemen Tampilan</span>
+      {specs.map((s) => {
+        const key = `show_${s.key}` as keyof PanelElements & string;
+        const chosen = (elements as Record<string, unknown> | undefined)?.[key];
+        return (
+          <label
+            key={s.key}
+            className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-text-muted"
+          >
+            <input
+              type="checkbox"
+              checked={chosen === undefined ? s.on : chosen === true}
+              onChange={(e) => set(key, e.target.checked)}
+            />
+            {ELEMENT_HINTS[s.key] ?? s.label}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Penjelasan lebih manusiawi daripada nama elemen di kanvas. */
+const ELEMENT_HINTS: Partial<Record<string, string>> = {
+  title: "Judul",
+  value: "Nilai (angka)",
+  status: "Status",
+  device: "Nama perangkat (device key)",
+  footer: "Info bawah (Diperbarui / rentang)",
+};
+
 const THRESHOLD_HINT =
   '"Di atas ambang" = nilai tinggi berbahaya; "Di bawah" = nilai rendah berbahaya.';
 
@@ -359,6 +424,11 @@ export function PanelInspector({
   const enabledTags = tags.filter((t) => t.enabled);
   const patchCfg = (partial: object) =>
     onChange({ config: { ...panel.config, ...partial } as Panel["config"] });
+  // Komponen bergambar (gauge/level/led/bar) punya kanvas tata letak sendiri.
+  const layoutKind = layoutKindOf(
+    panel.type,
+    panel.config as { style?: string | null }
+  );
 
   return (
     <Drawer
@@ -412,6 +482,33 @@ export function PanelInspector({
               value={(panel.config as TablePanelConfig).range}
               onChange={(range) => patchCfg({ range })}
             />
+            <ColumnEditor<TableColumn>
+              label="Kolom Tabel"
+              hint="Geser chip untuk menukar urutan. Kolom yang dibuang tidak dirender sama sekali."
+              available={TABLE_COLUMNS}
+              value={
+                (panel.config as TablePanelConfig).columns ?? TABLE_COLUMNS_DEFAULT
+              }
+              onChange={(columns) => patchCfg({ columns })}
+            />
+            <div className="flex flex-col gap-2">
+              <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-text-muted">
+                <input
+                  type="checkbox"
+                  checked={(panel.config as TablePanelConfig).show_header !== false}
+                  onChange={(e) => patchCfg({ show_header: e.target.checked })}
+                />
+                Tampilkan baris header
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-text-muted">
+                <input
+                  type="checkbox"
+                  checked={(panel.config as TablePanelConfig).show_footer !== false}
+                  onChange={(e) => patchCfg({ show_footer: e.target.checked })}
+                />
+                Keterangan rentang di bawah tabel
+              </label>
+            </div>
           </>
         )}
         {panel.type === "alarm" && (
@@ -427,6 +524,23 @@ export function PanelInspector({
               value={(panel.config as AlarmPanelConfig).range}
               onChange={(range) => patchCfg({ range })}
             />
+            <ColumnEditor<AlarmColumn>
+              label="Kolom Alarm"
+              hint="Geser chip untuk menukar urutan. “Ack” = tombol akui alarm (hanya tampil untuk yang berhak)."
+              available={ALARM_COLUMNS}
+              value={
+                (panel.config as AlarmPanelConfig).columns ?? ALARM_COLUMNS_DEFAULT
+              }
+              onChange={(columns) => patchCfg({ columns })}
+            />
+            <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-text-muted">
+              <input
+                type="checkbox"
+                checked={(panel.config as AlarmPanelConfig).show_header !== false}
+                onChange={(e) => patchCfg({ show_header: e.target.checked })}
+              />
+              Strip ringkasan atas (“Semua normal” + Riwayat)
+            </label>
           </>
         )}
         {panel.type === "text" && (
@@ -465,6 +579,25 @@ export function PanelInspector({
           <p className="text-[12px] text-text-muted">
             Panel jenis ini tidak punya pengaturan tambahan.
           </p>
+        )}
+
+        {/* Komponen bergambar: pilih elemen yang tampil, lalu tata posisi &
+            ukurannya di kanvas (WYSIWYG, data hidup). */}
+        {layoutKind && (
+          <>
+            <ElementsForm
+              kind={layoutKind}
+              elements={
+                (panel.config as { elements?: PanelElements }).elements
+              }
+              patch={patchCfg}
+            />
+            <LayoutEditor
+              panel={panel}
+              tags={enabledTags}
+              onChange={(layout: PanelLayout) => patchCfg({ layout })}
+            />
+          </>
         )}
       </div>
     </Drawer>
@@ -750,14 +883,6 @@ function LedForm({
           onChange={(e) => patch({ label: e.target.value || null })}
         />
       </div>
-      <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-text-muted">
-        <input
-          type="checkbox"
-          checked={config.show_value !== false}
-          onChange={(e) => patch({ show_value: e.target.checked })}
-        />
-        Tampilkan nilai sensor di bawah LED
-      </label>
     </>
   );
 }

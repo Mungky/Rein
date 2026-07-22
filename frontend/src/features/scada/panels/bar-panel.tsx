@@ -18,9 +18,12 @@ import {
   YAxis,
 } from "recharts";
 import { scadaApi } from "@/lib/api/scada";
+import { useScadaStore } from "../store";
 import type { BarMetric, BarPanelConfig, SummaryItem, Tag } from "../types";
 import { RANGE_LABELS, RANGE_MS } from "./chart-panel";
 import { usePanelRefresh } from "./use-panel-refresh";
+import { LayoutItem, LayoutSurface } from "./layout-box";
+import { layoutMap } from "./elements";
 
 export const METRIC_LABELS: Record<BarMetric, string> = {
   avg: "Rata-rata",
@@ -35,7 +38,16 @@ interface Row {
   value: number;
 }
 
-export function BarPanel({ config, tags }: { config: BarPanelConfig; tags: Tag[] }) {
+export function BarPanel({
+  config,
+  tags,
+  title,
+}: {
+  config: BarPanelConfig;
+  tags: Tag[];
+  /** Judul panel/channel — isi elemen "Judul" di kanvas komponen. */
+  title?: string;
+}) {
   const [items, setItems] = useState<SummaryItem[] | null>(null);
   const [error, setError] = useState(false);
 
@@ -54,19 +66,32 @@ export function BarPanel({ config, tags }: { config: BarPanelConfig; tags: Tag[]
 
   usePanelRefresh(load);
 
+  // "Terkini" harus benar-benar terkini: nilai realtime dari store menimpa
+  // snapshot ringkasan (yang hanya disegarkan tiap satu putaran refresh).
+  // Min/rata²/maks tetap dari snapshot — itu memang agregat rentang.
+  const liveValues = useScadaStore((s) => s.liveValues);
+
   const unconfigured = config.tag_ids.length === 0;
 
   const rows: Row[] = useMemo(() => {
     if (!items) return [];
     return items
-      .map((item) => ({
-        label: item.label,
-        unit: item.unit || tags.find((t) => t.id === item.tag_id)?.unit || "",
-        value: item[config.metric],
-      }))
+      .map((item) => {
+        const live = liveValues[item.tag_id];
+        const liveNewer =
+          config.metric === "last" &&
+          live &&
+          (!item.last_ts ||
+            new Date(live.ts).getTime() > new Date(item.last_ts).getTime());
+        return {
+          label: item.label,
+          unit: item.unit || tags.find((t) => t.id === item.tag_id)?.unit || "",
+          value: liveNewer ? live!.value : item[config.metric],
+        };
+      })
       .filter((r): r is Row => r.value !== null)
       .sort((a, b) => b.value - a.value);
-  }, [items, tags, config.metric]);
+  }, [items, tags, config.metric, liveValues]);
 
   if (unconfigured) {
     return (
@@ -95,13 +120,24 @@ export function BarPanel({ config, tags }: { config: BarPanelConfig; tags: Tag[]
   // "vertical" = batang tegak (recharts layout "horizontal"); bawaan mendatar
   const upright = config.orientation === "vertical";
   const barFill = config.color ?? "var(--rnet-chart-1)";
+  const el = layoutMap("bar", config.elements, config.layout);
 
   return (
-    <div className="flex h-full w-full flex-col bg-bg">
-      <div className="px-3 pt-1.5 text-[10.5px] text-text-muted">
-        {METRIC_LABELS[config.metric]} · {RANGE_LABELS[config.range]} terakhir
-      </div>
-      <div className="min-h-0 flex-1 px-1 pb-1">
+    <LayoutSurface>
+      {el.title?.visible && title && (
+        <LayoutItem box={el.title.box} className="font-semibold text-text-muted">
+          {title}
+        </LayoutItem>
+      )}
+
+      {el.footer?.visible && (
+        <LayoutItem box={el.footer.box} className="px-[0.6em] text-text-muted">
+          {METRIC_LABELS[config.metric]} · {RANGE_LABELS[config.range]} terakhir
+        </LayoutItem>
+      )}
+
+      {el.graphic?.visible && (
+        <LayoutItem box={el.graphic.box} text={false}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={rows}
@@ -187,8 +223,9 @@ export function BarPanel({ config, tags }: { config: BarPanelConfig; tags: Tag[]
             </Bar>
           </BarChart>
         </ResponsiveContainer>
-      </div>
-    </div>
+        </LayoutItem>
+      )}
+    </LayoutSurface>
   );
 }
 

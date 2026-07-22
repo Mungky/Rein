@@ -194,6 +194,17 @@ export const scadaApi = {
       `/api/scada/tags/${id}/recent?limit=${limit}`
     ),
 
+  /** Riwayat mentah berhalaman (keyset, terbaru dulu) — feed scroll tanpa
+   *  batas halaman Riwayat. `before` = ts baris tertua yang sudah dimuat. */
+  getSamplesPage: (id: string, opts: { before?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.before) params.set("before", opts.before);
+    params.set("limit", String(opts.limit ?? 2000));
+    return apiClient.get<{ items: RecentSample[]; has_more: boolean }>(
+      `/api/scada/tags/${id}/samples?${params.toString()}`
+    );
+  },
+
   /* ── Historian: bucketed history ── */
   getHistory: (tagIds: string[], start: Date, end: Date, points = 300) => {
     const params = new URLSearchParams();

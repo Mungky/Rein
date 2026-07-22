@@ -25,6 +25,9 @@ import { DEFAULT_CANVAS } from "./types";
 const LAST_PERSPECTIVE_KEY = "scada:last-perspective";
 const LAST_SHEET_KEY = "scada:last-sheet";
 
+/** Titik live per tag yang disimpan di memori sesi — ekor hidup grafik. */
+const LIVE_BUFFER_CAP = 400;
+
 export interface LiveValue {
   value: number;
   ts: string;
@@ -537,9 +540,30 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   setMaximizedPanel: (id) => set({ maximizedPanelId: id }),
 
   setLiveValue: (tagId, value) => {
+    // Interval sinkron: saat "Simpan data ke riwayat" aktif, TAMPILAN ikut
+    // interval penyimpanan — nilai di layar berganti sekali per jendela
+    // interval, persis seperti data yang tersimpan (interval 30 dtk = angka
+    // berganti tiap 30 dtk). Jendelanya dipatok ke jam dinding (bukan jarak
+    // antar-sampel) supaya jitter kedatangan tidak menggeser iramanya.
+    // Tag mode ring (simpan OFF) tetap live ~1 dtk.
+    const cfg = (get().tags.find((t) => t.id === tagId)?.config ?? {}) as Record<
+      string,
+      unknown
+    >;
+    if (cfg.store_enabled) {
+      const intervalMs = (Number(cfg.storage_interval_s) || 60) * 1000;
+      const shown = get().liveValues[tagId];
+      if (shown) {
+        const windowOf = (ts: string) =>
+          Math.floor(new Date(ts).getTime() / intervalMs);
+        if (windowOf(value.ts) <= windowOf(shown.ts)) return;
+      }
+    }
     const prev = get().dataUpdatedAt;
     const now = Date.now();
-    // Append to the session buffer (skip exact-duplicate timestamps), cap 100
+    // Append to the session buffer (skip exact-duplicate timestamps). The cap
+    // sets how long a chart's live tail can be: 400 × 3 s ≈ 20 menit, jauh
+    // lebih panjang dari jeda 60 dtk antar-pengambilan riwayat.
     const buffers = get().liveBuffers;
     const buf = buffers[tagId] ?? [];
     const isDup = buf.length > 0 && buf[buf.length - 1].ts === value.ts;
@@ -547,7 +571,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       liveValues: { ...get().liveValues, [tagId]: value },
       liveBuffers: isDup
         ? buffers
-        : { ...buffers, [tagId]: [...buf, value].slice(-100) },
+        : { ...buffers, [tagId]: [...buf, value].slice(-LIVE_BUFFER_CAP) },
       // Throttled so a burst of realtime events doesn't thrash the toolbar
       dataUpdatedAt: prev === null || now - prev > 1000 ? now : prev,
     });
@@ -574,11 +598,11 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
         .slice(0, 100);
       if (ids.length > 0) {
         const res = await scadaApi.getLatest(ids);
-        const liveValues = { ...get().liveValues };
+        // Lewat setLiveValue agar gerbang interval-sinkron ikut berlaku di
+        // refresh manual — nilai tag tersimpan tetap berganti per interval.
         for (const item of res.items) {
-          liveValues[item.tag_id] = { value: item.value, ts: item.ts };
+          get().setLiveValue(item.tag_id, { value: item.value, ts: item.ts });
         }
-        set({ liveValues });
       }
     } catch {
       /* best-effort */

@@ -43,6 +43,18 @@ export const RANGE_LABELS: Record<ChartRange, string> = {
   "30d": "30 hari",
 };
 
+/** Jatah titik per rentang. Rentang pendek diberi jatah besar supaya ukuran
+ *  bucket-nya turun ke hitungan detik (1 jam ÷ 600 = 6 detik) — sensor
+ *  ber-interval 3 detik jadi tergambar mengalir, bukan tangga per menit.
+ *  Rentang panjang tetap hemat: jatahnya kecil, jadi datanya tidak membengkak. */
+const RANGE_POINTS: Record<ChartRange, number> = {
+  "1h": 600,
+  "6h": 480,
+  "24h": 360,
+  "7d": 300,
+  "30d": 300,
+};
+
 const SERIES_COLORS = [1, 2, 3, 4].map((n) => `var(--rnet-chart-${n})`);
 
 /** Warna garis ke-i: pilihan user (config.colors) menang, slot bawaan menyusul. */
@@ -78,7 +90,12 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
     try {
       const end = new Date();
       const start = new Date(end.getTime() - RANGE_MS[config.range]);
-      const res = await scadaApi.getHistory(config.tag_ids, start, end);
+      const res = await scadaApi.getHistory(
+        config.tag_ids,
+        start,
+        end,
+        RANGE_POINTS[config.range]
+      );
       // Keep the order the user picked — slot color follows the tag, not rank
       const byId = new Map(res.series.map((s) => [s.tag_id, s]));
       setSeries(config.tag_ids.map((id) => byId.get(id)).filter(Boolean) as HistorySeries[]);
@@ -90,10 +107,11 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
 
   usePanelRefresh(load);
 
-  // Live tail: the newest realtime value per tag (store, ~1 s) is appended
-  // after the last history bucket, so the curve's right edge moves live
-  // instead of waiting for the next 60 s refetch.
-  const liveValues = useScadaStore((s) => s.liveValues);
+  // Live tail: SEMUA titik realtime sesi ini (liveBuffers) yang lebih baru
+  // dari bucket riwayat terakhir ikut digambar. Dulu hanya satu titik terakhir
+  // yang ditempel, jadi antara dua pengambilan riwayat garisnya melompat dari
+  // bucket lama ke satu titik hidup — terlihat patah, bukan mengalir.
+  const liveBuffers = useScadaStore((s) => s.liveBuffers);
 
   const showBand = config.show_minmax && config.tag_ids.length === 1;
   const rows = useMemo(() => {
@@ -102,19 +120,19 @@ export function ChartPanel({ config, tags }: { config: ChartPanelConfig; tags: T
     const lastT = base[base.length - 1].t;
     const extras = new Map<number, Row>();
     for (const tagId of config.tag_ids) {
-      const live = liveValues[tagId];
-      if (!live) continue;
-      const t = new Date(live.ts).getTime();
-      if (t <= lastT) continue;
-      let row = extras.get(t);
-      if (!row) {
-        row = { t } as Row;
-        extras.set(t, row);
+      for (const point of liveBuffers[tagId] ?? []) {
+        const t = new Date(point.ts).getTime();
+        if (t <= lastT) continue;
+        let row = extras.get(t);
+        if (!row) {
+          row = { t } as Row;
+          extras.set(t, row);
+        }
+        row[tagId] = point.value;
       }
-      row[tagId] = live.value;
     }
     return [...base, ...[...extras.values()].sort((a, b) => a.t - b.t)];
-  }, [series, showBand, liveValues, config.tag_ids]);
+  }, [series, showBand, liveBuffers, config.tag_ids]);
 
   const tagLabel = (tagId: string, i: number) => {
     const s = series?.find((x) => x.tag_id === tagId);

@@ -68,13 +68,16 @@ const DATA_COMPONENTS: CompSpec[] = [
         max: 100,
       },
     }),
+    // Semua busur WAJIB satu lingkaran: pusat (50, 38), r 28, mulai 150°,
+    // sapuan 240° — sama seperti ArcGauge asli. Titik f = (50 + 28cos(150 +
+    // 240f), 38 + 28sin(150 + 240f)); zona hijau f 0–0,25 dan merah f 0,75–1.
     preview: (
       <svg viewBox="0 0 100 56" className={pv}>
-        <path d="M 18 48 A 34 34 0 1 1 82 48" fill="none" stroke="var(--rein-border)" strokeWidth={7} strokeLinecap="round" />
-        <path d="M 18 48 A 34 34 0 0 1 34 21" fill="none" stroke="var(--rein-green)" strokeWidth={7} />
-        <path d="M 66 21 A 34 34 0 0 1 82 48" fill="none" stroke="var(--rein-red)" strokeWidth={7} />
-        <line x1={50} y1={48} x2={34} y2={26} stroke="var(--rein-text)" strokeWidth={3} strokeLinecap="round" />
-        <circle cx={50} cy={48} r={3.5} fill="var(--rein-text)" />
+        <path d="M 25.75 52 A 28 28 0 1 1 74.25 52" fill="none" stroke="var(--rein-border)" strokeWidth={7} strokeLinecap="round" />
+        <path d="M 25.75 52 A 28 28 0 0 1 25.75 24" fill="none" stroke="var(--rein-green)" strokeWidth={7} />
+        <path d="M 74.25 24 A 28 28 0 0 1 74.25 52" fill="none" stroke="var(--rein-red)" strokeWidth={7} />
+        <line x1={50} y1={38} x2={38.24} y2={21.82} stroke="var(--rein-text)" strokeWidth={3} strokeLinecap="round" />
+        <circle cx={50} cy={38} r={3} fill="var(--rein-text)" />
       </svg>
     ),
   },

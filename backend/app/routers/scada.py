@@ -32,6 +32,7 @@ from app.schemas.scada import (
     DeletedOut,
     HistoryOut,
     RecentSamplesOut,
+    SamplesPageOut,
     validate_channel_config,
     SheetCreateRequest,
     SheetListOut,
@@ -1018,6 +1019,37 @@ async def get_recent_samples(
     }
 
 
+@router.get("/tags/{tag_id}/samples", response_model=SamplesPageOut)
+async def get_samples_page(
+    tag_id: uuid.UUID,
+    before: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 2000,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    """Keyset-paged raw samples, newest first — the infinite-scroll feed for
+    the Riwayat table. `before` = ts of the oldest row already loaded; the
+    next page continues strictly older than it (no OFFSET, so page N of a
+    million-row tag costs the same as page 1)."""
+    granted = await _load_permissions(db, profile.role)
+    tag = await db.get(ScadaTag, tag_id)
+    if tag is None or (not tag.enabled and "scada:manage" not in granted):
+        raise HTTPException(status_code=404, detail="Tag tidak ditemukan")
+
+    if before is not None and before.tzinfo is None:
+        before = before.replace(tzinfo=timezone.utc)
+
+    query = select(ScadaSample).where(ScadaSample.tag_id == tag_id)
+    if before is not None:
+        query = query.where(ScadaSample.ts < before)
+    result = await db.execute(query.order_by(ScadaSample.ts.desc()).limit(limit + 1))
+    rows = result.scalars().all()
+    return {
+        "items": [{"ts": s.ts.isoformat(), "value": s.value} for s in rows[:limit]],
+        "has_more": len(rows) > limit,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Historian: history query (bucketed avg/min/max per tag)
 # ---------------------------------------------------------------------------
@@ -1054,9 +1086,13 @@ async def get_history(
         tag_query = tag_query.where(ScadaTag.enabled.is_(True))
     tags = {t.id: t for t in (await db.execute(tag_query)).scalars().all()}
 
-    # Bucket = span/points rounded up to whole minutes (samples are 1/minute)
+    # Bucket = span / point budget, floor 1 second. Sampling is per-tag now
+    # (as fast as 1 s in ring mode, or storage_interval_s when storing), so a
+    # minute floor would flatten a 3-second sensor into one point per minute —
+    # the line looked stepped instead of live. The point budget still bounds
+    # how many rows come back.
     span_s = (end - start).total_seconds()
-    bucket_s = max(60, int(-(-span_s // points) // 60) * 60)
+    bucket_s = max(1, int(-(-span_s // points)))
     bucket = func.to_timestamp(
         func.floor(func.extract("epoch", ScadaSample.ts) / bucket_s) * bucket_s
     ).label("bucket")

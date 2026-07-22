@@ -35,6 +35,31 @@ import { OrbitFallback } from "./orbit-fallback";
 import { WebSlot } from "../web-live-layer";
 import { ScreenBox, channelScreen } from "../screen-box";
 import { ShapeDecorPanel, TextDecorPanel } from "./decor-panels";
+import { FitScale } from "./fit-scale";
+
+/** Ukuran desain per jenis komponen (canvas px) — konten dirender pada ukuran
+ *  ini lalu diskala uniform mengikuti box ("ukuran persen"): panel kecil =
+ *  semua isi mengecil proporsional, tidak ada yang terpotong.
+ *
+ *  Komponen berkanvas (gauge/level/led/bar) TIDAK ada di sini: tata letaknya
+ *  sudah persen murni (panels/layout-box.tsx), jadi menskala sendiri tanpa
+ *  transform — sekaligus menjaga hitungan hover/tooltip recharts tetap tepat. */
+const FIT_DESIGN: Partial<Record<string, { w: number; h: number }>> = {
+  table: { w: 700, h: 380 },
+  alarm: { w: 700, h: 420 },
+  activity: { w: 420, h: 380 },
+};
+
+function fitWrap(type: string, node: React.ReactNode): React.ReactNode {
+  const d = FIT_DESIGN[type];
+  return d ? (
+    <FitScale designW={d.w} designH={d.h}>
+      {node}
+    </FitScale>
+  ) : (
+    node
+  );
+}
 
 /** True when a channel is a "screen" whose Source is a web page — the only
  *  channels routed through the keep-alive iframe layer (WebLiveLayer) and
@@ -138,17 +163,32 @@ function renderChannelSource(
       );
     }
     case "chart":
-      return <ChartPanel config={channel.config as ChartPanelConfig} tags={tags} />;
+      return fitWrap(
+        "chart",
+        <ChartPanel config={channel.config as ChartPanelConfig} tags={tags} />
+      );
     case "table":
-      return <TablePanel config={channel.config as TablePanelConfig} tags={tags} />;
+      return fitWrap(
+        "table",
+        <TablePanel config={channel.config as TablePanelConfig} tags={tags} />
+      );
     case "gauge":
       return <GaugePanel config={channel.config as GaugePanelConfig} tags={tags} />;
     case "bar":
-      return <BarPanel config={channel.config as BarPanelConfig} tags={tags} />;
+      return (
+        <BarPanel
+          config={channel.config as BarPanelConfig}
+          tags={tags}
+          title={channel.name}
+        />
+      );
     case "alarm":
-      return <AlarmPanel config={channel.config as AlarmPanelConfig} tags={tags} />;
+      return fitWrap(
+        "alarm",
+        <AlarmPanel config={channel.config as AlarmPanelConfig} tags={tags} />
+      );
     case "activity":
-      return <ActivityPanel />;
+      return fitWrap("activity", <ActivityPanel />);
     default:
       return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg-sidebar text-text-muted">
@@ -233,17 +273,17 @@ export function renderPanel(
         />
       );
     case "chart":
-      return <ChartPanel config={panel.config} tags={tags} />;
+      return fitWrap("chart", <ChartPanel config={panel.config} tags={tags} />);
     case "table":
-      return <TablePanel config={panel.config} tags={tags} />;
+      return fitWrap("table", <TablePanel config={panel.config} tags={tags} />);
     case "gauge":
       return <GaugePanel config={panel.config} tags={tags} />;
     case "bar":
-      return <BarPanel config={panel.config} tags={tags} />;
+      return <BarPanel config={panel.config} tags={tags} title={panel.title} />;
     case "alarm":
-      return <AlarmPanel config={panel.config} tags={tags} />;
+      return fitWrap("alarm", <AlarmPanel config={panel.config} tags={tags} />);
     case "activity":
-      return <ActivityPanel />;
+      return fitWrap("activity", <ActivityPanel />);
     case "web":
       return <WebPanel config={panel.config} />;
     case "text":

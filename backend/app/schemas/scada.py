@@ -74,6 +74,47 @@ class ScreenSize(BaseModel):
     view_h: int | None = Field(default=1080, ge=180, le=4320)
 
 
+class PanelElements(BaseModel):
+    """Elemen modular komponen nilai (gauge/level/led/bar): bagian mana yang
+    tampil. Posisi & ukurannya diatur lewat kanvas komponen (PanelLayout)."""
+
+    show_title: bool = True
+    show_value: bool = True
+    show_status: bool = True
+    # Nama perangkat (device_key sensor) — bawaan sembunyi
+    show_device: bool = False
+    # Baris kecil "Diperbarui HH:mm" / rentang 24 jam
+    show_footer: bool = True
+
+
+class ElementBox(BaseModel):
+    """Satu kotak elemen di kanvas komponen — PERSEN (0–100) dari kotak panel,
+    jadi ikut menskala bersama panelnya. Kotak boleh sedikit keluar batas
+    (-20..120) supaya elemen bisa digeser mepet/menggantung."""
+
+    x: float = Field(ge=-20, le=120)
+    y: float = Field(ge=-20, le=120)
+    w: float = Field(gt=0, le=140)
+    h: float = Field(gt=0, le=140)
+    align: Literal["left", "center", "right"] = "center"
+    # Tinggi huruf terhadap tinggi kotak
+    scale: float = Field(default=0.7, ge=0.2, le=1.0)
+
+
+class PanelLayout(BaseModel):
+    """Tata letak bebas komponen: kotak per elemen. Elemen tanpa entri memakai
+    kotak bawaan jenisnya (LAYOUT_PRESETS di frontend panels/elements.tsx)."""
+
+    model_config = {"extra": "forbid"}
+    title: ElementBox | None = None
+    value: ElementBox | None = None
+    status: ElementBox | None = None
+    device: ElementBox | None = None
+    footer: ElementBox | None = None
+    # Gambar komponen: jarum/donat/tangki/lampu/grafik batang
+    graphic: ElementBox | None = None
+
+
 class ChartPanelConfig(ScreenSize):
     # 0 tag = komponen baru dari palet yang belum diatur (placeholder di UI)
     tag_ids: list[uuid.UUID] = Field(default_factory=list, max_length=4)
@@ -99,9 +140,16 @@ class ChartPanel(BaseModel):
     config: ChartPanelConfig
 
 
+TableColumn = Literal["tag", "device", "unit", "value", "min", "avg", "max"]
+
+
 class TablePanelConfig(ScreenSize):
     tag_ids: list[uuid.UUID] = Field(default_factory=list, max_length=8)
     range: ChartRange = "24h"
+    # Urutan + isi kolom (editor kolom di inspector); None = bawaan
+    columns: list[TableColumn] | None = Field(default=None, max_length=7)
+    show_header: bool = True
+    show_footer: bool = True
 
 
 class TablePanel(BaseModel):
@@ -133,6 +181,8 @@ class GaugePanelConfig(ScreenSize):
     # Warna zona normal; None = hijau tema
     color: HexColor | None = None
     decimals: int | None = Field(default=None, ge=0, le=6)
+    elements: PanelElements | None = None
+    layout: PanelLayout | None = None
 
 
 class GaugePanel(BaseModel):
@@ -154,6 +204,8 @@ class BarPanelConfig(ScreenSize):
     color: HexColor | None = None
     # "horizontal" = batang mendatar (bawaan), "vertical" = batang tegak
     orientation: Literal["horizontal", "vertical"] = "horizontal"
+    elements: PanelElements | None = None
+    layout: PanelLayout | None = None
 
 
 class BarPanel(BaseModel):
@@ -165,11 +217,17 @@ class BarPanel(BaseModel):
     config: BarPanelConfig
 
 
+AlarmColumn = Literal["tag", "bounds", "device", "value", "status", "time", "ack"]
+
+
 class AlarmPanelConfig(ScreenSize):
     # Watch a set of tags; thresholds are read from each tag's own
     # config.alarm_min / config.alarm_max (set in Analisis), not here.
     tag_ids: list[uuid.UUID] = Field(default_factory=list, max_length=8)
     range: ChartRange = "24h"
+    # Urutan + isi kolom (editor kolom di inspector); None = bawaan
+    columns: list[AlarmColumn] | None = Field(default=None, max_length=7)
+    show_header: bool = True
 
 
 class AlarmPanel(BaseModel):
@@ -290,6 +348,8 @@ class LevelPanelConfig(ScreenSize):
     color: HexColor | None = None
     label: str | None = Field(default=None, max_length=120)
     unit: str | None = Field(default=None, max_length=30)
+    elements: PanelElements | None = None
+    layout: PanelLayout | None = None
 
     @model_validator(mode="after")
     def _scale_sane(self) -> "LevelPanelConfig":
@@ -319,6 +379,8 @@ class LedPanelConfig(ScreenSize):
     off_label: str = Field(default="MATI", max_length=40)
     label: str | None = Field(default=None, max_length=120)
     show_value: bool = True
+    elements: PanelElements | None = None
+    layout: PanelLayout | None = None
 
 
 class LedPanel(BaseModel):
@@ -886,6 +948,14 @@ class RecentSampleOut(BaseModel):
 
 class RecentSamplesOut(BaseModel):
     items: list[RecentSampleOut]
+
+
+class SamplesPageOut(BaseModel):
+    """Satu halaman riwayat mentah (terbaru dulu) untuk tabel scroll tanpa
+    batas di halaman Riwayat — `has_more` = masih ada data lebih lama."""
+
+    items: list[RecentSampleOut]
+    has_more: bool
 
 
 class WorkbenchColumnListOut(BaseModel):

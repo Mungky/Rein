@@ -476,13 +476,12 @@ export function CanvasStage({
                     : undefined
                 }
               >
-                {/* View-mode chrome — buttons stay faintly visible so nobody
-                    has to guess they exist; solid on hover. */}
+                {/* View-mode chrome — tombol saja, menepi ke kanan. Chip judul
+                    sengaja TIDAK ada di sini: ia menutupi isi komponen, dan
+                    tiap komponen sudah punya elemen judulnya sendiri di
+                    kanvas. Judul tetap tampil di mode Atur Layout. */}
                 {!editMode && (
-                  <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-1 p-1.5">
-                    <span className="max-w-[70%] truncate rounded-full bg-black/60 px-2 py-0.5 text-[10.5px] font-semibold text-white opacity-60 backdrop-blur-sm">
-                      {panelTitle(panel)}
-                    </span>
+                  <div className="absolute inset-x-0 top-0 flex items-start justify-end gap-1 p-1.5">
                     <span className="pointer-events-auto flex items-center gap-1 opacity-60 transition-opacity hover:opacity-100">
                       {webId && <InteractButton channelId={webId} />}
                       {webId && (

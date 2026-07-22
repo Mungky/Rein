@@ -43,6 +43,43 @@ export interface VideoPanelConfig {
 
 export type ChartRange = "1h" | "6h" | "24h" | "7d" | "30d";
 
+/** Elemen modular komponen nilai (gauge/level/led): bagian mana yang tampil.
+ *  Posisi & ukurannya diatur lewat kanvas komponen (lihat PanelLayout). */
+export interface PanelElements {
+  show_title?: boolean;
+  show_value?: boolean;
+  show_status?: boolean;
+  /** Nama perangkat (device_key sensor) — bawaan sembunyi. */
+  show_device?: boolean;
+  /** Baris kecil "Diperbarui HH:mm" / rentang 24 jam. */
+  show_footer?: boolean;
+}
+
+/** Satu kotak elemen di kanvas komponen — PERSEN (0–100) dari kotak panel,
+ *  jadi ikut mengecil/membesar bersama panelnya. */
+export interface ElementBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Perataan isi kotak; bawaan tengah. */
+  align?: "left" | "center" | "right";
+  /** Tinggi huruf terhadap tinggi kotak (0,2–1); bawaan 0,7. */
+  scale?: number;
+}
+
+/** Tata letak bebas komponen: kotak per elemen. Elemen tanpa entri memakai
+ *  kotak bawaan jenisnya (lihat LAYOUT_PRESETS di panels/elements.tsx). */
+export interface PanelLayout {
+  title?: ElementBox;
+  value?: ElementBox;
+  status?: ElementBox;
+  device?: ElementBox;
+  footer?: ElementBox;
+  /** Gambar komponen: jarum/donat/tangki/lampu/grafik batang. */
+  graphic?: ElementBox;
+}
+
 export interface ChartPanelConfig {
   tag_ids: string[]; // 0–4 historian tags (0 = belum diatur, placeholder)
   range: ChartRange;
@@ -57,9 +94,16 @@ export interface ChartPanelConfig {
   show_grid?: boolean;
 }
 
+/** Kolom tabel yang bisa dipilih & diurutkan sendiri. */
+export type TableColumn = "tag" | "device" | "unit" | "value" | "min" | "avg" | "max";
+
 export interface TablePanelConfig {
   tag_ids: string[]; // 0–8 historian tags
   range: ChartRange;
+  /** Urutan + isi kolom; undefined = bawaan (tag, value, min, avg, max). */
+  columns?: TableColumn[];
+  show_header?: boolean;
+  show_footer?: boolean;
 }
 
 export type GaugeStyle = "stat" | "arc" | "donut";
@@ -80,6 +124,8 @@ export interface GaugePanelConfig {
   /** Warna zona normal; null = hijau tema. */
   color?: string | null;
   decimals?: number | null;
+  elements?: PanelElements;
+  layout?: PanelLayout;
 }
 
 export type BarMetric = "avg" | "last" | "min" | "max";
@@ -92,6 +138,8 @@ export interface BarPanelConfig {
   color?: string | null;
   /** "horizontal" = batang mendatar (bawaan), "vertical" = batang tegak. */
   orientation?: "horizontal" | "vertical";
+  elements?: PanelElements;
+  layout?: PanelLayout;
 }
 
 /** Level/tangki: isi naik-turun mengikuti nilai sensor (min–max = 0–100%). */
@@ -106,6 +154,8 @@ export interface LevelPanelConfig {
   color?: string | null;
   label?: string | null;
   unit?: string | null;
+  elements?: PanelElements;
+  layout?: PanelLayout;
 }
 
 /** LED indikator: menyala saat nilai berada di sisi `direction` dari ambang. */
@@ -119,11 +169,27 @@ export interface LedPanelConfig {
   off_label?: string;
   label?: string | null;
   show_value?: boolean;
+  elements?: PanelElements;
+  layout?: PanelLayout;
 }
+
+/** Kolom panel alarm yang bisa dipilih & diurutkan sendiri. */
+export type AlarmColumn =
+  | "tag"
+  | "bounds"
+  | "device"
+  | "value"
+  | "status"
+  | "time"
+  | "ack";
 
 export interface AlarmPanelConfig {
   tag_ids: string[]; // 1–8 tags to watch
   range: ChartRange; // window for the min/avg context (status uses latest)
+  /** Urutan + isi kolom; undefined = bawaan (tag, bounds, value, status, ack). */
+  columns?: AlarmColumn[];
+  /** Strip "Semua normal / N alarm aktif" + tombol Riwayat. */
+  show_header?: boolean;
 }
 
 /** One cell of a video wall → one channel = (stream, cell index in its mosaic). */

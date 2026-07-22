@@ -28,9 +28,31 @@ import { useAuthDisplay } from "@/hooks/use-auth";
 import { useCan } from "@/components/providers/permissions-provider";
 import type { AppRole } from "@/lib/utils/roles";
 import { useScadaStore } from "../store";
-import type { AlarmEvent, AlarmPanelConfig, Tag } from "../types";
+import type { AlarmColumn, AlarmEvent, AlarmPanelConfig, Tag } from "../types";
 import { usePanelRefresh } from "./use-panel-refresh";
 import { AlarmHistoryDialog } from "./alarm-history-dialog";
+
+/** Kolom yang tersedia + label headernya (urutan di sini = urutan bawaan
+ *  saat user menambahkan kolom lewat editor kolom di inspector). */
+export const ALARM_COLUMNS: { key: AlarmColumn; label: string }[] = [
+  { key: "tag", label: "Tag" },
+  { key: "bounds", label: "Ambang" },
+  { key: "device", label: "Perangkat" },
+  { key: "value", label: "Terkini" },
+  { key: "status", label: "Status" },
+  { key: "time", label: "Sejak" },
+  { key: "ack", label: "" },
+];
+
+export const ALARM_COLUMNS_DEFAULT: AlarmColumn[] = [
+  "tag",
+  "bounds",
+  "value",
+  "status",
+  "ack",
+];
+
+const TEXT_COLUMNS = new Set<AlarmColumn>(["tag", "device"]);
 
 type Status = "kritis" | "bisu" | "diakui" | "normal" | "nodata" | "notset";
 
@@ -172,91 +194,147 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
     return <Center>Tag tidak ditemukan (mungkin dinonaktifkan).</Center>;
   }
 
+  const columns = (config.columns ?? ALARM_COLUMNS_DEFAULT).filter((c) =>
+    ALARM_COLUMNS.some((a) => a.key === c)
+  );
+  if (columns.length === 0) {
+    return <Center icon>Semua kolom disembunyikan — pilih minimal satu.</Center>;
+  }
+
+  type RowData = (typeof rows)[number];
+
+  const cell = (col: AlarmColumn, r: RowData) => {
+    const unit = r.tag?.unit ?? r.event?.tag_unit ?? "";
+    switch (col) {
+      case "tag":
+        return (
+          <>
+            {r.tag?.label ?? r.event?.tag_label ?? "?"}
+            {r.status === "diakui" && r.event?.ack_name && (
+              <span className="ml-1 block truncate text-[10px] font-normal text-text-light">
+                oleh {r.event.ack_name}
+                {r.event.ack_at ? ` · ${fmtTime(r.event.ack_at)}` : ""}
+              </span>
+            )}
+          </>
+        );
+      case "bounds":
+        return r.bounds.min === null && r.bounds.max === null ? (
+          <span className="text-text-light">—</span>
+        ) : (
+          <span className="text-[10.5px] text-text-light">
+            {r.bounds.min !== null ? r.bounds.min.toLocaleString("id") : "−∞"}
+            {"–"}
+            {r.bounds.max !== null ? r.bounds.max.toLocaleString("id") : "∞"}
+          </span>
+        );
+      case "device":
+        return (
+          <span className="font-mono text-[11px] text-text-muted">
+            {r.tag?.device_key ?? "—"}
+          </span>
+        );
+      case "value":
+        return (
+          <>
+            {!r.live ? "—" : r.live.value.toLocaleString("id")}
+            {unit && r.live && (
+              <span className="ml-0.5 text-[10px] font-normal text-text-light">
+                {unit}
+              </span>
+            )}
+          </>
+        );
+      case "status": {
+        const ui = STATUS_UI[r.status];
+        const Icon = ui.icon;
+        return (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 text-[11px] font-semibold",
+              ui.text
+            )}
+          >
+            <Icon className="size-3.5" />
+            {ui.label}
+          </span>
+        );
+      }
+      case "time":
+        return (
+          <span className="text-[10.5px] text-text-light">
+            {r.event ? fmtTime(r.event.triggered_at) : "—"}
+          </span>
+        );
+      case "ack":
+        return r.event && !r.event.ack_at && canAck ? (
+          <button
+            type="button"
+            onClick={() => void ack(r.event!)}
+            disabled={ackingId === r.event.id}
+            className="btn btn-secondary btn-sm h-6 gap-1 px-2 text-[10.5px]"
+            title="Tandai sudah diketahui (acknowledge)"
+          >
+            {ackingId === r.event.id ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <UserCheck className="size-3" />
+            )}
+            Ack
+          </button>
+        ) : null;
+    }
+  };
+
   return (
     <div className="flex h-full w-full flex-col bg-bg">
       {/* Header strip: green when all clear, red when any tag is in alarm */}
-      <div
-        className={cn(
-          "flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold",
-          alarmCount > 0 ? "bg-red/10 text-red" : "bg-green/10 text-green"
-        )}
-      >
-        <Bell className="size-3.5" />
-        <span className="flex-1">
-          {alarmCount > 0 ? `${alarmCount} alarm aktif` : "Semua normal"}
-        </span>
-        <button
-          type="button"
-          onClick={() => setShowHistory(true)}
-          className="inline-flex cursor-pointer items-center gap-1 rounded-[var(--r-sm)] px-1.5 py-0.5 text-[10.5px] font-semibold text-text-muted hover:bg-bg-hover hover:text-text"
-          title="Riwayat alarm"
+      {config.show_header !== false && (
+        <div
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold",
+            alarmCount > 0 ? "bg-red/10 text-red" : "bg-green/10 text-green"
+          )}
         >
-          <History className="size-3" /> Riwayat
-        </button>
-      </div>
+          <Bell className="size-3.5" />
+          <span className="flex-1">
+            {alarmCount > 0 ? `${alarmCount} alarm aktif` : "Semua normal"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowHistory(true)}
+            className="inline-flex cursor-pointer items-center gap-1 rounded-[var(--r-sm)] px-1.5 py-0.5 text-[10.5px] font-semibold text-text-muted hover:bg-bg-hover hover:text-text"
+            title="Riwayat alarm"
+          >
+            <History className="size-3" /> Riwayat
+          </button>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-[12px]">
           <tbody>
-            {rows.map(({ tagId, tag, bounds, live, event, status }) => {
-              const ui = STATUS_UI[status];
-              const Icon = ui.icon;
-              const unit = tag?.unit ?? event?.tag_unit ?? "";
+            {rows.map((r) => {
+              const ui = STATUS_UI[r.status];
               return (
-                <tr key={tagId} className={cn("border-t border-border-soft", ui.row)}>
-                  <td className="max-w-0 truncate px-3 py-1.5 font-medium text-text">
-                    {tag?.label ?? event?.tag_label ?? "?"}
-                    {(bounds.min !== null || bounds.max !== null) && (
-                      <span className="ml-1 text-[10px] font-normal text-text-light">
-                        {bounds.min !== null ? bounds.min.toLocaleString("id") : "−∞"}
-                        {"–"}
-                        {bounds.max !== null ? bounds.max.toLocaleString("id") : "∞"}
-                      </span>
-                    )}
-                    {status === "diakui" && event?.ack_name && (
-                      <span className="ml-1 block truncate text-[10px] font-normal text-text-light">
-                        oleh {event.ack_name}
-                        {event.ack_at ? ` · ${fmtTime(event.ack_at)}` : ""}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-2 py-1.5 text-right font-semibold tabular-nums text-text">
-                    {!live ? "—" : live.value.toLocaleString("id")}
-                    {unit && live && (
-                      <span className="ml-0.5 text-[10px] font-normal text-text-light">
-                        {unit}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    <span
+                <tr
+                  key={r.tagId}
+                  className={cn("border-t border-border-soft", ui.row)}
+                >
+                  {columns.map((col) => (
+                    <td
+                      key={col}
                       className={cn(
-                        "inline-flex items-center gap-1 text-[11px] font-semibold",
-                        ui.text
+                        "px-2 py-1.5",
+                        col === "tag" && "max-w-0 truncate font-medium text-text",
+                        col === "value" && "font-semibold tabular-nums text-text",
+                        col === "ack" && "w-0",
+                        TEXT_COLUMNS.has(col) ? "text-left" : "text-right"
                       )}
                     >
-                      <Icon className="size-3.5" />
-                      {ui.label}
-                    </span>
-                  </td>
-                  <td className="w-0 px-2 py-1.5 text-right">
-                    {event && !event.ack_at && canAck && (
-                      <button
-                        type="button"
-                        onClick={() => void ack(event)}
-                        disabled={ackingId === event.id}
-                        className="btn btn-secondary btn-sm h-6 gap-1 px-2 text-[10.5px]"
-                        title="Tandai sudah diketahui (acknowledge)"
-                      >
-                        {ackingId === event.id ? (
-                          <Loader2 className="size-3 animate-spin" />
-                        ) : (
-                          <UserCheck className="size-3" />
-                        )}
-                        Ack
-                      </button>
-                    )}
-                  </td>
+                      {cell(col, r)}
+                    </td>
+                  ))}
                 </tr>
               );
             })}

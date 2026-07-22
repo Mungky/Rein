@@ -1,15 +1,42 @@
 "use client";
 
 /** Historian table panel — latest value + min/avg/max per tag over the
- *  configured range. The classic SCADA overview widget. */
+ *  configured range. The classic SCADA overview widget.
+ *
+ *  Isi & urutan kolomnya diatur user lewat editor kolom di inspector
+ *  (config.columns) — kolom yang tak dipilih tidak dirender sama sekali. */
 
 import { useCallback, useMemo, useState } from "react";
 import { Loader2, Table2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
 import { useScadaStore } from "../store";
-import type { SummaryItem, Tag, TablePanelConfig } from "../types";
+import type { SummaryItem, Tag, TableColumn, TablePanelConfig } from "../types";
 import { RANGE_LABELS, RANGE_MS } from "./chart-panel";
 import { usePanelRefresh } from "./use-panel-refresh";
+
+/** Kolom yang tersedia + label headernya. Urutan di sini = urutan bawaan
+ *  saat user menambahkan kolom lewat editor. */
+export const TABLE_COLUMNS: { key: TableColumn; label: string }[] = [
+  { key: "tag", label: "Tag" },
+  { key: "device", label: "Perangkat" },
+  { key: "unit", label: "Satuan" },
+  { key: "value", label: "Terkini" },
+  { key: "min", label: "Min" },
+  { key: "avg", label: "Rata²" },
+  { key: "max", label: "Maks" },
+];
+
+export const TABLE_COLUMNS_DEFAULT: TableColumn[] = [
+  "tag",
+  "value",
+  "min",
+  "avg",
+  "max",
+];
+
+/** Kolom teks rata kiri; sisanya angka rata kanan. */
+const TEXT_COLUMNS = new Set<TableColumn>(["tag", "device", "unit"]);
 
 function fmt(v: number | null): string {
   return v === null ? "—" : v.toLocaleString("id");
@@ -35,12 +62,12 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
   usePanelRefresh(load);
 
   // Live overlay: "Terkini" ticks in realtime from the store; min/rata/maks
-  // stay on the 60 s summary snapshot (they're range aggregates).
+  // stay on the summary snapshot (they're range aggregates).
   const liveValues = useScadaStore((s) => s.liveValues);
 
-  const unitOf = useMemo(() => {
-    const map = new Map(tags.map((t) => [t.id, t.unit]));
-    return (item: SummaryItem) => item.unit || map.get(item.tag_id) || "";
+  const tagOf = useMemo(() => {
+    const map = new Map(tags.map((t) => [t.id, t]));
+    return (item: SummaryItem) => map.get(item.tag_id);
   }, [tags]);
 
   const lastOf = (item: SummaryItem): number | null => {
@@ -71,48 +98,92 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
     return <Center>Tag tidak ditemukan (mungkin dinonaktifkan).</Center>;
   }
 
+  const columns = (config.columns ?? TABLE_COLUMNS_DEFAULT).filter((c) =>
+    TABLE_COLUMNS.some((t) => t.key === c)
+  );
+  if (columns.length === 0) {
+    return <Center icon>Semua kolom disembunyikan — pilih minimal satu.</Center>;
+  }
+  const showAggregate = columns.some((c) => c === "min" || c === "avg" || c === "max");
+
+  const cell = (col: TableColumn, item: SummaryItem) => {
+    const tag = tagOf(item);
+    const unit = item.unit || tag?.unit || "";
+    switch (col) {
+      case "tag":
+        return (
+          <>
+            {item.label}
+            {/* Satuan menempel di nama HANYA kalau tak ada kolom Satuan sendiri */}
+            {unit && !columns.includes("unit") && (
+              <span className="ml-1 text-[10.5px] font-normal text-text-light">
+                {unit}
+              </span>
+            )}
+          </>
+        );
+      case "device":
+        return (
+          <span className="font-mono text-[11px] text-text-muted">
+            {tag?.device_key ?? "—"}
+          </span>
+        );
+      case "unit":
+        return <span className="text-text-muted">{unit || "—"}</span>;
+      case "value":
+        return fmt(lastOf(item));
+      default:
+        return fmt(item[col]);
+    }
+  };
+
   return (
     <div className="h-full w-full overflow-auto bg-bg">
       <table className="w-full border-collapse text-[12px]">
-        <thead className="sticky top-0 bg-bg-sidebar">
-          <tr className="text-left text-[10.5px] uppercase tracking-wide text-text-light">
-            <th className="px-3 py-1.5 font-semibold">Tag</th>
-            <th className="px-2 py-1.5 text-right font-semibold">Terkini</th>
-            <th className="px-2 py-1.5 text-right font-semibold">Min</th>
-            <th className="px-2 py-1.5 text-right font-semibold">Rata²</th>
-            <th className="px-3 py-1.5 text-right font-semibold">Maks</th>
-          </tr>
-        </thead>
+        {config.show_header !== false && (
+          <thead className="sticky top-0 bg-bg-sidebar">
+            <tr className="text-[10.5px] uppercase tracking-wide text-text-light">
+              {columns.map((col) => (
+                <th
+                  key={col}
+                  className={cn(
+                    "px-2 py-1.5 font-semibold",
+                    TEXT_COLUMNS.has(col) ? "text-left" : "text-right"
+                  )}
+                >
+                  {TABLE_COLUMNS.find((t) => t.key === col)?.label ?? col}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        )}
         <tbody>
           {items.map((item) => (
             <tr key={item.tag_id} className="border-t border-border-soft">
-              <td className="max-w-0 truncate px-3 py-1.5 font-medium text-text">
-                {item.label}
-                {unitOf(item) && (
-                  <span className="ml-1 text-[10.5px] font-normal text-text-light">
-                    {unitOf(item)}
-                  </span>
-                )}
-              </td>
-              <td className="px-2 py-1.5 text-right font-semibold tabular-nums text-text">
-                {fmt(lastOf(item))}
-              </td>
-              <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
-                {fmt(item.min)}
-              </td>
-              <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
-                {fmt(item.avg)}
-              </td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-text-muted">
-                {fmt(item.max)}
-              </td>
+              {columns.map((col) => (
+                <td
+                  key={col}
+                  className={cn(
+                    "px-2 py-1.5",
+                    col === "tag" && "max-w-0 truncate font-medium text-text",
+                    col === "value" && "font-semibold tabular-nums text-text",
+                    (col === "min" || col === "avg" || col === "max") &&
+                      "tabular-nums text-text-muted",
+                    TEXT_COLUMNS.has(col) ? "text-left" : "text-right"
+                  )}
+                >
+                  {cell(col, item)}
+                </td>
+              ))}
             </tr>
           ))}
         </tbody>
       </table>
-      <div className="px-3 py-1 text-[10px] text-text-light">
-        Min/Rata²/Maks dihitung dari {RANGE_LABELS[config.range]} terakhir
-      </div>
+      {config.show_footer !== false && showAggregate && (
+        <div className="px-3 py-1 text-[10px] text-text-light">
+          Min/Rata²/Maks dihitung dari {RANGE_LABELS[config.range]} terakhir
+        </div>
+      )}
     </div>
   );
 }

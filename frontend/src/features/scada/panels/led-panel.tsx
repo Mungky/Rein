@@ -2,13 +2,16 @@
 
 /** LED indicator panel — lampu status on/off dari satu tag. Menyala ("on")
  *  saat nilai berada di sisi `direction` dari ambang. Identity never rides on
- *  color alone: the on/off label always accompanies the lamp. */
+ *  color alone: the on/off label always accompanies the lamp.
+ *  Posisi & ukuran tiap bagian datang dari kanvas komponen (config.layout). */
 
 import { format } from "date-fns";
 import { Lightbulb, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { LedPanelConfig, Tag } from "../types";
 import { useTagValue } from "./use-tag-value";
+import { LayoutItem, LayoutSurface } from "./layout-box";
+import { layoutMap } from "./elements";
 
 export function LedPanel({ config, tags }: { config: LedPanelConfig; tags: Tag[] }) {
   const state = useTagValue(config.tag_id ?? null, tags);
@@ -46,44 +49,70 @@ export function LedPanel({ config, tags }: { config: LedPanelConfig; tags: Tag[]
   const onColor = config.on_color ?? "var(--rein-green)";
   const offColor = config.off_color ?? "var(--rein-text-light)";
   const lastTs = state.valueTs ? new Date(state.valueTs) : null;
+  const el = layoutMap("led", config.elements, config.layout);
+  // Kompat: config.show_value lama tetap dihormati bila elements belum diatur
+  const showValue = config.elements
+    ? el.value?.visible === true
+    : config.show_value !== false;
+  const device = tags.find((t) => t.id === config.tag_id)?.device_key ?? "";
 
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 bg-bg px-3 py-2 text-center">
-      <span className="max-w-full truncate text-[11.5px] font-semibold text-text-muted">
-        {label}
-      </span>
+    <LayoutSurface>
+      {el.title?.visible && (
+        <LayoutItem box={el.title.box} className="font-semibold text-text-muted">
+          {label}
+        </LayoutItem>
+      )}
 
-      <div className="flex min-h-0 flex-1 items-center justify-center">
-        <div
-          className="aspect-square h-[min(70%,96px)] rounded-full border-4 transition-colors"
-          style={{
-            background: on ? onColor : "transparent",
-            borderColor: on ? onColor : offColor,
-            boxShadow: on ? `0 0 24px 4px ${onColor}` : undefined,
-            opacity: on ? 1 : 0.5,
-          }}
-        />
-      </div>
+      {el.graphic?.visible && (
+        <LayoutItem box={el.graphic.box} text={false}>
+          <div className="flex h-full w-full items-center justify-center">
+            <div
+              className="aspect-square h-full max-h-full max-w-full rounded-full border-solid transition-colors"
+              style={{
+                background: on ? onColor : "transparent",
+                borderColor: on ? onColor : offColor,
+                borderWidth: "max(2px, 4%)",
+                boxShadow: on ? `0 0 24px 4px ${onColor}` : undefined,
+                opacity: on ? 1 : 0.5,
+              }}
+            />
+          </div>
+        </LayoutItem>
+      )}
 
-      <span className="text-[13px] font-bold text-text">
-        {on ? config.on_label || "AKTIF" : config.off_label || "MATI"}
-      </span>
+      {el.status?.visible && (
+        <LayoutItem box={el.status.box} className="font-bold text-text">
+          {on ? config.on_label || "AKTIF" : config.off_label || "MATI"}
+        </LayoutItem>
+      )}
 
-      <span className={cn("text-[10px]", state.stale ? "text-amber" : "text-text-light")}>
-        {config.show_value !== false && (
-          <>
-            Nilai: {value.toLocaleString("id")}
-            {state.unit ? ` ${state.unit}` : ""}
-            {" · "}
-          </>
-        )}
-        {lastTs
-          ? state.stale
-            ? `Data usang (terakhir ${format(lastTs, "HH:mm")})`
-            : `Diperbarui ${format(lastTs, "HH:mm")}`
-          : null}
-      </span>
-    </div>
+      {showValue && el.value && (
+        <LayoutItem box={el.value.box} className="tabular-nums text-text-muted">
+          {value.toLocaleString("id")}
+          {state.unit ? ` ${state.unit}` : ""}
+        </LayoutItem>
+      )}
+
+      {el.device?.visible && device && (
+        <LayoutItem box={el.device.box} className="font-mono text-text-light">
+          {device}
+        </LayoutItem>
+      )}
+
+      {el.footer?.visible && (
+        <LayoutItem
+          box={el.footer.box}
+          className={cn(state.stale ? "text-amber" : "text-text-light")}
+        >
+          {lastTs
+            ? state.stale
+              ? `Data usang (terakhir ${format(lastTs, "HH:mm")})`
+              : `Diperbarui ${format(lastTs, "HH:mm")}`
+            : null}
+        </LayoutItem>
+      )}
+    </LayoutSurface>
   );
 }
 

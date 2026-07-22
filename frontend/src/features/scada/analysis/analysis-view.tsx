@@ -32,7 +32,7 @@ import type { ChartRange, Panel, RecentSample, Sheet, Tag } from "../types";
 import { useScadaStore } from "../store";
 import { RANGE_LABELS } from "../panels/chart-panel";
 import { usePanelRefresh } from "../panels/use-panel-refresh";
-import { HistoryDrawer } from "./history-drawer";
+import { RiwayatView } from "./riwayat-view";
 import { SourceDialog } from "./source-dialog";
 import { ManageSitesDialog } from "../manage-sites-dialog";
 import { AlarmSettingsDialog } from "./alarm-settings-dialog";
@@ -797,7 +797,7 @@ export function AnalysisView({
         </div>
       </div>
 
-      {drawerTag && <HistoryDrawer tag={drawerTag} onClose={() => setDrawerTag(null)} />}
+      {drawerTag && <RiwayatView tag={drawerTag} onClose={() => setDrawerTag(null)} />}
       {sourceTag && (
         <SourceDialog
           tag={sourceTag}
