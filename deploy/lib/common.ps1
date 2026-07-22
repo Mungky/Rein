@@ -24,9 +24,6 @@ function Get-ReinPaths([string]$root) {
         MediaMtxYml = Join-Path $root "mediamtx\mediamtx.yml"
         Cloudflared = Join-Path $root "cloudflared\cloudflared.exe"
         WebsocatExe = Join-Path $root "websocat\websocat.exe"
-        MosqDir     = Join-Path $root "mosquitto"
-        MosqConf    = Join-Path $root "mosquitto\mosquitto.conf"
-        MosqExe     = Join-Path $env:ProgramFiles "mosquitto\mosquitto.exe"
         TvnExe      = Join-Path $env:ProgramFiles "TightVNC\tvnserver.exe"
         ObsExe      = Join-Path $env:ProgramFiles "obs-studio\bin\64bit\obs64.exe"
         DataDir     = Join-Path $root "data"
@@ -86,6 +83,40 @@ function Add-ConfigKey($configPath, [string[]]$lines) {
     return $true
 }
 
+# Set KEY=VALUE sungguhan: kalau barisnya sudah ada nilainya DITIMPA, kalau
+# belum ada barisnya ditambah.
+#
+# Kenapa ini terpisah dari Add-ConfigKey: Add-ConfigKey melewati kunci yang
+# barisnya sudah ada -- termasuk baris kosong seperti "TUNNEL_TOKEN=". Dulu itu
+# membuat token named tunnel yang baru ditempel dibuang diam-diam, PC tetap
+# jatuh ke mode tes, dan alamat mirror tidak pernah benar. Untuk nilai yang
+# memang boleh berubah (token, hostname), SELALU pakai fungsi ini.
+function Set-ConfigKey($configPath, [string]$key, [string]$value, [string]$comment) {
+    $raw = if (Test-Path $configPath) { Get-Content $configPath -Raw } else { "" }
+    $pattern = "(?m)^[ `t]*$([regex]::Escape($key))[ `t]*=.*$"
+    if ($raw -match $pattern) {
+        # MatchEvaluator, BUKAN string pengganti: .NET menafsirkan $1 / $& / $$ di
+        # teks pengganti sebagai rujukan grup. Password DATABASE_URL boleh
+        # mengandung '$' -- tanpa ini nilainya rusak diam-diam saat ditulis.
+        $repl = [Text.RegularExpressions.MatchEvaluator]{ param($m) "$key=$value" }.GetNewClosure()
+        $body = [regex]::Replace($raw, $pattern, $repl)
+    } else {
+        $head = if ($comment) { "`r`n# $comment`r`n" } else { "`r`n" }
+        $body = if ($raw.Trim() -eq "") { "$key=$value" } else { $raw.TrimEnd() + "`r`n" + $head + "$key=$value" }
+    }
+    Write-TextNoBom $configPath ($body.TrimEnd() + "`r`n")
+}
+
+# Hapus baris KEY=... sepenuhnya (mis. membuang sisa kredensial mode tes).
+function Remove-ConfigKey($configPath, [string[]]$keys) {
+    if (-not (Test-Path $configPath)) { return }
+    $raw = Get-Content $configPath -Raw
+    foreach ($k in $keys) {
+        $raw = [regex]::Replace($raw, "(?m)^[ `t]*$([regex]::Escape($k))[ `t]*=.*\r?\n?", "")
+    }
+    Write-TextNoBom $configPath ($raw.TrimEnd() + "`r`n")
+}
+
 # --- winget (repositori paket resmi Microsoft) ------------------------------
 $script:HasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
 function Install-WingetPkg($id, $label) {
@@ -135,7 +166,7 @@ function Get-InstalledPackages($paths) {
     $p = @()
     if (Test-Path $paths.MediaMtxExe) { $p += "stream" }
     if ((Test-Path $paths.TvnExe) -and (Test-Path $paths.WebsocatExe)) { $p += "mirror" }
-    if ((Test-Path $paths.MosqConf) -or (Test-Path $paths.BridgePy)) { $p += "data" }
+    if (Test-Path $paths.BridgePy) { $p += "data" }
     return $p
 }
 
@@ -162,7 +193,6 @@ function Show-ServiceStatus($paths) {
         @{ Label = "Cloudflare Tunnel";  On = [bool](Get-Process cloudflared -ErrorAction SilentlyContinue) },
         @{ Label = "TightVNC (mirror)";  On = [bool](Get-Process tvnserver -ErrorAction SilentlyContinue) },
         @{ Label = "websocat (mirror)";  On = [bool](Get-Process websocat  -ErrorAction SilentlyContinue) },
-        @{ Label = "Mosquitto (broker)"; On = [bool](Get-Process mosquitto -ErrorAction SilentlyContinue) },
         @{ Label = "Node-RED";           On = (Test-ProcessCommandLine "node.exe" "node-red") },
         @{ Label = "Bridge (data)";      On = (Test-ProcessCommandLine "python.exe" "bridge\.py") -or (Test-ProcessCommandLine "py.exe" "bridge\.py") }
     )
@@ -173,55 +203,222 @@ function Show-ServiceStatus($paths) {
     Write-Host ""
 }
 
-# --- Quick Tunnel (mode tes): URL acak, kembalikan alamatnya ----------------
-function Start-QuickTunnel($cloudflared, [int]$port, [string]$logName) {
-    $log = Join-Path (Split-Path -Parent $cloudflared) $logName
-    # Matikan HANYA tunnel lama untuk port ini (biarkan tunnel port lain).
-    Stop-ByCommandLine "cloudflared.exe" ":$port"
-    Start-Sleep 1
-    Remove-Item $log -Force -ErrorAction SilentlyContinue
-    Start-Process -FilePath $cloudflared `
-        -ArgumentList "tunnel", "--url", "http://127.0.0.1:$port" `
-        -RedirectStandardError $log -WindowStyle Hidden
-    for ($i = 0; $i -lt 30; $i++) {
-        Start-Sleep 1
-        $txt = Get-Content $log -Raw -ErrorAction SilentlyContinue
-        if ($txt -match "https://[a-z0-9-]+\.trycloudflare\.com") { return $Matches[0] }
+# --- Token named tunnel: bersihkan + periksa bentuknya ----------------------
+# Token Cloudflare = base64 dari JSON {"a":akun,"t":id tunnel,"s":rahasia}.
+# Diperiksa DI DEPAN karena kalau tidak, nilai ngawur tersimpan diam-diam dan
+# baru ketahuan jauh kemudian sebagai "Provided Tunnel token is not valid" --
+# jauh dari tempat salahnya. Dashboard menampilkan token di dalam perintah
+# "cloudflared service install eyJ...", dan itu yang paling sering ikut tersalin.
+function Format-TunnelToken([string]$raw) {
+    $t = "$raw".Trim().Trim('"').Trim("'")
+    # Buang bungkus perintah kalau seluruh baris dashboard ikut tertempel.
+    if ($t -match '(?i)(?:service\s+install|--token)\s+(\S+)') { $t = $Matches[1] }
+    return $t.Trim()
+}
+
+# Kembalikan "" kalau bentuknya benar, atau kalimat alasan kalau salah.
+function Test-TunnelToken([string]$token) {
+    if ([string]::IsNullOrWhiteSpace($token)) { return "kosong" }
+    if ($token -match '^\s*https?://') {
+        return "itu ALAMAT (hostname), bukan token. Hostname diisi di pertanyaan berikutnya."
     }
-    Die "URL Quick Tunnel (port $port) tidak muncul dalam 30 dtk. Cek internet, ulangi."
+    if ($token -match '\s') { return "mengandung spasi - kemungkinan tersalin sebagian kalimat." }
+    if ($token.Length -lt 60) { return "terlalu pendek ($($token.Length) karakter; token asli ratusan karakter)." }
+    if ($token -notmatch '^[A-Za-z0-9+/=_-]+$') { return "mengandung karakter yang tidak ada di token Cloudflare." }
+    try {
+        # base64url -> base64 standar, lalu lengkapi padding.
+        $b = $token.Replace('-', '+').Replace('_', '/')
+        if ($b.Length % 4) { $b = $b.PadRight($b.Length + (4 - $b.Length % 4), '=') }
+        $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b))
+    } catch {
+        return "bukan base64 yang sah - kemungkinan tersalin sebagian saja."
+    }
+    if ($json -notmatch '"a"' -or $json -notmatch '"t"' -or $json -notmatch '"s"') {
+        return "base64-nya sah tapi isinya bukan token tunnel (tidak ada field a/t/s)."
+    }
+    return ""
 }
 
-# --- Supabase REST (mode tes): tulis alamat baru ke R-Net -------------------
-function Update-SupabaseStream($cfg, [string]$newUrl, [string]$streamName) {
-    $key = Get-Cfg $cfg "SUPABASE_SERVICE_KEY"
-    $base = "$(Get-Cfg $cfg 'SUPABASE_URL')/rest/v1/scada_streams"
-    $headers = @{ apikey = $key; Authorization = "Bearer $key"; "Content-Type" = "application/json"; Prefer = "return=representation" }
-    $filter = if ($streamName) { "name=eq.$([uri]::EscapeDataString($streamName))" } else { "id=not.is.null" }
-    try {
-        $rows = Invoke-RestMethod -Method Patch -TimeoutSec 20 -Headers $headers `
-            -Uri "${base}?${filter}" -Body (@{ hls_url = $newUrl } | ConvertTo-Json)
-        if (-not $rows) { Warn "Belum ada stream '$streamName' di R-Net - buat di Kelola Screen lalu ulangi." }
-        else { foreach ($r in $rows) { Write-Host ("   {0}  ->  {1}" -f $r.name, $newUrl) } }
-    } catch { Warn "Gagal update alamat stream: $($_.Exception.Message)" }
+# --- Password TightVNC ------------------------------------------------------
+# TightVNC menyimpan password sebagai DES-ECB 8 byte dengan kunci tetap milik
+# protokol VNC -- ini OBFUSCATION, bukan hash: bisa dibaca balik (dipakai saat
+# perlu menyalin password lama ke config.env). Keamanan riil = view-only di
+# server + LoopbackOnly, bukan kerahasiaan nilai ini.
+$script:VncKey = [byte[]](0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0)
+
+function New-VncDes {
+    $des = New-Object Security.Cryptography.DESCryptoServiceProvider
+    $des.Mode = [Security.Cryptography.CipherMode]::ECB
+    $des.Padding = [Security.Cryptography.PaddingMode]::None
+    $des.Key = $script:VncKey
+    return $des
 }
 
-function Update-SupabaseVnc($cfg, [string]$newUrl, [string]$vncSource, [string]$vncPass) {
-    $key = Get-Cfg $cfg "SUPABASE_SERVICE_KEY"
-    $base = "$(Get-Cfg $cfg 'SUPABASE_URL')/rest/v1/scada_streams"
-    $headers = @{ apikey = $key; Authorization = "Bearer $key"; "Content-Type" = "application/json"; Prefer = "return=representation" }
-    $filter = "source_type=eq.vnc"
-    if ($vncSource) { $filter += "&name=eq.$([uri]::EscapeDataString($vncSource))" }
+function ConvertTo-VncPass([string]$plain) {
+    $data = New-Object byte[] 8
+    $src = [Text.Encoding]::ASCII.GetBytes($plain)
+    [Array]::Copy($src, $data, [Math]::Min(8, $src.Length))
+    return (New-VncDes).CreateEncryptor().TransformFinalBlock($data, 0, 8)
+}
+
+function ConvertFrom-VncPass([byte[]]$enc) {
+    if (-not $enc -or $enc.Length -lt 8) { return "" }
+    $plain = (New-VncDes).CreateDecryptor().TransformFinalBlock($enc, 0, 8)
+    return ([Text.Encoding]::ASCII.GetString($plain)).TrimEnd([char]0)
+}
+
+# Protokol VNC hanya memakai 8 karakter pertama. Dipotong DI SINI supaya
+# registry dan config.env tidak pernah berbeda (dulu: ketik 9 karakter ->
+# registry simpan 8, config.env tulis 9 -> auth gagal tanpa sebab yang jelas).
+function Limit-VncPass([string]$plain) {
+    if ($plain.Length -gt 8) {
+        Warn "Password dipotong jadi 8 karakter (batas protokol VNC): $($plain.Substring(0,8))"
+        return $plain.Substring(0, 8)
+    }
+    return $plain
+}
+
+$script:RegVncHkcu = "HKCU:\Software\TightVNC\Server"
+$script:RegVncHives = @(
+    "HKCU:\Software\TightVNC\Server",
+    "HKLM:\SOFTWARE\TightVNC\Server",
+    "HKLM:\SOFTWARE\WOW6432Node\TightVNC\Server"
+)
+
+# Cari password di SEMUA hive, bukan HKCU saja.
+#
+# Kenapa: password bisa saja diset lewat GUI TightVNC "Service Mode
+# Configuration", dan itu menulis ke HKLM. Kalau di sini hanya HKCU yang
+# dilihat, installer mengira PC belum punya password padahal sudah -- lalu
+# menulis pengerasan (UseVncAuthentication=1) ke HKCU yang kosong, dan mode
+# APLIKASI jadi mewajibkan password yang tidak dimilikinya. Gejalanya:
+# "Server is not configured properly" di setiap koneksi.
+function Get-VncPassBytes([string]$name) {
+    foreach ($h in $script:RegVncHives) {
+        if (-not (Test-Path $h)) { continue }
+        $v = (Get-ItemProperty $h -Name $name -ErrorAction SilentlyContinue).$name
+        if ($v) { return $v }
+    }
+    return $null
+}
+
+# Hive mana yang menentukan: mode APLIKASI (tvnserver -run) baca HKCU,
+# mode SERVICE baca HKLM. Dipakai untuk swa-uji yang jujur.
+function Get-VncActiveHive {
+    $svc = Get-Service tvnserver -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") {
+        return [pscustomobject]@{ Mode = "SERVICE"; Path = "HKLM:\SOFTWARE\TightVNC\Server" }
+    }
+    return [pscustomobject]@{ Mode = "APLIKASI"; Path = $script:RegVncHkcu }
+}
+
+# Apakah hive milik mode yang sedang jalan punya password? Kembalikan "" kalau
+# beres, atau kalimat alasan kalau tidak.
+function Test-VncReady {
+    $a = Get-VncActiveHive
+    $p = Get-ItemProperty $a.Path -ErrorAction SilentlyContinue
+    if (-not $p) { return "TightVNC mode $($a.Mode) membaca $($a.Path), tapi key itu belum ada." }
+    if (-not $p.PasswordViewOnly) {
+        return "TightVNC mode $($a.Mode) membaca $($a.Path), dan di situ password KOSONG."
+    }
+    return ""
+}
+
+# Tulis password + pengerasan ke HKCU, lalu cermin ke HKLM (64-bit dan
+# WOW6432Node) lewat helper ber-Administrator.
+#
+# DUA TEMPAT, sengaja: mode APLIKASI membaca HKCU, mode SERVICE membaca HKLM.
+# Kalau hanya salah satu terisi, mode yang lain melayani TANPA password dan
+# TightVNC menolak dengan "Server is not configured properly".
+#
+# AllowLoopback=1 WAJIB: websocat menyambung dari 127.0.0.1 dan TightVNC bawaan
+# MENOLAK loopback ("Sorry, loopback connections are not enabled").
+# LoopbackOnly=1 mengunci port 5900 dari LAN -- satu-satunya jalan masuk dari
+# luar adalah websocat + tunnel.
+function Set-VncRegistry([byte[]]$ctrlEnc, [byte[]]$viewEnc) {
+    # JANGAN pernah menulis pengerasan ke hive yang tak punya password.
+    # UseVncAuthentication=1 tanpa password = server MEWAJIBKAN password yang
+    # tidak dimilikinya, lalu menolak semua koneksi dengan
+    # "Server is not configured properly". Lebih baik tidak menulis apa pun.
+    if (-not ($ctrlEnc -and $viewEnc)) {
+        Warn "Password VNC tidak ditemukan di hive mana pun - setelan TightVNC tidak ditulis."
+        Warn "Isi password dulu (install.bat atau kredensial.bat pilihan [V])."
+        return
+    }
+
+    New-Item -Path $script:RegVncHkcu -Force | Out-Null
+    New-ItemProperty -Path $script:RegVncHkcu -Name Password         -PropertyType Binary -Value $ctrlEnc -Force | Out-Null
+    New-ItemProperty -Path $script:RegVncHkcu -Name PasswordViewOnly -PropertyType Binary -Value $viewEnc -Force | Out-Null
+    foreach ($d in @{ UseVncAuthentication = 1; AcceptHttpConnections = 0; AllowLoopback = 1; LoopbackOnly = 1 }.GetEnumerator()) {
+        New-ItemProperty -Path $script:RegVncHkcu -Name $d.Key -PropertyType DWord -Value $d.Value -Force | Out-Null
+    }
+    Good "TightVNC (mode aplikasi/HKCU): password + loopback-only diset."
+
+    $ctrlHex = ($ctrlEnc | ForEach-Object { $_.ToString("X2") }) -join ""
+    $viewHex = ($viewEnc | ForEach-Object { $_.ToString("X2") }) -join ""
+    $mirror = @"
+function Hex2Bytes(`$h) { `$b = New-Object byte[] (`$h.Length/2); for (`$i=0; `$i -lt `$b.Length; `$i++) { `$b[`$i] = [Convert]::ToByte(`$h.Substring(`$i*2,2),16) }; return `$b }
+foreach (`$k in @('HKLM:\SOFTWARE\TightVNC\Server','HKLM:\SOFTWARE\WOW6432Node\TightVNC\Server')) {
+    New-Item -Path `$k -Force | Out-Null
+    New-ItemProperty -Path `$k -Name Password             -PropertyType Binary -Value (Hex2Bytes '$ctrlHex') -Force | Out-Null
+    New-ItemProperty -Path `$k -Name PasswordViewOnly     -PropertyType Binary -Value (Hex2Bytes '$viewHex') -Force | Out-Null
+    New-ItemProperty -Path `$k -Name UseVncAuthentication  -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -Path `$k -Name AcceptHttpConnections -PropertyType DWord -Value 0 -Force | Out-Null
+    New-ItemProperty -Path `$k -Name AllowLoopback         -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -Path `$k -Name LoopbackOnly          -PropertyType DWord -Value 1 -Force | Out-Null
+}
+`$svc = Get-Service tvnserver -ErrorAction SilentlyContinue
+if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service tvnserver -Force -ErrorAction SilentlyContinue }
+"@
+    $tmpPs = Join-Path $env:TEMP ("rein_vnc_hklm_" + [guid]::NewGuid().ToString("N") + ".ps1")
+    Write-TextNoBom $tmpPs $mirror
     try {
-        $rows = Invoke-RestMethod -Method Get -TimeoutSec 20 -Headers $headers -Uri "${base}?${filter}&select=id,name"
-        if (-not $rows) { Warn "Belum ada sumber VNC '$vncSource' di R-Net - buat di Kelola Screen lalu ulangi."; return }
-        foreach ($r in $rows) {
-            $patch = @{ url = $newUrl }
-            if ($vncPass) { $patch.secret = $vncPass }
-            Invoke-RestMethod -Method Patch -TimeoutSec 20 -Headers $headers `
-                -Uri "${base}?id=eq.$($r.id)" -Body ($patch | ConvertTo-Json) | Out-Null
-            Write-Host ("   {0}  ->  {1}{2}" -f $r.name, $newUrl, $(if ($vncPass) { " + password" } else { "" }))
-        }
-    } catch { Warn "Gagal update sumber VNC: $($_.Exception.Message)" }
+        Start-Process powershell -Verb RunAs -Wait -ArgumentList `
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$tmpPs`""
+        Good "Setelan dicermin ke HKLM (64-bit + WOW6432Node)."
+    } catch {
+        Warn "Gagal menulis HKLM (butuh Administrator). Kalau TightVNC dijalankan"
+        Warn "sebagai SERVICE, dia akan bilang 'Server is not configured properly'."
+    }
+    Remove-Item $tmpPs -Force -ErrorAction SilentlyContinue
+}
+
+# --- Hostname publik: bersihkan + periksa bentuknya -------------------------
+# Terima tempelan apa adanya ("https://mirror-x.remula.online/scada/...") dan
+# ambil hostname-nya saja. Diperiksa karena tiga isian tunnel (token, hostname,
+# nama sumber R-Net) gampang tertukar -- dan kalau tertukar, gejalanya baru
+# muncul jauh kemudian sebagai "mirror tidak pernah tampil".
+function Format-Hostname([string]$raw) {
+    return ("$raw".Trim().Trim('"').Trim("'") -replace '^\s*[a-z]+://', '' -replace '/.*$', '' -replace ':\d+$', '')
+}
+
+# Kembalikan "" kalau bentuknya benar, atau kalimat alasan kalau salah.
+function Test-Hostname([string]$hostname) {
+    if ([string]::IsNullOrWhiteSpace($hostname)) { return "kosong" }
+    if ($hostname -match '\s') { return "mengandung spasi." }
+    if ($hostname -notmatch '\.') {
+        return "tidak ada titiknya - ini terlihat seperti NAMA sumber di R-Net, bukan alamat internet."
+    }
+    if ($hostname -match '^[A-Za-z0-9+/=]{60,}$') { return "ini terlihat seperti TOKEN, bukan hostname." }
+    if ($hostname -notmatch '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$') {
+        return "bukan nama domain yang sah."
+    }
+    return ""
+}
+
+# --- Named tunnel: tunggu sampai benar-benar tersambung ---------------------
+# cloudflared menulis "Registered tunnel connection" begitu satu koneksi ke tepi
+# Cloudflare berhasil. Tanpa pengecekan ini saklar bilang "OK" padahal token
+# salah / tidak ada internet, dan pemakai baru sadar saat layar R-Net kosong.
+function Wait-TunnelUp([string]$logPath, [int]$timeoutSec = 25) {
+    for ($i = 0; $i -lt $timeoutSec; $i++) {
+        Start-Sleep 1
+        $txt = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+        if (-not $txt) { continue }
+        if ($txt -match "Registered tunnel connection") { return "ok" }
+        if ($txt -match "(?i)Unauthorized|invalid tunnel|token is invalid|failed to parse token") { return "token" }
+    }
+    return "timeout"
 }
 
 # --- Pilihan paket (menu / argumen) -----------------------------------------
@@ -251,7 +448,7 @@ function Select-Packages([string[]]$args_, [string[]]$available, [string]$verb) 
         $label = switch ($p) {
             "stream" { "STREAM  - siaran layar/HMI (MediaMTX + tunnel + OBS)" }
             "mirror" { "MIRROR  - spion layar PC ini (TightVNC + websocat)" }
-            "data"   { "DATA    - data sensor (Mosquitto + Node-RED + bridge)" }
+            "data"   { "DATA    - data sensor (Node-RED + bridge; broker di VPS)" }
         }
         Write-Host "  [$i] $label"
         $map["$i"] = $p

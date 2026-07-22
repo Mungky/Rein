@@ -2,8 +2,8 @@
 #  uninstall.ps1  -  Hapus R-Net dari PC ini
 # ==========================================================================
 #  1. Matikan semua layanan.
-#  2. Hapus program (MediaMTX/cloudflared/websocat = file; Mosquitto/Node-RED/
-#     OBS/TightVNC/Python = winget).
+#  2. Hapus program (MediaMTX/cloudflared/websocat = file; Node-RED/OBS/
+#     TightVNC/Python = winget).
 #  3. Tanya: hapus juga config.env + data (kredensial & folder)?
 # ==========================================================================
 
@@ -25,7 +25,7 @@ if ($ans -ne "HAPUS") { Warn "Dibatalkan."; exit 0 }
 
 # --- 1. Matikan semuanya ----------------------------------------------------
 Info "Mematikan semua layanan ..."
-Get-Process mediamtx, tvnserver, websocat, mosquitto -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process mediamtx, tvnserver, websocat -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Stop-ByCommandLine "cloudflared.exe" "tunnel"
 Stop-ByCommandLine "node.exe" "node-red"
 Stop-ByCommandLine "python.exe" "bridge\.py"
@@ -38,8 +38,7 @@ Write-Host ""
 Info "Program berbagi (winget) - hapus HANYA yang ingin dilepas dari PC ini."
 Info "Enter y kalau yakin PC ini tidak memakainya untuk hal lain."
 foreach ($pkg in @(
-    @{ Id = "EclipseFoundation.Mosquitto"; Label = "Mosquitto (broker MQTT)" },
-    @{ Id = "GlavSoft.TightVNC";           Label = "TightVNC (mirror)" }
+    @{ Id = "GlavSoft.TightVNC"; Label = "TightVNC (mirror)" }
 )) {
     $a = Read-Host "   Hapus $($pkg.Label)? (y/N)"
     if ($a -match "^(y|ya)$") { Uninstall-WingetPkg $pkg.Id $pkg.Label }

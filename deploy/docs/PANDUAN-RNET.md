@@ -1,143 +1,201 @@
 # Panduan Server R-Net — Satu Panduan untuk Semuanya
 
-> Panduan tunggal untuk menyiapkan **PC server/pemancar R-Net** dari nol:
-> video streaming (OBS → MediaMTX → Cloudflare Tunnel), data sensor
-> (V-Box → Mosquitto MQTT), otomasi (Node-RED), sampai troubleshooting.
-> Ditulis untuk orang non-teknis. Panduan-panduan lama
-> (PANDUAN-INSTALASI-STREAMING, PANDUAN-SERVER-SCADA, PANDUAN-MQTT-RNET,
-> TUTORIAL-TES-LOKAL) sudah dilebur ke sini.
+> Panduan tunggal untuk menyiapkan **PC site R-Net** dari nol: siaran layar
+> (OBS → MediaMTX → Cloudflare Tunnel), spion layar (TightVNC), data sensor
+> (V-Box → broker MQTT di VPS → bridge), sampai troubleshooting.
+> Ditulis untuk orang non-teknis.
 
 ---
 
-> ## ⚠️ PERINTAH BERUBAH (2026-07) — baca ini dulu
->
-> Folder `deploy` dirombak jadi **4 tombol + 1 file kredensial**. Konsep
-> (OBS/MediaMTX/broker/bridge/VNC) di bawah tetap sama, hanya cara
-> menyalakannya yang lebih ringkas. Peta perintah:
->
-> | Dulu | Sekarang |
-> |---|---|
-> | `install.ps1` (menu 1–5) | **`install.bat`** (menu paket: stream / mirror / data) |
-> | `start-scada.bat` | **`start.bat`** (menu; atau `start.bat stream data`) |
-> | `stop-scada.bat` | **`stop.bat`** (menu; atau `stop.bat semua`) |
-> | `start-vnc.bat` / `stop-vnc.bat` | jadi bagian paket **mirror**: `start.bat mirror` / `stop.bat mirror` |
-> | `start-nodered.bat` + `start-bridge` | jadi bagian paket **data**: `start.bat data` |
-> | (baru) | **`uninstall.bat`** — copot dari PC ini |
->
-> **Kredensial:** dulu tersebar; sekarang **satu file** `C:\rein-scada\config.env`.
->
-> **Tunnel produksi:** isi `TUNNEL_TOKEN` di `config.env` supaya alamat
-> stream/mirror **permanen** (tidak ganti tiap start) — lihat
-> [PANDUAN-TUNNEL.md](./PANDUAN-TUNNEL.md). Tanpa token = mode tes (URL acak).
->
-> **Broker MQTT:** tetap **satu** Mosquitto per PC — V-Box dan Node-RED
-> memakai broker yang sama, dibedakan **topik** (`vbox/...` vs `rnet/...`),
-> bukan dua broker. Bridge = kurir yang menyalin topik `rnet/...` ke database.
->
-> Di mana pun panduan di bawah menyebut `start-scada.bat`/`start-vnc.bat` dsb.,
-> pakai padanan di tabel ini.
+## 0. Ringkasnya
+
+Satu folder, **lima tombol**, satu file kredensial:
+
+| Tombol | Fungsi |
+|---|---|
+| `install.bat` | Pasang. Dijalankan **sekali** per PC. |
+| `start.bat` | Nyalakan layanan. |
+| `stop.bat` | Matikan layanan. |
+| `kredensial.bat` | Perbaiki isian yang salah ketik. |
+| `uninstall.bat` | Copot dari PC ini. |
+
+Semua kredensial ada di **satu** file: `C:\rein-scada\config.env` (RAHASIA,
+jangan dikirim ke siapa pun).
+
+Prinsip penting: **tidak ada yang autostart**. Semua hidup-mati lewat tombol.
 
 ---
 
 ## 1. Gambaran Besar — Tiga Jalur
 
-R-Net punya tiga jalur yang berdiri sendiri (boleh pasang salah satu saja):
+Tiga jalur yang berdiri sendiri (boleh pasang salah satu saja):
 
 ```
-JALUR VIDEO (tab Monitor):
+JALUR VIDEO / STREAM (channel "Video Screen"):
 ┌───────┐   ┌──────────┐   ┌──────────────┐   ┌────────────────┐
 │  OBS  │──▶│ MediaMTX │──▶│  Cloudflare  │──▶│ R-Net di       │
 │(kamera│   │(pemancar)│   │  Tunnel      │   │ browser mana   │
 │studio)│   │          │   │ (kabel aman) │   │ pun (TV-nya)   │
 └───────┘   └──────────┘   └──────────────┘   └────────────────┘
 
-JALUR DATA SENSOR (panel Grafik/Gauge/Tabel):
-┌────────┐   ┌─────────┐   ┌───────────┐   ┌──────────┐   ┌───────┐
-│ Sensor │──▶│ V-Box / │──▶│ Mosquitto │──▶│ Jembatan │──▶│ R-Net │
-│ / PLC  │   │ V-Net   │   │ (broker,  │   │ (bridge) │   │       │
-│        │   │         │   │kantor pos)│   │          │   │       │
-└────────┘   └─────────┘   └───────────┘   └──────────┘   └───────┘
-
-JALUR SPION LAYAR / VNC (channel "VNC (Layar PC)"):
+JALUR SPION LAYAR / MIRROR (channel "VNC (Layar PC)"):
 ┌──────────────────┐   ┌──────────┐   ┌──────────────┐   ┌───────┐
 │ PC dedicated:    │──▶│ TightVNC │──▶│  websocat +  │──▶│ R-Net │
 │ browser membuka  │   │(view-only│   │  Cloudflare  │   │(tajam,│
 │ cloud SCADA      │   │ mirror)  │   │  Tunnel      │   │ live) │
 └──────────────────┘   └──────────┘   └──────────────┘   └───────┘
+
+JALUR DATA SENSOR (panel Grafik/Gauge/Tabel):
+┌────────┐   ┌─────────┐   ┌────────────┐   ┌──────────┐   ┌───────┐
+│ Sensor │──▶│ V-Box / │──▶│ Broker MQTT│──▶│ Jembatan │──▶│ R-Net │
+│ / PLC  │   │ V-Net   │   │  DI VPS    │   │ (bridge) │   │       │
+│        │   │         │   │(kantor pos)│   │          │   │       │
+└────────┘   └─────────┘   └────────────┘   └──────────┘   └───────┘
 ```
 
-| Komponen | Fungsi | Wajib untuk |
+| Komponen | Fungsi | Dipasang di PC site? |
 |---|---|---|
-| **MediaMTX + cloudflared** | Menerima video OBS, menyiarkannya ke internet tanpa buka port router | Jalur video |
-| **OBS Studio** | Menggabungkan layar V-Net/SCADA jadi satu tampilan siaran | Jalur video |
-| **Mosquitto** | Broker MQTT — menampung data sensor dari V-Box | Jalur data |
-| **Jembatan (mqtt-bridge)** | Menyalin data dari broker ke database R-Net | Jalur data |
-| **Node-RED** | Opsional — otomasi alur data (mis. baca Modbus/PLC → kirim ke MQTT) | Sesuai kebutuhan |
-| **TightVNC + websocat** | Memantulkan layar PC (mis. browser cloud SCADA) ke channel R-Net, view-only, tanpa OBS | Jalur spion layar |
+| **MediaMTX + cloudflared** | Menerima video OBS, menyiarkannya ke internet tanpa buka port router | Ya (paket stream) |
+| **OBS Studio** | Menggabungkan layar V-Net/SCADA jadi satu tampilan siaran | Ya (paket stream) |
+| **TightVNC + websocat** | Memantulkan layar PC ke channel R-Net, view-only, tanpa OBS | Ya (paket mirror) |
+| **Broker MQTT (Mosquitto)** | Menampung data sensor dari V-Box | **Tidak — ada di VPS** |
+| **Jembatan (bridge)** | Menyalin data dari broker ke database R-Net | Ya (paket data) |
+| **Node-RED** | Opsional — olah alur data (mis. baca Modbus/PLC → publish MQTT) | Ya (paket data) |
 
-Prinsip penting: **tidak ada yang autostart**. Semua dinyalakan/dimatikan
-lewat saklar (file `.bat` yang tinggal dobel-klik).
+> **Kenapa broker di VPS?** Supaya V-Box di lokasi mana pun bisa mengirim ke
+> alamat yang sama, kapan pun — jarak dan jaringan lokal bukan lagi masalah.
+> Tetap **satu** broker: V-Box dan Node-RED memakai broker yang sama,
+> dibedakan **topik** (`vbox/...` vs `rnet/...`), bukan dua broker.
 
 ---
 
-## 2. Instalasi (sekali per PC, ±10–30 menit)
+## 2. Sebelum Pasang: Buat Tunnel (kalau pakai stream/mirror)
 
-1. Salin folder `deploy/scada/` ini ke PC target (flashdisk juga bisa).
-2. Buka PowerShell di folder itu, jalankan:
+Stream dan mirror **wajib** lewat named tunnel Cloudflare. Buat dulu di
+dashboard — ±5 menit, sekali per PC. Langkahnya di
+[PANDUAN-TUNNEL.md](./PANDUAN-TUNNEL.md).
+
+Yang harus kamu bawa ke depan PC saat memasang:
+
+- **TUNNEL_TOKEN** (teks panjang `eyJ...`)
+- **STREAM_HOSTNAME**, mis. `stream-pabrik1.remula-inti.com`
+- **MIRROR_HOSTNAME**, mis. `mirror-pabrik1.remula-inti.com`
+
+Tanpa ini stream/mirror hidup di PC tapi **tidak akan muncul di R-Net**.
+
+---
+
+## 3. Instalasi (sekali per PC, ±10–30 menit)
+
+1. Salin folder `deploy` ke PC target (flashdisk).
+2. **Dobel-klik `install.bat`.** Tidak perlu mengetik perintah apa pun.
+3. Pilih paket yang mau dipasang:
 
    ```
-   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+   [1] STREAM  - siaran layar/HMI (MediaMTX + tunnel + OBS)
+   [2] MIRROR  - spion layar PC ini (TightVNC + websocat)
+   [3] DATA    - data sensor (Node-RED + bridge; broker di VPS)
+   [A] Semua
    ```
 
-3. Installer menanyakan **komponen mana yang mau dipasang**:
+   Boleh gabung, mis. ketik `1,2`. Semua komponen diunduh **versi terbaru**
+   dari sumber resmi (GitHub resmi / winget); cloudflared diverifikasi tanda
+   tangan digitalnya.
 
-   ```
-   [1] MediaMTX + Cloudflare Tunnel  - pemancar video (inti R-Net)
-   [2] Mosquitto (broker MQTT)       - terima data sensor V-Box
-   [3] Node-RED                      - otomasi alur data / gateway PLC
-   [4] OBS Studio                    - sumber siaran layar
-   [5] Sumber VNC (TightVNC+websocat)- spion layar PC ini utk channel R-Net
-   ```
+4. Jawab pertanyaan installer:
 
-   Ketik nomornya dipisah koma, mis. `1,2,4`. Enter saja = `1`
-   (video saja). Semua komponen dipasang **versi terbaru** dari sumber
-   resmi (GitHub resmi / winget); cloudflared diverifikasi tanda tangan
-   digitalnya.
-
-4. Ikuti pertanyaan installer:
-   - **Password publish & viewer** — Enter saja = dibuatkan otomatis.
-     **CATAT keduanya** (publish untuk OBS, viewer untuk Kelola Stream).
-   - **Kredensial Supabase** — supaya alamat stream ter-update otomatis
-     tiap kali server dinyalakan. Boleh dikosongkan (mode manual:
-     salin-tempel URL sendiri, lihat bagian 5).
-   - **STREAM_NAME** — nama stream milik mesin ini. **WAJIB diisi kalau
-     ada lebih dari satu mesin siaran** (mis. "Line Server", "Line
-     Laptop"); tanpa ini mesin-mesin saling menimpa alamat.
-   - **Akun MQTT** (kalau pilih komponen 2) — username + password yang
-     nanti diisi di V-Box. Bisa dilihat/diubah kapan pun lewat
-     **Pengaturan MQTT.bat** (bagian 6).
-   - **Password VNC + nomor channel** (kalau pilih komponen 5) — password
-     KONTROL (untuk Anda) dan VIEW-ONLY (untuk channel R-Net), maks 8
-     karakter, Enter = dibuatkan otomatis. Detail di bagian 8.
-
-5. Selesai. Isi folder `C:\rein-scada\` sekarang:
-
-   | File | Fungsi |
+   | Ditanya | Isi |
    |---|---|
-   | `start-scada.bat` | Saklar ON: MediaMTX + tunnel + Mosquitto |
-   | `stop-scada.bat` | Saklar OFF semuanya |
-   | `Pengaturan MQTT.bat` | **UI pengaturan broker MQTT** (port/akun/tes) |
-   | `start-nodered.bat` | Saklar ON Node-RED (kalau dipasang) |
-   | `start-vnc.bat` / `stop-vnc.bat` | Saklar sumber VNC (kalau dipasang, bagian 8) |
-   | `config.env` | Kredensial Supabase + STREAM_NAME + VNC_CHANNEL (RAHASIA) |
-   | `mediamtx\`, `cloudflared\`, `mosquitto\`, `websocat\` | Program + config masing-masing |
+   | `TUNNEL_TOKEN` | token dari bagian 2 |
+   | `STREAM_HOSTNAME` / `MIRROR_HOSTNAME` | hostname dari bagian 2 (tanpa `https://`) |
+   | Password **publish** & **viewer** MediaMTX | Enter = dibuatkan otomatis. **CATAT keduanya.** |
+   | Password VNC **KONTROL** & **VIEW-ONLY** | maks 8 karakter, Enter = dibuatkan. **CATAT keduanya.** |
+   | `DATABASE_URL` | alamat database R-Net untuk bridge |
+   | `MQTT_HOST` / `MQTT_PORT` / `MQTT_USERNAME` | alamat broker VPS — catatan untuk menyetel Node-RED |
 
-   Installer aman dijalankan ulang kapan pun (update komponen, tambah
-   komponen baru) — config dan password lama **tidak pernah ditimpa**.
+5. Di akhir, installer mencetak kotak **"ISI DI R-NET > Kelola Screen"**
+   berisi alamat lengkap yang tinggal disalin. Jangan ditutup sebelum disalin
+   — `start.bat` mencetak ulang alamat yang sama kapan saja.
+
+Installer aman dijalankan ulang kapan pun (update komponen, tambah paket,
+melengkapi hostname yang belum diisi) — password dan config lama **tidak
+pernah ditimpa**.
+
+### Salah ketik? Pakai `kredensial.bat`
+
+Justru karena installer tidak pernah menimpa nilai yang sudah terisi, salah
+ketik **tidak bisa dibetulkan dari `install.bat`**. Dobel-klik
+**`kredensial.bat`**: muncul daftar semua isian beserta nilainya (yang rahasia
+disamarkan), pilih nomornya, ketik nilai baru.
+
+```
+  [1] TUNNEL_TOKEN        <terisi, 218 karakter>
+  [2] STREAM_HOSTNAME     stream-pabrik1.remula-inti.com
+  [3] MIRROR_HOSTNAME     Server-Remula   <-- TIDAK SAH: tidak ada titiknya ...
+  [4] STREAM_PATH         scada
+  [5] DATABASE_URL        <terisi, 111 karakter>
+  ...
+  [M] Password MediaMTX (publish + viewer)
+  [V] Password VNC (kontrol + view-only)
+  [Q] Selesai
+```
+
+Isian yang bentuknya salah ditandai sendiri, jadi ketahuan tanpa harus diperiksa
+satu-satu. Yang perlu diingat:
+
+- Token dan hostname **diperiksa bentuknya** — nilai ngawur ditolak di tempat.
+- `DATABASE_URL` **tidak bisa diperiksa** (salah ketik password terlihat sama
+  saja dengan yang benar) — dicek hanya harus diawali `postgresql://`. Kalau
+  bridge tetap gagal, cocokkan lagi dengan Supabase.
+- Mengganti **password VNC** memperbarui registry TightVNC **dan** `config.env`
+  sekaligus, supaya keduanya tidak pernah berbeda. Password baru tetap harus
+  diisikan lagi di R-Net > Kelola Screen.
+- Setelah mengubah apa pun: `stop.bat` lalu `start.bat`.
+
+### Isi folder `C:\rein-scada\` setelah pasang
+
+| File | Fungsi |
+|---|---|
+| `start.bat` / `stop.bat` | Saklar ON / OFF (menu paket) |
+| `uninstall.bat` | Copot dari PC ini |
+| `config.env` | **Semua** kredensial PC ini (RAHASIA) |
+| `mediamtx\`, `cloudflared\`, `websocat\`, `data\` | Program + config masing-masing |
 
 ---
 
-## 3. Setting OBS (sekali saja)
+## 4. Daftarkan di R-Net (sekali saja, manual)
+
+PC site **tidak pernah menulis ke database R-Net** — jadi langkah ini memang
+dikerjakan tangan, sekali seumur hidup (alamatnya permanen).
+
+Login R-Net sebagai admin → halaman **R-Net** → tab **Channel** →
+**Kelola Screen** → Tambah Sumber.
+
+**Untuk STREAM:**
+
+| Kolom | Isi |
+|---|---|
+| Jenis | Stream |
+| Nama | bebas, mis. `Line Server` |
+| URL HLS | `https://<STREAM_HOSTNAME>/scada/index.m3u8` |
+| User (read) | `rein-viewer` |
+| Password (read) | password **viewer** dari installer (bukan publish) |
+
+**Untuk MIRROR:**
+
+| Kolom | Isi |
+|---|---|
+| Jenis | VNC (Layar PC) |
+| Nama | bebas, mis. `Server-Remula` |
+| Alamat | `https://<MIRROR_HOSTNAME>` — R-Net mengubahnya jadi `wss://` sendiri |
+| Password | password **VIEW-ONLY** VNC (JANGAN yang kontrol) |
+
+Lalu buat **Channel Baru** → jenis **Video Screen** → pilih sumber tadi (boleh
+di-crop), dan taruh channel itu di layout tab Monitor.
+
+---
+
+## 5. Setting OBS (sekali saja, kalau pakai stream)
 
 **Settings → Stream:**
 
@@ -163,161 +221,83 @@ lewat saklar (file `.bat` yang tinggal dobel-klik).
 
 ---
 
-## 4. Daftarkan Stream di R-Net (sekali saja)
+## 6. Rutinitas Tiap PC Dinyalakan
 
-1. Login R-Net sebagai admin → halaman **R-Net** → tab **Channel** →
-   **Kelola Stream** → Tambah Stream:
+1. (Mirror) Buka browser ke cloud SCADA, **login**, atur tampilannya — token
+   cloud SCADA yang kedaluwarsa 24 jam tetap urusan PC ini.
+2. Dobel-klik **`C:\rein-scada\start.bat`** → pilih paket (Enter = semua).
+   - Jendela mencetak `Named tunnel tersambung ke Cloudflare` dan alamat
+     stream/mirror-nya.
+   - Di bawahnya ada daftar status `[HIDUP]/[mati]` tiap layanan.
+3. (Stream) Buka **OBS** → **Start Streaming**.
+4. Selesai kerja: **`stop.bat`** (OBS ditutup sendiri).
 
-   | Kolom | Isi |
-   |---|---|
-   | Nama | PERSIS sama dengan `STREAM_NAME` di config.env (mis. `Line Server`) |
-   | URL HLS | otomatis ter-update oleh saklar; mode manual: tempel URL dari jendela start-scada |
-   | User (read) | `rein-viewer` |
-   | Password (read) | password **viewer** dari installer |
-
-2. Buat Channel yang memakai stream itu, taruh panelnya di tab Monitor.
-
----
-
-## 5. Rutinitas Tiap PC Dinyalakan
-
-1. Dobel-klik **`C:\rein-scada\start-scada.bat`** — menyalakan MediaMTX,
-   Cloudflare Tunnel, dan Mosquitto (kalau terpasang).
-   - **Kalau config.env diisi:** alamat stream ter-update otomatis di
-     database — tidak ada yang perlu disalin. Jendela menampilkan
-     `=== R-NET SIAP ===`.
-   - **Kalau kosong (mode manual):** jendela menampilkan URL
-     `https://xxxx.trycloudflare.com/scada/index.m3u8` — salin ke
-     R-Net → Kelola Stream → URL HLS. (URL berubah tiap dinyalakan —
-     itu sifat Quick Tunnel gratis.)
-2. Buka **OBS** → **Start Streaming**.
-3. Selesai kerja: **`stop-scada.bat`** (OBS ditutup sendiri).
-
-> **Butuh alamat TETAP / server 24 jam?** Pakai jalur relay VPS —
-> lihat `deploy/vps/PANDUAN-VPS-RELAY.md` (termasuk jalur SRT untuk
-> jaringan jelek). Mode NSSM/named-tunnel yang lama sudah dipensiunkan.
+Karena alamatnya permanen, **tidak ada yang perlu disalin ulang ke R-Net**.
+Halaman R-Net yang sudah terbuka cukup di-refresh sekali.
 
 ---
 
-## 6. Data Sensor MQTT — Sekarang Ada UI-nya
+## 7. Data Sensor MQTT
 
-Tidak perlu lagi edit `mosquitto.conf` manual. Dobel-klik
-**`C:\rein-scada\Pengaturan MQTT.bat`**:
+Broker ada di **VPS**. Yang dikerjakan di PC site hanya bridge (+ Node-RED
+kalau perlu olah data).
 
-- **Status broker** — terlihat langsung BERJALAN/MATI, plus tombol
-  Nyalakan / Matikan (saklar manual, konsisten dengan yang lain).
-- **Port, username, password, mode anonim** — isi kolomnya, klik
-  **Simpan Pengaturan**. Kalau broker sedang jalan, otomatis direstart
-  dengan pengaturan baru; aturan firewall untuk port baru dibuatkan.
-- **Tes Koneksi** — memastikan username/password benar-benar diterima
-  broker, TANPA perlu perangkat sungguhan.
-- **Contekan V-Net/V-Box** — kotak di bawah menampilkan **persis** apa
-  yang harus diisi di perangkat: Host (IP PC ini), Port, Username,
-  Password. Tinggal salin.
+**Sekali saja — daftarkan broker di R-Net:**
+**R-Net → Data → Kelola Site** → isi host / port / username / password broker
+VPS. Dari sinilah bridge tahu harus mendengar ke mana; bridge **tidak**
+membaca alamat broker dari `config.env`.
 
 Yang diisi di **V-Net / V-Box** (menu MQTT perangkat):
 
 | Kolom di V-Net | Isi |
 |---|---|
-| Broker/Host | IP PC server (lihat kotak contekan) |
-| Port | 1883 (atau yang Anda set) |
-| Username / Password | akun dari Pengaturan MQTT |
+| Broker/Host | alamat broker VPS |
+| Port | 1883 (atau yang diset di VPS) |
+| Username / Password | akun broker VPS |
 | Topik | bebas tapi konsisten, mis. `rnet/site1/boiler1/suhu` |
 | Payload | `{"value": 72.5}` atau angka polos `72.5` |
 
-**Jembatan ke database (bridge):** data di broker belum otomatis masuk
-R-Net — perlu bridge kecil yang jalan di PC yang sama. Cara pasang +
-menjalankan: **`mqtt-bridge/README.md`** (intinya: isi `DATABASE_URL`
-di `.env`, lalu dobel-klik `start-bridge.bat`). Site + topik diatur dari
-frontend R-Net, bukan file config.
+**Node-RED** (opsional): `start.bat data` → buka **http://127.0.0.1:1880**.
+Node **mqtt out** diarahkan ke **broker VPS**, bukan `127.0.0.1`. Alamatnya
+dicatat di `config.env` bagian `MQTT_HOST`. Detail:
+[PANDUAN-NODE-RED.md](./PANDUAN-NODE-RED.md).
 
 ---
 
-## 7. Node-RED (opsional — otomasi alur data)
-
-Node-RED = editor alur visual (drag-drop) untuk urusan seperti:
-baca Modbus/PLC langsung → publish ke MQTT, konversi format payload,
-kirim notifikasi, dsb. Cocok kalau ada perangkat yang tidak bisa lewat
-V-Box.
-
-- Nyalakan: dobel-klik **`start-nodered.bat`** → buka
-  **http://127.0.0.1:1880** di browser.
-- Matikan: tutup jendela hitamnya (atau Ctrl+C). Bukan service — tidak
-  ada yang jalan diam-diam.
-- Untuk publish ke broker lokal: node **mqtt out**, server
-  `127.0.0.1:1883`, isi username/password dari Pengaturan MQTT, topik
-  sesuai tag di R-Net.
-
----
-
-## 8. Sumber VNC — Spion Layar PC (opsional)
-
-Untuk menampilkan **layar sebuah PC** (misal browser yang membuka cloud
-SCADA) sebagai channel R-Net — tajam dan tanpa OBS. R-Net **selalu
-view-only**: penonton tidak pernah bisa menggerakkan mouse/keyboard PC
-sumber.
-
-**Sekali saja (di PC sumber):**
-
-1. Jalankan installer, pilih komponen **5**. Installer memasang TightVNC
-   (winget) + websocat + cloudflared, menyetel dua password (KONTROL untuk
-   Anda, VIEW-ONLY untuk R-Net), dan mengisi `VNC_SOURCE` +
-   `VNC_VIEW_PASSWORD` di `config.env`.
-2. Di R-Net → **Channel** → **Kelola Screen** → Tambah Sumber → jenis
-   **VNC (Layar PC)**, dengan **nama PERSIS sama dengan `VNC_SOURCE`**.
-   Alamat & password boleh dikosongkan — saklar yang mengisinya.
-3. Masih di R-Net → **Channel Baru** → jenis **Video Screen** → pilih
-   sumber VNC tadi (boleh di-crop). Taruh channel di layout Monitor.
-
-**Rutinitas tiap PC dinyalakan:**
-
-1. Buka browser ke cloud SCADA, **login**, atur tampilannya (token cloud
-   SCADA yang kedaluwarsa 24 jam tetap urusan PC ini).
-2. Dobel-klik **`start-vnc.bat`** — TightVNC + websocat + Quick Tunnel
-   hidup, lalu alamat (dan password view-only) **sumber** VNC ter-update
-   otomatis di database. Halaman R-Net yang sudah terbuka cukup
-   di-refresh sekali.
-3. Matikan: **`stop-vnc.bat`**.
-
-**Catatan:**
-
-- Ada beberapa PC sumber VNC? Satu PC = satu sumber: isi `VNC_SOURCE`
-  berbeda di masing-masing `config.env`.
-- Semua port (5900 VNC, 6080 websocat) hanya listen di PC itu sendiri;
-  satu-satunya jalan masuk dari luar adalah tunnel (wss, terenkripsi).
-- Password view-only ikut tersimpan di config channel dan terbaca semua
-  user R-Net (memang diperlukan browser penonton untuk konek) — karena
-  itu **jangan pernah** menaruh password KONTROL di sana.
-- Ganti password: klik kanan ikon TightVNC di tray → Configuration →
-  ganti, lalu samakan `VNC_VIEW_PASSWORD` di `config.env`.
-- Panduan teknis lengkap (termasuk cara manual tanpa installer):
-  `docs/VNC-SOURCE-SETUP.md` di repo REIN.
-
----
-
-## 9. Checklist Uji (sekali setelah pasang)
+## 8. Checklist Uji (sekali setelah pasang)
 
 | # | Uji | Hasil yang benar |
 |---|---|---|
-| 1 | `start-scada.bat` → OBS Start Streaming | Video muncul di halaman R-Net dalam ±10 detik |
-| 2 | Buka URL HLS di browser biasa tanpa password | **Gagal/error** — orang luar tidak bisa nonton |
-| 3 | Pengaturan MQTT → Tes Koneksi | "BERHASIL" |
-| 4 | (Kalau pakai bridge) publish tes: `mosquitto_pub -h 127.0.0.1 -u USER -P PASS -t rnet/tes/dev1/suhu -m "{\"value\": 75}"` | Nilai muncul di R-Net ≤ 1 menit |
-| 5 | `stop-scada.bat` | Semua proses mati; R-Net menampilkan "stream terputus" |
-| 6 | (Kalau pakai sumber VNC) `start-vnc.bat` → refresh R-Net | Layar PC sumber tampil di channel VNC; klik di panel TIDAK menggerakkan PC sumber |
+| 1 | `start.bat` | Tercetak "Named tunnel tersambung ke Cloudflare" |
+| 2 | (Stream) OBS Start Streaming | Video muncul di R-Net dalam ±10 detik |
+| 3 | Buka URL HLS di browser biasa tanpa password | **Gagal/error** — orang luar tidak bisa nonton |
+| 4 | (Mirror) refresh R-Net | Layar PC tampil; klik di panel **tidak** menggerakkan PC sumber |
+| 5 | (Data) publish tes ke broker VPS topik `rnet/tes/dev1/suhu` isi `{"value": 75}` | Nilai muncul di R-Net ≤ 1 menit |
+| 6 | `stop.bat` | Semua proses mati; R-Net menampilkan "stream terputus" |
 
 ---
 
-## 10. Troubleshooting
+## 9. Troubleshooting
+
+### Stream / mirror tidak muncul di R-Net
+
+Periksa berurutan — hampir selalu berhenti di salah satu dari empat ini:
+
+| # | Periksa | Cara |
+|---|---|---|
+| 1 | `TUNNEL_TOKEN` terisi | Buka `config.env`. Kalau barisnya `TUNNEL_TOKEN=` saja, tunnel tidak pernah jalan — `start.bat` juga memperingatkannya. Jalankan `install.bat` lagi untuk mengisi. |
+| 2 | Tunnel tersambung | `start.bat` harus mencetak "Named tunnel tersambung". Kalau ditolak = token salah/kedaluwarsa. Log: `cloudflared\tunnel.log`. |
+| 3 | Layanan lokal hidup | Daftar status di akhir `start.bat`: mirror butuh **TightVNC + websocat**; stream butuh **MediaMTX**. |
+| 4 | Alamat di R-Net sama persis | Kelola Screen harus berisi hostname dari bagian 2. |
 
 ### Video
 
 | Gejala | Penyebab umum | Cara cek/atasi |
 |---|---|---|
-| Video hitam / "Stream terputus" | OBS tidak streaming | Di OBS harus terlihat tombol "Stop Streaming" (artinya sedang siaran) |
-| "Menghubungkan…" tidak selesai | Tunnel mati / URL basi | Jalankan ulang `start-scada.bat`; mode manual: tempel URL BARU ke Kelola Stream |
-| Video patah-patah | Keyframe Interval bukan 1 s, atau bitrate kegedean | Cek Settings OBS (bagian 3) |
-| Password viewer ditolak | Salah isi Kelola Stream | User `rein-viewer` + password viewer (bukan publish) |
+| Video hitam / "Stream terputus" | OBS tidak streaming | Di OBS harus terlihat tombol "Stop Streaming" |
+| Video patah-patah | Keyframe Interval bukan 1 s, atau bitrate kegedean | Cek Settings OBS (bagian 5) |
+| Password viewer ditolak | Salah isi Kelola Screen | User `rein-viewer` + password **viewer** (bukan publish) |
+| Video tidak jalan padahal tunnel sehat | Domain R-Net tidak cocok dengan `hlsAllowOrigins` | Buka `mediamtx\mediamtx.yml`, pastikan barisnya memuat domain R-Net yang dipakai |
 
 ### Delay video 6–10 detik (target ~3 detik)
 
@@ -329,40 +309,54 @@ Cara tahu biang keroknya — bandingkan di PC server itu sendiri:
 2. Bandingkan dengan yang terlihat dari laptop lain (lewat internet).
 
 - **Di PC server pun sudah lambat** → biangnya OBS: matikan B-frames /
-  Look-ahead (bagian 3), delay turun drastis.
+  Look-ahead (bagian 5), delay turun drastis.
 - **Di PC server cepat, via internet lambat** → tambahan delay dari
-  Cloudflare Tunnel (batas bawaan tunnel gratis, tidak bisa ditekan
-  lewat config). Terima ~4–6 detik, atau pindah ke relay VPS + WebRTC
-  (`deploy/vps/PANDUAN-VPS-RELAY.md`) untuk sub-detik.
-- LL-HLS tetap patah-patah lewat tunnel dan Anda pilih STABIL daripada
-  cepat: di `mediamtx.yml` ganti `hlsVariant: lowLatency` →
-  `hlsVariant: mpegts` (delay naik ~8–15 detik).
+  Cloudflare Tunnel (batas bawaan tunnel gratis, tidak bisa ditekan lewat
+  config). Terima ~4–6 detik.
+- LL-HLS tetap patah-patah dan kamu pilih STABIL daripada cepat: di
+  `mediamtx.yml` ganti `hlsVariant: lowLatency` → `hlsVariant: mpegts`
+  (delay naik ~8–15 detik).
 
-### MQTT
-
-| Gejala | Penyebab umum | Cara cek/atasi |
-|---|---|---|
-| V-Box tidak bisa konek | Broker mati / beda jaringan / firewall | Pengaturan MQTT: status harus BERJALAN; ping IP server dari jaringan V-Box; port harus dibuka di firewall (Simpan Pengaturan membuatkannya) |
-| "Connection refused: not authorised" | Username/password salah | Pengaturan MQTT → Tes Koneksi; kalau lupa password, isi password baru → Simpan |
-| Broker gagal menyala | Port dipakai aplikasi lain | Pengaturan MQTT → Buka Log; ganti port lalu Simpan |
-| Data tidak muncul di R-Net padahal broker OK | Bridge tidak jalan / topik tidak cocok | Jalankan `mqtt-bridge/start-bridge.bat`; topik di perangkat harus PERSIS sama dengan tag di R-Net |
-
-### Sumber VNC
+### Mirror / VNC
 
 | Gejala | Penyebab umum | Cara cek/atasi |
 |---|---|---|
-| Channel VNC "Menghubungkan…" terus | Saklar belum jalan / URL basi | Jalankan ulang `start-vnc.bat`, refresh halaman R-Net |
-| **"Sorry, loopback connections are not enabled"** | TightVNC menolak koneksi dari 127.0.0.1 (bawaannya begitu), padahal websocat konek dari situ | TightVNC → Configuration → centang **Allow loopback connections** (+ **Allow only loopback**), lalu restart TightVNC. Installer versi baru menyetel ini otomatis |
-| "Server VNC minta password" | `VNC_VIEW_PASSWORD` kosong/beda dengan TightVNC | Samakan password view-only di config.env, jalankan ulang saklar |
-| Lupa password VNC | — | Klik kanan ikon TightVNC di tray → Configuration → set ulang; lalu samakan `VNC_VIEW_PASSWORD` di config.env |
-| Layar hitam | PC sumber sleep / monitor mati dengan mode tertentu | Matikan sleep (Settings → Power: Never); layar boleh mati, sesi Windows harus tetap login |
+| Channel VNC "Menghubungkan…" terus | Tunnel/websocat belum jalan | Jalankan `start.bat mirror`, lihat daftar status, refresh R-Net |
+| **`WebSocket ... failed` + `code: 1006`**, atau buka hostname di browser dapat **502 Bad Gateway** | Service Type di dashboard Cloudflare diset **HTTPS**, padahal websocat bicara HTTP polos | Dashboard → Public Hostname mirror → **Type: HTTP**, URL `localhost:6080`. Alamat di R-Net **tetap** `https://` |
+| "Alamat sumber VNC memakai http://" | Alamat di Kelola Screen diawali `http://`; browser memblokir `ws://` dari halaman https | Ganti jadi `https://` di Kelola Screen. Ini **tidak** ada hubungannya dengan setelan Type di tunnel |
+| **"Sorry, loopback connections are not enabled"** | TightVNC menolak koneksi dari 127.0.0.1, padahal websocat konek dari situ | TightVNC → Configuration → centang **Allow loopback connections**, restart TightVNC. Installer menyetel ini otomatis |
+| **"Server is not configured properly"** | Password mendarat di hive registry yang salah. TightVNC menyimpannya di dua tempat: mode **aplikasi** baca `HKCU`, mode **service** baca `HKLM`. Password yang diset lewat GUI "Service Mode Configuration" hanya masuk HKLM — kalau lalu dijalankan mode aplikasi, server mewajibkan password yang tidak dilihatnya | `kredensial.bat` → **[S] Perbaiki hive TightVNC** (menyalin password yang ada ke semua hive, tanpa ketik ulang), lalu `stop.bat` + `start.bat`. `start.bat` juga memperingatkan kondisi ini sebelum terjadi |
+| "Server VNC minta password" | `VNC_VIEW_PASSWORD` kosong/beda dengan TightVNC | Samakan di `config.env` dan di R-Net > Kelola Screen |
+| Layar hitam | PC sumber sleep | Settings → Power → Never; layar boleh mati, sesi Windows harus tetap login |
 | Gambar tidak update | Browser cloud SCADA logout (token 24 jam) | Login ulang di PC sumber |
+
+### Data / MQTT
+
+| Gejala | Penyebab umum | Cara cek/atasi |
+|---|---|---|
+| V-Box tidak bisa konek | Alamat/akun broker VPS salah, atau VPS tidak terjangkau | Cek host/port/akun di perangkat; pastikan VPS hidup |
+| "Connection refused: not authorised" | Username/password broker salah | Samakan dengan akun di VPS dan di R-Net > Kelola Site |
+| Data tidak muncul padahal broker OK | Bridge tidak jalan / topik tidak cocok | `start.bat data`; topik di perangkat harus PERSIS sama dengan tag di R-Net |
+| Bridge langsung mati | `DATABASE_URL` kosong/salah | Isi di `config.env` (Supabase transaction pooler, port 6543) |
 
 ---
 
-## 11. Uninstall Total
+## 10. Uninstall Total
 
-1. `stop-scada.bat` + `stop-vnc.bat` (dan tutup jendela Node-RED kalau ada).
-2. Hapus folder `C:\rein-scada\`.
-3. Mosquitto/OBS/Node.js/TightVNC dihapus lewat Settings → Apps seperti
-   aplikasi biasa (`winget uninstall` juga bisa).
+Dobel-klik **`uninstall.bat`** → ketik `HAPUS`. Skrip mematikan semua layanan,
+menawarkan melepas TightVNC, lalu menanyakan apakah folder + `config.env` ikut
+dihapus.
+
+OBS / Node.js / Python **tidak** dihapus otomatis (sering dipakai hal lain) —
+lepas manual lewat Settings → Apps kalau memang mau.
+
+### Catatan keamanan
+
+- Semua port (1935 RTMP, 8888 HLS, 5900 VNC, 6080 websocat) hanya listen di
+  PC itu sendiri. Satu-satunya jalan masuk dari luar adalah tunnel
+  (terenkripsi).
+- Password **view-only** VNC ikut tersimpan di config channel dan terbaca
+  semua user R-Net (memang diperlukan browser penonton untuk konek) — karena
+  itu **jangan pernah** menaruh password KONTROL di sana.
+- `config.env` berisi token tunnel dan alamat database. Jangan dikirim lewat
+  chat/email, jangan ikut disalin ke flashdisk yang beredar.

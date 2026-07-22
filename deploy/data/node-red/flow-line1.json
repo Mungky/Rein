@@ -1,0 +1,681 @@
+[
+    {
+        "id": "pabrik1",
+        "type": "tab",
+        "label": "Pabrik Pura-Pura",
+        "disabled": false,
+        "info": "Simulasi alat pabrik untuk menguji R-Net TANPA alat asli.\n\n3 sensor palsu terus mengirim angka ke broker MQTT:\n- rnet/demo/boiler1/temperature (tiap 2 detik)\n- rnet/demo/boiler1/pressure    (tiap 5 detik)\n- rnet/demo/tangki1/level       (tiap 5 detik)\n\nTombol di sisi kiri:\n- NILAI GILA  : suhu boiler melonjak melewati batas -> alarm R-Net menyala\n- NORMAL LAGI : suhu kembali aman -> alarm otomatis selesai\n- SENSOR BISU ON/OFF : semua sensor berhenti/lanjut mengirim -> menguji alarm 'sensor bisu'\n\nSebelum dipakai: klik dua kali salah satu kotak ungu (mqtt), lalu edit broker —\nisi alamat & password broker Mosquitto Anda, klik Update, lalu Deploy."
+    },
+    {
+        "id": "com_judul",
+        "type": "comment",
+        "z": "pabrik1",
+        "name": "PABRIK PURA-PURA — baca tab info (klik kanan tab > Show tab info)",
+        "info": "",
+        "x": 300,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "com_tombol",
+        "type": "comment",
+        "z": "pabrik1",
+        "name": "TOMBOL UJI — klik kotak kecil di kiri node untuk menekan",
+        "info": "",
+        "x": 270,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "inj_temp",
+        "type": "inject",
+        "z": "pabrik1",
+        "name": "tiap 2 detik",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "2",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "1",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 150,
+        "y": 120,
+        "wires": [
+            [
+                "fn_temp"
+            ]
+        ]
+    },
+    {
+        "id": "fn_temp",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Suhu Boiler 1 (°C)",
+        "func": "if (flow.get('bisu') === true) {\n    node.status({fill:'grey', shape:'ring', text:'BISU — tidak mengirim'});\n    return null;\n}\nconst mode = flow.get('mode') || 'normal';\nlet v = 70 + 3 * Math.sin(Date.now() / 60000) + (Math.random() - 0.5) * 2;\nif (mode === 'gila') v = 92 + Math.random() * 4;\nv = Math.round(v * 10) / 10;\nmsg.payload = { value: v };\nnode.status({fill: mode === 'gila' ? 'red' : 'green', shape:'dot', text: v + ' °C'});\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 350,
+        "y": 120,
+        "wires": [
+            [
+                "out_temp"
+            ]
+        ]
+    },
+    {
+        "id": "out_temp",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/demo/boiler1/temperature",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 620,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "inj_press",
+        "type": "inject",
+        "z": "pabrik1",
+        "name": "tiap 5 detik",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "5",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "1.5",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 150,
+        "y": 180,
+        "wires": [
+            [
+                "fn_press"
+            ]
+        ]
+    },
+    {
+        "id": "fn_press",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Tekanan Boiler 1 (bar)",
+        "func": "if (flow.get('bisu') === true) {\n    node.status({fill:'grey', shape:'ring', text:'BISU — tidak mengirim'});\n    return null;\n}\nlet v = 6 + 0.5 * Math.sin(Date.now() / 90000) + (Math.random() - 0.5) * 0.3;\nv = Math.round(v * 100) / 100;\nmsg.payload = { value: v };\nnode.status({fill:'green', shape:'dot', text: v + ' bar'});\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 360,
+        "y": 180,
+        "wires": [
+            [
+                "out_press"
+            ]
+        ]
+    },
+    {
+        "id": "out_press",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/demo/boiler1/pressure",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 610,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "inj_level",
+        "type": "inject",
+        "z": "pabrik1",
+        "name": "tiap 5 detik",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "5",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "2",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 150,
+        "y": 240,
+        "wires": [
+            [
+                "fn_level"
+            ]
+        ]
+    },
+    {
+        "id": "fn_level",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Level Tangki 1 (%)",
+        "func": "if (flow.get('bisu') === true) {\n    node.status({fill:'grey', shape:'ring', text:'BISU — tidak mengirim'});\n    return null;\n}\nlet v = 55 + 10 * Math.sin(Date.now() / 300000) + (Math.random() - 0.5) * 2;\nv = Math.max(0, Math.min(100, Math.round(v * 10) / 10));\nmsg.payload = { value: v };\nnode.status({fill:'green', shape:'dot', text: v + ' %'});\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 350,
+        "y": 240,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "out_level",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/level1",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1110,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "btn_gila",
+        "type": "inject",
+        "z": "pabrik1",
+        "name": "🔴 NILAI GILA (picu alarm)",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": "0.1",
+        "topic": "",
+        "payload": "gila",
+        "payloadType": "str",
+        "x": 190,
+        "y": 440,
+        "wires": [
+            [
+                "fn_mode"
+            ]
+        ]
+    },
+    {
+        "id": "btn_normal",
+        "type": "inject",
+        "z": "pabrik1",
+        "name": "🟢 NORMAL LAGI",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": "0.1",
+        "topic": "",
+        "payload": "normal",
+        "payloadType": "str",
+        "x": 160,
+        "y": 500,
+        "wires": [
+            [
+                "fn_mode"
+            ]
+        ]
+    },
+    {
+        "id": "fn_mode",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Atur Mode Suhu",
+        "func": "flow.set('mode', msg.payload);\nnode.status({fill: msg.payload === 'gila' ? 'red' : 'green', shape:'dot', text:'mode: ' + msg.payload});\nreturn null;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 420,
+        "y": 470,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "btn_bisu_on",
+        "type": "inject",
+        "z": "pabrik1",
+        "name": "🔇 SENSOR BISU: ON",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": "0.1",
+        "topic": "",
+        "payload": "on",
+        "payloadType": "str",
+        "x": 170,
+        "y": 580,
+        "wires": [
+            [
+                "fn_bisu"
+            ]
+        ]
+    },
+    {
+        "id": "btn_bisu_off",
+        "type": "inject",
+        "z": "pabrik1",
+        "name": "🔊 SENSOR BISU: OFF",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": "0.1",
+        "topic": "",
+        "payload": "off",
+        "payloadType": "str",
+        "x": 180,
+        "y": 640,
+        "wires": [
+            [
+                "fn_bisu"
+            ]
+        ]
+    },
+    {
+        "id": "fn_bisu",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Atur Sensor Bisu",
+        "func": "flow.set('bisu', msg.payload === 'on');\nnode.status({fill: msg.payload === 'on' ? 'grey' : 'green', shape:'dot', text: msg.payload === 'on' ? 'SEMUA SENSOR BERHENTI KIRIM' : 'sensor mengirim normal'});\nreturn null;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 610,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "61e3075a1d6818b6",
+        "type": "mqtt in",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "fikri/vnet/lombok1",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "ccd1eda9cd1b1f5b",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 560,
+        "y": 340,
+        "wires": [
+            [
+                "91f5e3eb0c3a3c57",
+                "f6ab5be44c5d1173",
+                "aef9bfc63ac752bd",
+                "d07c2f9b72d7c64c",
+                "f0aa99e6ede6daa6",
+                "a4b11e8836c733ea",
+                "04e2e9139b54e69d",
+                "d312afee1c74e413"
+            ]
+        ]
+    },
+    {
+        "id": "91f5e3eb0c3a3c57",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 1",
+        "func": "msg.payload = msg.payload.data.waterlevel1;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 800,
+        "y": 340,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "out_level"
+            ]
+        ]
+    },
+    {
+        "id": "f6ab5be44c5d1173",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 2",
+        "func": "msg.payload = msg.payload.data.waterlevel2;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 800,
+        "y": 380,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "58e99a980365d94f"
+            ]
+        ]
+    },
+    {
+        "id": "aef9bfc63ac752bd",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 3",
+        "func": "msg.payload = msg.payload.data.waterlevel3;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 800,
+        "y": 420,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "8b755b202465371d"
+            ]
+        ]
+    },
+    {
+        "id": "d07c2f9b72d7c64c",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "heating",
+        "func": "msg.payload = msg.payload.data.temperature1;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 780,
+        "y": 520,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "47bb94c10a616063"
+            ]
+        ]
+    },
+    {
+        "id": "f0aa99e6ede6daa6",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "holding",
+        "func": "msg.payload = msg.payload.data.temperature2;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 780,
+        "y": 560,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "d8a6875a09ccb4e4"
+            ]
+        ]
+    },
+    {
+        "id": "a4b11e8836c733ea",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "cooling",
+        "func": "msg.payload = msg.payload.data.temperature3;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 780,
+        "y": 600,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "ab9b2533e3b2d75b"
+            ]
+        ]
+    },
+    {
+        "id": "04e2e9139b54e69d",
+        "type": "debug",
+        "z": "pabrik1",
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 860,
+        "y": 700,
+        "wires": []
+    },
+    {
+        "id": "58e99a980365d94f",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/level2",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1110,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "8b755b202465371d",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/level3",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1110,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "47bb94c10a616063",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/heating",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1110,
+        "y": 580,
+        "wires": []
+    },
+    {
+        "id": "d8a6875a09ccb4e4",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/holding",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1110,
+        "y": 640,
+        "wires": []
+    },
+    {
+        "id": "ab9b2533e3b2d75b",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/cooling",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1110,
+        "y": 700,
+        "wires": []
+    },
+    {
+        "id": "d312afee1c74e413",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 4",
+        "func": "msg.payload = msg.payload.data.waterlevel4;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 800,
+        "y": 460,
+        "wires": [
+            [
+                "ded995fc28a68635"
+            ]
+        ]
+    },
+    {
+        "id": "ded995fc28a68635",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/level4",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1110,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "ccd1eda9cd1b1f5b",
+        "type": "mqtt-broker",
+        "name": "Mosquitto R-Net",
+        "broker": "mqtt.remula-inti.com",
+        "port": 1883,
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    }
+]

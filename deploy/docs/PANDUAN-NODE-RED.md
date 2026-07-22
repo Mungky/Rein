@@ -12,10 +12,10 @@ Tidak perlu mengetik perintah teknis — semuanya klik.
 ## Sekali saja: persiapan
 
 1. **Nyalakan semuanya** (urutan bebas):
-   - Broker MQTT (Mosquitto) — di VPS sudah otomatis; di laptop pakai
-     `Pengaturan MQTT.bat` bila mengetes lokal.
-   - Backend R-Net (server) dan program jembatan (`start-bridge.bat` bila lokal).
-   - Node-RED: dobel-klik **`start-nodered.bat`** (folder `deploy/scada`).
+   - Broker MQTT (Mosquitto) — ada di **VPS**, sudah jalan sendiri. Tidak ada
+     broker yang dipasang di PC ini.
+   - Node-RED + jembatan (bridge): dobel-klik **`start.bat`** lalu pilih paket
+     **data**. Keduanya terbuka di jendela masing-masing.
 2. Buka browser ke **http://127.0.0.1:1880** — ini editor Node-RED.
 3. **Impor flow pabrik pura-pura**:
    - Klik menu **☰** (kanan atas) → **Import**.

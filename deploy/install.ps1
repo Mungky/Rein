@@ -4,7 +4,8 @@
 #  Paket:
 #    [1] STREAM - siaran layar/HMI : OBS + MediaMTX + Cloudflare Tunnel
 #    [2] MIRROR - spion layar PC   : TightVNC + websocat (+ tunnel yang sama)
-#    [3] DATA   - data sensor      : Mosquitto + Node-RED + bridge (Python)
+#    [3] DATA   - data sensor      : Node-RED + bridge (Python)
+#                 Broker MQTT ada di VPS, TIDAK dipasang di PC ini.
 #
 #  Semua kredensial ditulis ke SATU file: C:\rein-scada\config.env
 #  Setelah pasang: pakai start.bat / stop.bat / uninstall.bat di C:\rein-scada.
@@ -13,10 +14,12 @@
 #    - Hanya sumber resmi: github.com/bluenviron/mediamtx (SHA-256 dicetak),
 #      github.com/cloudflare/cloudflared (tanda tangan Authenticode
 #      diverifikasi), github.com/vi/websocat (SHA-256 dicetak), dan paket
-#      winget resmi (Mosquitto/Node.js/OBS/TightVNC/Python).
+#      winget resmi (Node.js/OBS/TightVNC/Python).
 #    - TANPA autostart/service: semua hidup-mati lewat saklar start/stop.
+#    - PC ini TIDAK PERNAH menulis ke database R-Net. Tidak ada service key
+#      Supabase di sini; alamat stream/mirror diisi manual di Kelola Screen.
 #    - TIDAK menimpa config yang sudah ada (mediamtx.yml / config.env /
-#      mosquitto.conf / password VNC). Aman dijalankan berulang.
+#      password VNC). Aman dijalankan berulang.
 # ==========================================================================
 
 param(
@@ -44,9 +47,18 @@ $doMirror = $sel -contains "mirror"
 $doData   = $sel -contains "data"
 Info ("Paket dipilih: " + (($sel | ForEach-Object { $_.ToUpper() }) -join " + "))
 
-# --- 0.5 Folder -------------------------------------------------------------
+# --- 0.5 Folder + kerangka config.env ---------------------------------------
 foreach ($d in @($InstallDir, (Join-Path $InstallDir "lib"))) {
     if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+}
+
+# Sediakan config.env dari template LEBIH DULU, bukan di akhir: teknisi yang
+# nanti membukanya menemukan file berkomentar lengkap (arti tiap kunci, contoh
+# isian), bukan tumpukan baris polos. Nilai jawaban installer ditimpakan ke
+# baris kosong template lewat Set-ConfigKey.
+if (-not (Test-Path $P.Config)) {
+    Copy-Item (Join-Path $Here "config.env.example") $P.Config -Force
+    Good "config.env dibuat dari template."
 }
 
 # ==========================================================================
@@ -72,52 +84,91 @@ if ((Test-Path $P.Cloudflared) -and -not $Force) {
     Good "cloudflared $($a.Version) terpasang. Tanda tangan: Cloudflare (Valid)."
 }
 
-# --- Token named tunnel (MODE PRODUKSI) -------------------------------------
+# --- Token named tunnel -----------------------------------------------------
+# R-Net produksi HANYA memakai named tunnel: alamat permanen, dan PC lapangan
+# tidak pernah menulis apa pun ke database R-Net (tidak ada service key di sini).
 $cfgNow = Read-Config $P.Config
-if (Get-Cfg $cfgNow "TUNNEL_TOKEN") {
-    Good "TUNNEL_TOKEN sudah terisi di config.env (mode produksi)."
+$tokenNow = Get-Cfg $cfgNow "TUNNEL_TOKEN"
+$tokenBad = if ($tokenNow) { Test-TunnelToken $tokenNow } else { "kosong" }
+if ($tokenNow -and -not $tokenBad) {
+    Good "TUNNEL_TOKEN sudah terisi di config.env."
 } else {
     Write-Host ""
-    Info "MODE PRODUKSI memakai NAMED TUNNEL Cloudflare: alamat stream/mirror"
-    Info "permanen (domain sendiri), tidak berubah tiap start. Cara membuatnya:"
-    Info "docs\PANDUAN-TUNNEL.md (5 menit, sekali saja per PC)."
-    $tok = Read-Host "   TUNNEL_TOKEN (Enter = lewati, pakai mode TES dulu)"
-    if (-not [string]::IsNullOrWhiteSpace($tok)) {
-        $sHost = ""
-        $mHost = ""
-        if ($doStream) { $sHost = Read-Host "   STREAM_HOSTNAME (mis. stream-pabrik1.remula-inti.com)" }
-        if ($doMirror) { $mHost = Read-Host "   MIRROR_HOSTNAME (mis. mirror-pabrik1.remula-inti.com)" }
-        Add-ConfigKey $P.Config @(
-            "# [TUNNEL] Named tunnel Cloudflare - mode produksi (docs\PANDUAN-TUNNEL.md)",
-            "TUNNEL_TOKEN=$($tok.Trim())",
-            "STREAM_HOSTNAME=$($sHost.Trim())",
-            "MIRROR_HOSTNAME=$($mHost.Trim())"
-        ) | Out-Null
-        Good "Token tunnel disimpan (mode produksi)."
-    } else {
-        Warn "Tanpa token = MODE TES: URL acak baru tiap start (trycloudflare.com)."
-        Info "Supaya alamat baru tertulis otomatis ke R-Net saat mode tes, boleh isi:"
-        $sUrl = Read-Host "   SUPABASE_URL (Enter = tempel alamat manual saja)"
-        $sKey = ""
-        if (-not [string]::IsNullOrWhiteSpace($sUrl)) { $sKey = Read-Host "   SUPABASE_SERVICE_KEY (service_role)" }
-        $names = @()
-        if ($doStream) {
-            $sn = Read-Host "   STREAM_NAME - nama stream mesin ini di Kelola Screen (kosong = semua)"
-            $names += "STREAM_NAME=$($sn.Trim())"
-        }
-        if ($doMirror) {
-            $vs = Read-Host "   VNC_SOURCE - nama sumber VNC PC ini di Kelola Screen (kosong = semua)"
-            $names += "VNC_SOURCE=$($vs.Trim())"
-        }
-        Add-ConfigKey $P.Config (@(
-            "# [MODE TES] Quick Tunnel - URL acak tiap start; kredensial di bawah",
-            "# hanya untuk menuliskan alamat baru itu ke R-Net otomatis.",
-            "TUNNEL_TOKEN=",
-            "SUPABASE_URL=$($sUrl.Trim())",
-            "SUPABASE_SERVICE_KEY=$($sKey.Trim())"
-        ) + $names) | Out-Null
-        Good "Mode tes disiapkan."
+    if ($tokenNow) { Warn "TUNNEL_TOKEN yang tersimpan TIDAK SAH: $tokenBad" }
+    Info "Named tunnel Cloudflare = pintu keluar internet PC ini. Alamat stream/"
+    Info "mirror jadi PERMANEN, diisi SEKALI di R-Net > Kelola Screen."
+    Info "Cara membuat tokennya: docs\PANDUAN-TUNNEL.md (5 menit, sekali per PC)."
+    Write-Host ""
+    Info "Ambil di: one.dash.cloudflare.com > Networks > Tunnels > pilih tunnel"
+    Info "> Configure. Yang disalin adalah bagian 'eyJ...' yang panjang dari"
+    Info "perintah 'cloudflared service install eyJ...' (bukan alamat hostname)."
+
+    # Diberi 3 kesempatan: salah tempel itu lumrah (dashboard menampilkan token
+    # di tengah perintah), dan lebih baik dibetulkan sekarang daripada gagal
+    # nanti saat start.bat dengan pesan yang tidak menunjuk ke sini.
+    $tok = ""
+    for ($i = 1; $i -le 3; $i++) {
+        $tok = Format-TunnelToken (Read-Host "   TUNNEL_TOKEN (Enter = isi nanti di config.env)")
+        if (-not $tok) { break }
+        $why = Test-TunnelToken $tok
+        if (-not $why) { break }
+        Warn "Token belum benar: $why"
+        $tok = ""
+        if ($i -eq 3) { Warn "Tiga kali belum cocok - dilewati dulu." }
     }
+
+    Set-ConfigKey $P.Config "TUNNEL_TOKEN" $tok "[TUNNEL] Token named tunnel Cloudflare (docs\PANDUAN-TUNNEL.md)"
+    if ($tok) {
+        Good "Token tunnel tersimpan (bentuknya sah)."
+    } else {
+        Warn "TUNNEL_TOKEN kosong - stream/mirror belum bisa dipakai."
+        Warn "Isi nanti di $($P.Config), lalu jalankan start.bat."
+    }
+}
+
+# --- Hostname publik --------------------------------------------------------
+# Ditanya terpisah dari token, bukan di dalam blok else di atas: PC yang
+# tokennya sudah ada tapi hostname-nya belum (mis. mirror baru ditambahkan
+# belakangan) harus tetap dilengkapi, bukan dilewati diam-diam.
+function Read-HostnameKey([string]$cfgPath, [string]$key, [string]$judul, [string]$contoh, [string]$tujuan) {
+    $ada = Get-Cfg (Read-Config $cfgPath) $key
+    if ($ada -and -not (Test-Hostname $ada)) { return }
+    Write-Host ""
+    if ($ada) { Warn "$key yang tersimpan ('$ada') tidak sah: $(Test-Hostname $ada)" }
+    Info "$judul - alamat internet yang kamu daftarkan di dashboard Cloudflare"
+    Info "sebagai Public Hostname menuju $tujuan."
+    Info "BUKAN nama sumber di R-Net. Contoh: $contoh"
+    $val = ""
+    for ($i = 1; $i -le 3; $i++) {
+        $val = Format-Hostname (Read-Host "   $key (Enter = isi nanti di config.env)")
+        if (-not $val) { break }
+        $why = Test-Hostname $val
+        if (-not $why) { break }
+        Warn "Belum benar: $why"
+        $val = ""
+        if ($i -eq 3) { Warn "Tiga kali belum cocok - dilewati dulu." }
+    }
+    Set-ConfigKey $cfgPath $key $val "Hostname publik -> $tujuan (diatur di dashboard Cloudflare)"
+    if ($val) { Good "$key = $val" }
+}
+if ($doStream) {
+    Read-HostnameKey $P.Config "STREAM_HOSTNAME" "Hostname STREAM" `
+        "stream-pabrik1.remula-inti.com" "http://localhost:8888"
+}
+if ($doMirror) {
+    Read-HostnameKey $P.Config "MIRROR_HOSTNAME" "Hostname MIRROR" `
+        "mirror-pabrik1.remula-inti.com" "http://localhost:6080"
+}
+
+# --- Buang sisa kredensial mode TES lama ------------------------------------
+# Mode Quick Tunnel sudah dihapus. Config lama bisa masih menyimpan service key
+# Supabase - itu kunci akses PENUH database, dan dulu dipakai menimpa alamat
+# manual di Kelola Screen tiap start. Tidak boleh tertinggal di PC lapangan.
+$stale = @("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "STREAM_NAME", "VNC_SOURCE")
+$cfgNow = Read-Config $P.Config
+if (@($stale | Where-Object { $cfgNow.ContainsKey($_) }).Count -gt 0) {
+    Remove-ConfigKey $P.Config $stale
+    Good "Sisa kredensial mode tes lama dibuang dari config.env (termasuk service key Supabase)."
 }
 
 } # akhir TUNNEL
@@ -170,10 +221,9 @@ if (Test-Path $P.MediaMtxYml) {
     Warn "CATAT password ini - publish untuk OBS, viewer untuk Kelola Screen R-Net."
 }
 
-Add-ConfigKey $P.Config @(
-    "# [STREAM] Path MediaMTX (default scada)",
-    "STREAM_PATH=scada"
-) | Out-Null
+if (-not (Get-Cfg (Read-Config $P.Config) "STREAM_PATH")) {
+    Set-ConfigKey $P.Config "STREAM_PATH" "scada" "[STREAM] Path MediaMTX (default scada)"
+}
 
 # --- OBS Studio -------------------------------------------------------------
 Write-Host ""
@@ -222,38 +272,15 @@ if ($doMirror) {
         }
 
         # --- Password + akses jaringan ---------------------------------------
-        # DUA TEMPAT, sengaja: mode APLIKASI membaca HKCU, mode SERVICE membaca
-        # HKLM. Kalau hanya salah satu terisi, mode lain melayani TANPA password
-        # -> TightVNC menolak dengan "Server is not configured properly".
-        function ConvertTo-VncPass([string]$plain) {
-            $data = New-Object byte[] 8
-            $src = [Text.Encoding]::ASCII.GetBytes($plain)
-            [Array]::Copy($src, $data, [Math]::Min(8, $src.Length))
-            $des = New-Object Security.Cryptography.DESCryptoServiceProvider
-            $des.Mode = [Security.Cryptography.CipherMode]::ECB
-            $des.Padding = [Security.Cryptography.PaddingMode]::None
-            $des.Key = [byte[]](0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0)
-            return $des.CreateEncryptor().TransformFinalBlock($data, 0, 8)
-        }
-        # VNC hanya memakai 8 karakter pertama - potong DI SINI supaya registry
-        # dan config.env selalu sama persis.
-        function Limit-VncPass([string]$plain) {
-            if ($plain.Length -gt 8) {
-                Warn "Password dipotong jadi 8 karakter (batas protokol VNC): $($plain.Substring(0,8))"
-                return $plain.Substring(0, 8)
-            }
-            return $plain
-        }
-
-        $RegVnc = "HKCU:\Software\TightVNC\Server"
-        $hasPass = (Test-Path $RegVnc) -and
-            (Get-ItemProperty $RegVnc -Name PasswordViewOnly -ErrorAction SilentlyContinue)
+        # Fungsi VNC (enkripsi, potong 8 karakter, tulis HKCU + cermin HKLM)
+        # ada di lib\common.ps1 -- dipakai bersama dengan kredensial.bat.
+        $hasPass = [bool](Get-VncPassBytes "PasswordViewOnly")
         $ctrlEnc = $null
         $viewEnc = $null
         if ($hasPass -and -not $Force) {
-            Good "Password TightVNC sudah diset - dipertahankan (pakai -Force untuk set ulang)."
-            $ctrlEnc = (Get-ItemProperty $RegVnc -Name Password         -ErrorAction SilentlyContinue).Password
-            $viewEnc = (Get-ItemProperty $RegVnc -Name PasswordViewOnly -ErrorAction SilentlyContinue).PasswordViewOnly
+            Good "Password TightVNC sudah diset - dipertahankan (ubah lewat kredensial.bat)."
+            $ctrlEnc = Get-VncPassBytes "Password"
+            $viewEnc = Get-VncPassBytes "PasswordViewOnly"
         } else {
             Write-Host ""
             Info "Password VNC (maks 8 karakter; Enter = buat otomatis):"
@@ -265,54 +292,9 @@ if ($doMirror) {
             $vncView = Limit-VncPass $vncView
             $ctrlEnc = ConvertTo-VncPass $vncCtrl
             $viewEnc = ConvertTo-VncPass $vncView
-            New-Item -Path $RegVnc -Force | Out-Null
-            New-ItemProperty -Path $RegVnc -Name Password         -PropertyType Binary -Value $ctrlEnc -Force | Out-Null
-            New-ItemProperty -Path $RegVnc -Name PasswordViewOnly -PropertyType Binary -Value $viewEnc -Force | Out-Null
-            Good "Password TightVNC diset (kontrol + view-only)."
             Warn "CATAT keduanya. View-only untuk R-Net; kontrol untuk Anda sendiri."
         }
-
-        # WAJIB loopback-only: websocat menyambung dari 127.0.0.1, dan TightVNC
-        # bawaan MENOLAK loopback. LoopbackOnly=1 sekalian mengunci 5900 dari
-        # LAN - satu-satunya jalan masuk = websocat + tunnel.
-        New-Item -Path $RegVnc -Force | Out-Null
-        New-ItemProperty -Path $RegVnc -Name UseVncAuthentication  -PropertyType DWord -Value 1 -Force | Out-Null
-        New-ItemProperty -Path $RegVnc -Name AcceptHttpConnections -PropertyType DWord -Value 0 -Force | Out-Null
-        New-ItemProperty -Path $RegVnc -Name AllowLoopback -PropertyType DWord -Value 1 -Force | Out-Null
-        New-ItemProperty -Path $RegVnc -Name LoopbackOnly  -PropertyType DWord -Value 1 -Force | Out-Null
-        Good "TightVNC (mode aplikasi/HKCU): loopback-only + auth diset."
-
-        # Cermin setelan ke HKLM (64-bit + WOW6432Node) supaya mode SERVICE
-        # memakai password + loopback yang sama.
-        if ($ctrlEnc -and $viewEnc) {
-            $ctrlHex = ($ctrlEnc | ForEach-Object { $_.ToString("X2") }) -join ""
-            $viewHex = ($viewEnc | ForEach-Object { $_.ToString("X2") }) -join ""
-            $mirror = @"
-function Hex2Bytes(`$h) { `$b = New-Object byte[] (`$h.Length/2); for (`$i=0; `$i -lt `$b.Length; `$i++) { `$b[`$i] = [Convert]::ToByte(`$h.Substring(`$i*2,2),16) }; return `$b }
-foreach (`$k in @('HKLM:\SOFTWARE\TightVNC\Server','HKLM:\SOFTWARE\WOW6432Node\TightVNC\Server')) {
-    New-Item -Path `$k -Force | Out-Null
-    New-ItemProperty -Path `$k -Name Password             -PropertyType Binary -Value (Hex2Bytes '$ctrlHex') -Force | Out-Null
-    New-ItemProperty -Path `$k -Name PasswordViewOnly     -PropertyType Binary -Value (Hex2Bytes '$viewHex') -Force | Out-Null
-    New-ItemProperty -Path `$k -Name UseVncAuthentication  -PropertyType DWord -Value 1 -Force | Out-Null
-    New-ItemProperty -Path `$k -Name AcceptHttpConnections -PropertyType DWord -Value 0 -Force | Out-Null
-    New-ItemProperty -Path `$k -Name AllowLoopback         -PropertyType DWord -Value 1 -Force | Out-Null
-    New-ItemProperty -Path `$k -Name LoopbackOnly          -PropertyType DWord -Value 1 -Force | Out-Null
-}
-`$svc = Get-Service tvnserver -ErrorAction SilentlyContinue
-if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service tvnserver -Force -ErrorAction SilentlyContinue }
-"@
-            $tmpPs = Join-Path $env:TEMP ("rein_vnc_hklm_" + [guid]::NewGuid().ToString("N") + ".ps1")
-            Write-TextNoBom $tmpPs $mirror
-            try {
-                Start-Process powershell -Verb RunAs -Wait -ArgumentList `
-                    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$tmpPs`""
-                Good "Setelan dicermin ke HKLM (64-bit + WOW6432Node)."
-            } catch {
-                Warn "Gagal menulis HKLM (butuh Administrator). Kalau TightVNC dijalankan"
-                Warn "sebagai SERVICE, dia akan bilang 'Server is not configured properly'."
-            }
-            Remove-Item $tmpPs -Force -ErrorAction SilentlyContinue
-        }
+        Set-VncRegistry $ctrlEnc $viewEnc
 
         # Swa-uji: BUKTIKAN setelan mendarat di hive milik mode yang jalan.
         Write-Host ""
@@ -364,90 +346,29 @@ if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service tvnserver -Force -E
     }
 
     # --- Password view-only ke config.env (untuk auto-connect R-Net) --------
-    $cfgRaw = if (Test-Path $P.Config) { Get-Content $P.Config -Raw } else { "" }
-    if ($cfgRaw -notmatch "(?m)^\s*VNC_VIEW_PASSWORD\s*=") {
+    # Dicek lewat Get-Cfg (nilai terisi?), BUKAN "apakah barisnya ada": template
+    # config.env sudah memuat baris VNC_VIEW_PASSWORD= yang kosong.
+    if (-not (Get-Cfg (Read-Config $P.Config) "VNC_VIEW_PASSWORD")) {
         if (-not $vncView -and $viewEnc) {
             # Password lama dipertahankan? Baca balik dari registry supaya
             # config.env tidak pernah beda dengan server.
-            $des = New-Object Security.Cryptography.DESCryptoServiceProvider
-            $des.Mode = [Security.Cryptography.CipherMode]::ECB
-            $des.Padding = [Security.Cryptography.PaddingMode]::None
-            $des.Key = [byte[]](0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0)
-            $plain = $des.CreateDecryptor().TransformFinalBlock($viewEnc, 0, 8)
-            $vncView = ([Text.Encoding]::ASCII.GetString($plain)).TrimEnd([char]0)
+            $vncView = ConvertFrom-VncPass $viewEnc
             Info "Password view-only dibaca dari setelan TightVNC yang sudah ada."
         }
-        Add-ConfigKey $P.Config @(
-            "# [MIRROR] Password VIEW-ONLY TightVNC (utk auto-connect penonton R-Net)",
-            "VNC_VIEW_PASSWORD=$(if ($vncView) { $vncView } else { '' })"
-        ) | Out-Null
+        Set-ConfigKey $P.Config "VNC_VIEW_PASSWORD" $(if ($vncView) { $vncView } else { "" }) `
+            "[MIRROR] Password VIEW-ONLY TightVNC (utk auto-connect penonton R-Net)"
     }
 }
 
 # ==========================================================================
-#  [3] DATA - Mosquitto + Node-RED + bridge (Python)
+#  [3] DATA - Node-RED + bridge (Python). Broker MQTT ada di VPS.
 # ==========================================================================
 if ($doData) {
     Write-Host ""
 
-    # --- Mosquitto (broker MQTT) --------------------------------------------
-    if (-not (Test-Path $P.MosqDir)) { New-Item -ItemType Directory -Path $P.MosqDir -Force | Out-Null }
-    if ((Test-Path $P.MosqExe) -and -not $Force) {
-        Good "Mosquitto sudah terpasang (lewati; pakai -Force untuk update)."
-    } else {
-        Install-WingetPkg "EclipseFoundation.Mosquitto" "Mosquitto" | Out-Null
-    }
-
-    if (Test-Path $P.MosqExe) {
-        # Jangan biarkan service bawaan autostart - saklar kita yang pegang.
-        try { Set-Service mosquitto -StartupType Manual -ErrorAction Stop; Stop-Service mosquitto -ErrorAction SilentlyContinue } catch {}
-
-        if (Test-Path $P.MosqConf) {
-            Good "mosquitto.conf sudah ada - kredensial lama dipertahankan."
-            Info "Ubah port/akun: dobel-klik '$InstallDir\Pengaturan MQTT.bat'."
-        } else {
-            Write-Host ""
-            Info "Akun MQTT (dipakai V-Box & Node-RED untuk publish; Enter = otomatis):"
-            $mqUser = Read-Host "   Username MQTT"
-            if ([string]::IsNullOrWhiteSpace($mqUser)) { $mqUser = "vbox" ; Write-Host "   -> dipakai: vbox" }
-            $mqPass = Read-Host "   Password MQTT"
-            if ([string]::IsNullOrWhiteSpace($mqPass)) { $mqPass = New-Pass; Write-Host "   -> dibuatkan: $mqPass" }
-
-            $MqPasswd = Join-Path $P.MosqDir "passwd"
-            & (Join-Path $env:ProgramFiles "mosquitto\mosquitto_passwd.exe") -b -c $MqPasswd $mqUser $mqPass
-            if ($LASTEXITCODE -ne 0) { Warn "mosquitto_passwd gagal - cek manual." }
-
-            Write-TextNoBom $P.MosqConf (@(
-                "# mosquitto.conf - broker MQTT R-Net (dibuat installer)",
-                "# Ubah lewat 'Pengaturan MQTT.bat' - tidak perlu edit file ini manual.",
-                "# Dinyalakan oleh start.bat (paket DATA), dimatikan oleh stop.bat.",
-                "listener 1883 0.0.0.0",
-                "allow_anonymous false",
-                "password_file $MqPasswd",
-                "persistence false",
-                "log_dest file $(Join-Path $P.MosqDir 'mosquitto.log')",
-                "log_type error",
-                "log_type warning"
-            ) -join "`r`n")
-            Good "mosquitto.conf dibuat (port 1883, wajib login)."
-            Warn "CATAT akun MQTT ini - dipakai V-Box/Node-RED (publish) dan diisi juga"
-            Warn "di R-Net > Data > Kelola Site (supaya bridge bisa membaca broker ini)."
-        }
-
-        # Buka port 1883 untuk V-Box di jaringan lokal (perlu Administrator).
-        try {
-            $ruleName = "R-Net MQTT 1883"
-            $exists = netsh advfirewall firewall show rule name="$ruleName" 2>$null | Select-String $ruleName
-            if (-not $exists) {
-                Start-Process netsh -ArgumentList "advfirewall firewall add rule name=`"$ruleName`" dir=in action=allow protocol=TCP localport=1883" -Verb RunAs -Wait
-                Good "Firewall: port 1883 dibuka (aturan '$ruleName')."
-            } else {
-                Good "Firewall: aturan port 1883 sudah ada."
-            }
-        } catch {
-            Warn "Gagal membuka firewall otomatis - buka port TCP 1883 manual bila V-Box tidak bisa konek."
-        }
-    }
+    # Broker MQTT TIDAK dipasang di PC ini - brokernya ada di VPS supaya V-Box
+    # mana pun bisa publish dari lokasi mana pun. PC ini cuma jadi Node-RED
+    # (pengolah) + bridge (kurir broker -> database R-Net).
 
     # --- Node.js + Node-RED --------------------------------------------------
     Write-Host ""
@@ -499,10 +420,6 @@ if ($doData) {
     foreach ($f in @("bridge.py", "requirements.txt", "run-bridge.ps1")) {
         Copy-Item (Join-Path $Here "data\$f") (Join-Path $P.DataDir $f) -Force
     }
-    # mqtt-setting.ps1 + Pengaturan MQTT.bat -> ROOT install: skrip GUI mencari
-    # folder mosquitto\ di sebelahnya, dan itu ada di root ($InstallDir\mosquitto).
-    Copy-Item (Join-Path $Here "data\mqtt-setting.ps1") (Join-Path $InstallDir "mqtt-setting.ps1") -Force
-    Copy-Item (Join-Path $Here "data\Pengaturan MQTT.bat") (Join-Path $InstallDir "Pengaturan MQTT.bat") -Force
     if (Test-Path (Join-Path $Here "data\node-red")) {
         Copy-Item (Join-Path $Here "data\node-red") $P.DataDir -Recurse -Force
     }
@@ -515,27 +432,40 @@ if ($doData) {
         Info "Alamat database R-Net untuk BRIDGE (kurir broker -> database cloud)."
         Info "Format: postgresql://user:password@host:6543/postgres"
         $dbUrl = Read-Host "   DATABASE_URL (Enter = isi nanti di config.env)"
-        Add-ConfigKey $P.Config @(
-            "# [DATA] Alamat database R-Net untuk bridge",
-            "DATABASE_URL=$($dbUrl.Trim())"
-        ) | Out-Null
+        Set-ConfigKey $P.Config "DATABASE_URL" $dbUrl.Trim() "[DATA] Alamat database R-Net untuk bridge"
         if ([string]::IsNullOrWhiteSpace($dbUrl)) {
             Warn "DATABASE_URL kosong - bridge belum bisa jalan. Isi di $($P.Config)."
         }
+    }
+
+    # --- Catatan broker VPS ---------------------------------------------------
+    # CATATAN SAJA, tidak dipakai otomatis oleh skrip mana pun: bridge membaca
+    # daftar broker dari tabel Site di R-Net, dan Node-RED disetel dari
+    # editornya sendiri. Ditulis di sini supaya teknisi di lokasi tidak perlu
+    # mencari-cari alamat broker waktu menyetel node MQTT di Node-RED.
+    $cfgNow3 = Read-Config $P.Config
+    if (-not (Get-Cfg $cfgNow3 "MQTT_HOST")) {
+        Write-Host ""
+        Info "Broker MQTT ada di VPS (bukan di PC ini). Isi sebagai CATATAN untuk"
+        Info "menyetel node MQTT di Node-RED nanti - Enter kalau belum tahu."
+        $mqHost = (Read-Host "   MQTT_HOST - alamat broker VPS (mis. mqtt.remula.online)").Trim()
+        $mqPort = (Read-Host "   MQTT_PORT (Enter = 1883)").Trim()
+        if (-not $mqPort) { $mqPort = "1883" }
+        $mqUser = (Read-Host "   MQTT_USERNAME").Trim()
+        Set-ConfigKey $P.Config "MQTT_HOST" $mqHost "[DATA] Broker MQTT di VPS - CATATAN untuk menyetel Node-RED (tidak dibaca skrip)"
+        Set-ConfigKey $P.Config "MQTT_PORT" $mqPort
+        Set-ConfigKey $P.Config "MQTT_USERNAME" $mqUser
     }
 }
 
 # ==========================================================================
 #  Saklar + lib (selalu diperbarui ke versi terbaru)
 # ==========================================================================
-foreach ($f in @("start.ps1", "stop.ps1", "uninstall.ps1", "start.bat", "stop.bat", "uninstall.bat")) {
+foreach ($f in @("start.ps1", "stop.ps1", "uninstall.ps1", "kredensial.ps1",
+                 "start.bat", "stop.bat", "uninstall.bat", "kredensial.bat")) {
     Copy-Item (Join-Path $Here $f) (Join-Path $InstallDir $f) -Force
 }
 Copy-Item (Join-Path $Here "lib\common.ps1") (Join-Path $InstallDir "lib\common.ps1") -Force
-if (-not (Test-Path $P.Config)) {
-    # Belum ada kredensial sama sekali (semua prompt dilewati) - sediakan template.
-    Copy-Item (Join-Path $Here "config.env.example") $P.Config -Force
-}
 Good "Saklar start/stop/uninstall terpasang di $InstallDir."
 
 # --- Selesai ----------------------------------------------------------------
@@ -545,8 +475,37 @@ Write-Host "  SELESAI. Semua kredensial: $InstallDir\config.env" -ForegroundColo
 Write-Host "==========================================================" -ForegroundColor Green
 Write-Host "  Nyalakan : dobel-klik $InstallDir\start.bat"
 Write-Host "  Matikan  : dobel-klik $InstallDir\stop.bat"
+Write-Host "  Salah isi: dobel-klik $InstallDir\kredensial.bat"
 Write-Host "  Hapus    : dobel-klik $InstallDir\uninstall.bat"
 Write-Host ""
+
+# --- Alamat siap tempel ke R-Net --------------------------------------------
+# PC ini tidak menulis ke database R-Net, jadi langkah terakhir SELALU manual.
+# Cetak alamat lengkapnya di sini supaya tidak ada yang perlu dikarang sendiri.
+if ($doStream -or $doMirror) {
+    $cfgEnd  = Read-Config $P.Config
+    $sHostEnd = Get-Cfg $cfgEnd "STREAM_HOSTNAME"
+    $mHostEnd = Get-Cfg $cfgEnd "MIRROR_HOSTNAME"
+    $pathEnd  = if (Get-Cfg $cfgEnd "STREAM_PATH") { Get-Cfg $cfgEnd "STREAM_PATH" } else { "scada" }
+    Write-Host "  ----------------------------------------------------------"
+    Write-Host "  ISI DI R-NET > Kelola Screen (SEKALI SAJA, alamat permanen):" -ForegroundColor White
+    if ($doStream) {
+        if (-not (Test-Hostname $sHostEnd)) { Write-Host "    Sumber Stream > URL HLS :  https://$sHostEnd/$pathEnd/index.m3u8" -ForegroundColor Cyan }
+        else { Write-Host "    Sumber Stream > URL HLS :  (STREAM_HOSTNAME belum benar di config.env)" -ForegroundColor Yellow }
+        Write-Host "    + Username/Password viewer MediaMTX yang dicatat di atas."
+    }
+    if ($doMirror) {
+        if (-not (Test-Hostname $mHostEnd)) { Write-Host "    Sumber VNC    > Alamat  :  https://$mHostEnd" -ForegroundColor Cyan }
+        else { Write-Host "    Sumber VNC    > Alamat  :  (MIRROR_HOSTNAME belum benar di config.env)" -ForegroundColor Yellow }
+        Write-Host "    + Password VIEW-ONLY VNC (R-Net mengubah https:// jadi wss:// sendiri)."
+    }
+    Write-Host "  Pastikan hostname di atas sudah dibuat di dashboard Cloudflare:"
+    if ($doStream) { Write-Host "    $sHostEnd -> HTTP localhost:8888" }
+    if ($doMirror) { Write-Host "    $mHostEnd -> HTTP localhost:6080" }
+    Write-Host "  ----------------------------------------------------------"
+    Write-Host ""
+}
+
 if ($doStream) {
     Write-Host "  STREAM - setelan OBS (sekali saja):"
     Write-Host "    Settings > Stream : Custom | Server rtmp://127.0.0.1:1935"
@@ -559,11 +518,11 @@ if ($doMirror) {
     Write-Host ""
 }
 if ($doData) {
-    Write-Host "  DATA:"
-    Write-Host "    - Akun broker utk V-Box/Node-RED: 'Pengaturan MQTT.bat'"
-    Write-Host "    - Daftarkan broker ini di R-Net > Data > Kelola Site"
-    Write-Host "      (host = IP PC ini, port 1883, akun MQTT di atas)"
+    Write-Host "  DATA (broker MQTT ada di VPS, bukan di PC ini):"
+    Write-Host "    - Daftarkan broker VPS di R-Net > Data > Kelola Site"
+    Write-Host "      (host/port/akun broker VPS) - dari situ bridge membacanya."
     Write-Host "    - Node-RED editor: http://127.0.0.1:1880 (setelah start.bat)"
+    Write-Host "      Node MQTT diarahkan ke broker VPS, bukan localhost."
     Write-Host ""
 }
 Write-Host "  Panduan: folder docs\ (PANDUAN-RNET.md, PANDUAN-TUNNEL.md, PANDUAN-NODE-RED.md)"

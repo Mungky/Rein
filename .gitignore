@@ -51,3 +51,6 @@ deploy/config.env
 
 # Archives / backups
 *.rar
+
+# Arsip Mosquitto lokal - berisi file passwd (hash akun broker) + log runtime
+deploy/_arsip/mosquitto-lokal/
