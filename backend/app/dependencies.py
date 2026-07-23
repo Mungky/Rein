@@ -1,5 +1,6 @@
 """Authentication and authorization dependencies for FastAPI."""
 
+import time
 import uuid
 from typing import Annotated
 
@@ -17,22 +18,49 @@ from db.session import get_db
 
 security = HTTPBearer(auto_error=False)
 
-# Cache the JWKS keys from Supabase to avoid re-fetching on every request
+# Cache the JWKS keys from Supabase to avoid re-fetching on every request.
+# TTL-bounded so a key rotation propagates without a backend restart; an
+# unknown kid additionally forces one refresh (see verify_supabase_token).
+_JWKS_TTL_S = 3600
 _jwks_cache: dict | None = None
+_jwks_fetched_at: float = 0.0
 
 
-async def _get_jwks() -> dict:
-    """Fetch JWKS from Supabase and cache it."""
-    global _jwks_cache
-    if _jwks_cache is not None:
+async def _get_jwks(force_refresh: bool = False) -> dict:
+    """Fetch JWKS from Supabase, cached for _JWKS_TTL_S seconds.
+
+    On a failed refresh the stale cache (if any) is served rather than
+    erroring — better to keep verifying with slightly old keys than to
+    reject every request while Supabase hiccups.
+    """
+    global _jwks_cache, _jwks_fetched_at
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _jwks_cache is not None
+        and now - _jwks_fetched_at < _JWKS_TTL_S
+    ):
         return _jwks_cache
 
     jwks_url = f"{settings.supabase_url}/auth/v1/.well-known/jwks.json"
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(jwks_url)
-        response.raise_for_status()
-        _jwks_cache = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(jwks_url)
+            response.raise_for_status()
+            _jwks_cache = response.json()
+            _jwks_fetched_at = now
+    except Exception:
+        if _jwks_cache is None:
+            raise
     return _jwks_cache
+
+
+def _find_signing_key(jwks: dict, kid: str | None):
+    """Return the constructed JWK matching kid, or None."""
+    for key_data in jwks.get("keys", []):
+        if key_data.get("kid") == kid:
+            return jwk.construct(key_data)
+    return None
 
 
 async def verify_supabase_token(
@@ -68,11 +96,12 @@ async def verify_supabase_token(
     if alg in ("ES256", "ES384", "ES512") and settings.supabase_url:
         # ECDSA — fetch JWKS and find the matching key
         jwks = await _get_jwks()
-        signing_key = None
-        for key_data in jwks.get("keys", []):
-            if key_data.get("kid") == kid:
-                signing_key = jwk.construct(key_data)
-                break
+        signing_key = _find_signing_key(jwks, kid)
+        if signing_key is None:
+            # kid not in cache — Supabase may have rotated its keys since the
+            # last fetch. Refresh once before rejecting the token.
+            jwks = await _get_jwks(force_refresh=True)
+            signing_key = _find_signing_key(jwks, kid)
         if signing_key is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
