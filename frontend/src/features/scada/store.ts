@@ -21,6 +21,7 @@ import type {
   WorkbenchColumn,
 } from "./types";
 import { DEFAULT_CANVAS } from "./types";
+import { samplingIntervalMs } from "./sampling";
 
 const LAST_PERSPECTIVE_KEY = "scada:last-perspective";
 const LAST_SHEET_KEY = "scada:last-sheet";
@@ -551,7 +552,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       unknown
     >;
     if (cfg.store_enabled) {
-      const intervalMs = (Number(cfg.storage_interval_s) || 60) * 1000;
+      const intervalMs = samplingIntervalMs(cfg);
       const shown = get().liveValues[tagId];
       if (shown) {
         const windowOf = (ts: string) =>

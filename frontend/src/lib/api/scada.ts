@@ -14,8 +14,10 @@ import type {
   PerspectiveLayout,
   PublishedLayout,
   RecentSample,
+  RnetSettings,
   Sheet,
   Site,
+  SparklineSeries,
   Stream,
   SummaryItem,
   Tag,
@@ -217,6 +219,13 @@ export const scadaApi = {
     );
   },
 
+  /** Bucketed mini-series (default 12 jam) for EVERY visible tag in one call —
+   *  feeds the sparklines in the Analisis table. */
+  getSparklines: (rangeH = 12, points = 120) =>
+    apiClient.get<{ items: SparklineSeries[] }>(
+      `/api/scada/sparklines?range_h=${rangeH}&points=${points}`
+    ),
+
   /* ── Historian: latest value + min/avg/max snapshot (table/gauge panels) ── */
   getSummary: (tagIds: string[], start: Date, end: Date) => {
     const params = new URLSearchParams();
@@ -264,12 +273,20 @@ export const scadaApi = {
       `/api/scada/latest?tag_ids=${tagIds.join(",")}`
     ),
 
-  /** Monthly Drive archives — where data older than 90 days lives on. */
+  /** Per-tag cycle archives on Drive — where each sensor's data lives after
+   *  its 1-month reset. */
   listArchives: () =>
     apiClient.get<{ items: Archive[] }>("/api/scada/archives"),
 
   runArchiver: () =>
     apiClient.post<{ archived: unknown[] }>("/api/scada/archives/run", {}),
+
+  /* ── R-Net settings (sampling-level durations + retention) ── */
+  getRnetSettings: () =>
+    apiClient.get<RnetSettings>("/api/scada/settings"),
+
+  updateRnetSettings: (data: Partial<RnetSettings>) =>
+    apiClient.patch<RnetSettings>("/api/scada/settings", data),
 
   getAlarmSettings: () =>
     apiClient.get<AlarmSettings>("/api/scada/alarm-settings"),

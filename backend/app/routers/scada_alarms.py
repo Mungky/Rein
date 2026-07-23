@@ -27,16 +27,16 @@ from app.schemas.scada import (
     AlarmHistoryOut,
     AlarmSettingsOut,
     AlarmSettingsUpdateRequest,
-    ArchiveListOut,
     LatestOut,
+    TagArchiveListOut,
 )
 from app.services import archiver, notifier
 from db.models.profile import Profile
 from db.models.scada import (
     ScadaAlarmEvent,
     ScadaAlarmSettings,
-    ScadaArchive,
     ScadaTag,
+    ScadaTagArchive,
     ScadaTagLatest,
 )
 from db.session import get_db
@@ -90,7 +90,7 @@ async def list_alarm_history(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
     tag_id: uuid.UUID | None = None,
-    kind: Annotated[str | None, Query(pattern="^(high|low|silent)$")] = None,
+    kind: Annotated[str | None, Query(pattern="^(high|low|silent|expiring)$")] = None,
     start: datetime | None = None,
     end: datetime | None = None,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -184,27 +184,33 @@ async def get_latest(
     }
 
 
-@router.get("/archives", response_model=ArchiveListOut)
+@router.get("/archives", response_model=TagArchiveListOut)
 async def list_archives(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
-    """Monthly Drive archives (newest first) — where >90-day data lives on."""
+    """Completed per-tag cycle archives on Drive (newest first) — where each
+    sensor's data lives on after its 1-month reset."""
     result = await db.execute(
-        select(ScadaArchive)
-        .where(ScadaArchive.drive_file_id.is_not(None))
-        .order_by(ScadaArchive.month.desc())
+        select(ScadaTagArchive)
+        .where(ScadaTagArchive.drive_file_id.is_not(None))
+        .order_by(ScadaTagArchive.created_at.desc())
     )
+    archives = result.scalars().all()
+    tags = await _tags_by_id(db, {a.tag_id for a in archives})
     return {
         "items": [
             {
-                "month": str(a.month),
+                "tag_id": str(a.tag_id),
+                "tag_label": tags[a.tag_id].label if a.tag_id in tags else "(tag terhapus)",
                 "file_name": a.file_name,
                 "web_link": a.web_link,
                 "row_count": a.row_count,
+                "cycle_start": str(a.cycle_start),
+                "cycle_end": str(a.cycle_end),
                 "created_at": str(a.created_at) if a.created_at else None,
             }
-            for a in result.scalars().all()
+            for a in archives
         ]
     }
 
@@ -214,8 +220,8 @@ async def run_archiver_now(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
-    """Run the monthly archive pass immediately (normally it runs itself).
-    Months still inside the 90-day window are left alone."""
+    """Run the archive+reset pass immediately (normally it runs itself). Only
+    tags whose 1-month cycle has fully elapsed are archived and reset."""
     results = await archiver.archive_once(db)
     return {"archived": results}
 

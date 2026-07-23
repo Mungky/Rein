@@ -205,14 +205,19 @@ class ScadaTag(UUIDMixin, TimestampMixin, Base):
 
 
 class ScadaSample(Base):
-    """One historian data point. Composite PK (tag_id, ts): `ts` is aligned to
-    the minute and inserts use ON CONFLICT DO NOTHING, so local-dev and Railway
-    both sampling the same shared DB can never duplicate rows.
+    """One HISTORIAN data point (store_enabled tags only) — the long-retention
+    lane. Rows accumulate per tag until its cycle reaches `store_months`, then
+    the archiver exports the whole cycle to Google Drive and deletes them,
+    resetting `config.store_cycle_start` (app/services/archiver.py). Ring-mode
+    (store off) values live in `scada_ring` instead.
 
-    RLS note: browser clients subscribe to this table via Supabase Realtime
-    (Analisis workbench). A SELECT policy gates that path with the same
-    role-permission matrix (scada:view); the backend connects as the table
-    owner and is unaffected."""
+    Composite PK (tag_id, ts): inserts use ON CONFLICT DO NOTHING, so local-dev
+    and the server both sampling the same shared DB can never duplicate rows.
+
+    RLS note: a SELECT policy gates direct access with the role-permission
+    matrix (scada:view); the backend connects as the table owner and is
+    unaffected. Reads go through the `scada_samples_all` view (ring ∪ historian);
+    writers/pruners target the physical tables."""
 
     __tablename__ = "scada_samples"
 
@@ -225,14 +230,53 @@ class ScadaSample(Base):
     value: Mapped[float] = mapped_column(Float, nullable=False)
 
 
+class ScadaRing(Base):
+    """One RING-mode data point (store_enabled OFF) — the short-retention lane,
+    like a CCTV SD-card kept by TIME, not count. The bridge writes at the tag's
+    sampling level and prunes rows older than `scada_settings.ring_window_h`
+    (24 h default). Separate table from the historian so its heavy INSERT+DELETE
+    churn never bloats or slows the long-term `scada_samples` queries.
+
+    Same shape + PK semantics as ScadaSample; reads are unified through the
+    `scada_samples_all` view."""
+
+    __tablename__ = "scada_ring"
+
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scada_tags.id", ondelete="CASCADE"), primary_key=True
+    )
+    ts: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ScadaSampleAll(Base):
+    """READ-ONLY union view `scada_samples_all = scada_ring ∪ scada_samples`.
+
+    Every read path (recent/samples/history/summary/sparklines) selects from
+    this view so a tag's data is found whether it is ring or historian, without
+    each endpoint knowing which physical table holds it. Created/maintained by
+    Alembic raw SQL (no ORM DDL). NEVER write through this model — writers use
+    ScadaRing / ScadaSample directly."""
+
+    __tablename__ = "scada_samples_all"
+
+    tag_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    ts: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+
+
 class ScadaTagLatest(Base):
     """Last-known value per tag — the fast "live" lane, decoupled from history.
 
     UPSERTed at ~1 s cadence by the MQTT bridge (mqtt tags) and by the
     historian latest_loop (simulator tags). Browser clients subscribe via
     Supabase Realtime for live numbers; the alarm engine polls it for cheap
-    threshold + sensor-silence evaluation. History stays in scada_samples,
-    written only per each tag's storage_interval_s bucket."""
+    threshold + sensor-silence evaluation. History stays in scada_ring /
+    scada_samples, written only per each tag's sampling-level bucket."""
 
     __tablename__ = "scada_tag_latest"
 
@@ -339,11 +383,94 @@ class ScadaAlarmSettings(Base):
     )
 
 
+class ScadaSettings(Base):
+    """Single-row (id=1) R-Net global settings, editable from the admin panel.
+
+    Holds the 4 admin-tunable SAMPLING LEVEL durations (a tag picks one of
+    fastest/fast/slow/slowest; this maps the name → seconds) plus the retention
+    knobs. Kept out of scada_alarm_settings because it governs storage/sampling,
+    not notifications. The bridge, historian, alarm engine and archiver all read
+    this row (each caches it per loop)."""
+
+    __tablename__ = "scada_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Sampling level → seconds. Defaults: Fastest 2 s … Slowest 60 s.
+    level_fastest_s: Mapped[int] = mapped_column(
+        Integer, server_default="2", nullable=False
+    )
+    level_fast_s: Mapped[int] = mapped_column(
+        Integer, server_default="5", nullable=False
+    )
+    level_slow_s: Mapped[int] = mapped_column(
+        Integer, server_default="30", nullable=False
+    )
+    level_slowest_s: Mapped[int] = mapped_column(
+        Integer, server_default="60", nullable=False
+    )
+    # Ring-mode retention window (store off): rows older than this are pruned.
+    ring_window_h: Mapped[int] = mapped_column(
+        Integer, server_default="24", nullable=False
+    )
+    # Historian cycle length (store on): after this many months a tag's data is
+    # archived to Drive and reset from 0.
+    store_months: Mapped[int] = mapped_column(
+        Integer, server_default="1", nullable=False
+    )
+    # How many days before a reset the "expiring" reminder alarm fires.
+    reset_warn_days: Mapped[int] = mapped_column(
+        Integer, server_default="7", nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+class ScadaTagArchive(Base):
+    """Ledger of archived HISTORIAN cycles, one row per (tag, cycle). The
+    archiver (app/services/archiver.py) INSERTs the (tag_id, cycle_start) row
+    FIRST as an atomic claim, uploads the cycle's samples to Google Drive as
+    one .xlsx, fills drive_file_id, THEN deletes the tag's samples and resets
+    its cycle. No completed row here → no deletion (no data loss)."""
+
+    __tablename__ = "scada_tag_archives"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scada_tags.id", ondelete="CASCADE"), nullable=False
+    )
+    # Start of the archived cycle (= the tag's store_cycle_start at archive time)
+    cycle_start: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    cycle_end: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    file_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # NULL while the upload is in flight; set = archive completed
+    drive_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    web_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+    __table_args__ = (
+        # Atomic claim: at most one archive row per (tag, cycle)
+        Index(
+            "uq_scada_tag_archives_tag_cycle",
+            "tag_id",
+            "cycle_start",
+            unique=True,
+        ),
+    )
+
+
 class ScadaArchive(Base):
-    """Ledger of archived months (app/services/archiver.py). The month row is
-    INSERTed first as an atomic claim, then the xlsx goes to Google Drive,
-    then drive_file_id is filled and the month's samples are deleted. Purge
-    never touches a month without a COMPLETED row here — no data loss."""
+    """DEPRECATED (monthly rolling model, replaced by ScadaTagArchive). Kept so
+    historical rows / old Drive links survive; no longer written. Ledger of
+    archived months — the month row was INSERTed as an atomic claim, xlsx sent
+    to Drive, then that month's samples deleted."""
 
     __tablename__ = "scada_archives"
 

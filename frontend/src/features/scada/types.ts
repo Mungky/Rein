@@ -496,8 +496,9 @@ export interface RecentSample {
 /* ── Alarms (server-side engine) ─────────────────────────────────────── */
 
 /** "high" = di atas alarm_max, "low" = di bawah alarm_min,
- *  "silent" = sensor berhenti mengirim data. */
-export type AlarmKind = "high" | "low" | "silent";
+ *  "silent" = sensor berhenti mengirim data,
+ *  "expiring" = data akan diarsip & direset dari 0 dalam beberapa hari. */
+export type AlarmKind = "high" | "low" | "silent" | "expiring";
 
 /** One alarm occurrence from scada_alarm_events. Open (active) while
  *  cleared_at is null; the row itself is permanent history. */
@@ -534,11 +535,39 @@ export interface LatestItem {
   value: number;
 }
 
-/** One archived month on Google Drive (scada_archives). */
+/** One archived historian cycle on Google Drive (scada_tag_archives). */
 export interface Archive {
-  month: string; // first day of the month, e.g. "2026-04-01"
+  tag_id: string;
+  tag_label: string;
   file_name: string;
   web_link: string | null;
   row_count: number;
+  cycle_start: string;
+  cycle_end: string;
   created_at: string | null;
+}
+
+/** The 4 sampling levels a tag can pick; seconds are admin-tunable. */
+export type SamplingLevel = "fastest" | "fast" | "slow" | "slowest";
+
+/** R-Net global settings (sampling-level durations + retention knobs). */
+export interface RnetSettings {
+  level_fastest_s: number;
+  level_fast_s: number;
+  level_slow_s: number;
+  level_slowest_s: number;
+  ring_window_h: number;
+  store_months: number;
+  reset_warn_days: number;
+}
+
+/** One bucketed mini-series point (avg over the bucket). */
+export interface SparklinePoint {
+  t: string; // bucket start ISO
+  v: number; // bucket average
+}
+
+export interface SparklineSeries {
+  tag_id: string;
+  points: SparklinePoint[];
 }

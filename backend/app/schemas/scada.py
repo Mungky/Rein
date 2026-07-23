@@ -726,7 +726,7 @@ class TagCreateRequest(BaseModel):
                 raise ValueError("Tag MQTT harus punya site")
             if not str(self.config.get("mqtt_topic", "")).strip():
                 raise ValueError("Tag MQTT harus punya topic")
-        validate_storage_interval(self.source, self.config)
+        validate_sampling_level(self.config)
         return self
 
 
@@ -958,6 +958,23 @@ class SamplesPageOut(BaseModel):
     has_more: bool
 
 
+class SparkPointOut(BaseModel):
+    t: str  # bucket start, ISO 8601 UTC
+    v: float  # bucket average
+
+
+class SparklineOut(BaseModel):
+    tag_id: str
+    points: list[SparkPointOut]
+
+
+class SparklinesOut(BaseModel):
+    """Bucketed mini-series for EVERY visible tag in one response — the 12-jam
+    sparklines in the Analisis table (avoids one request per tag)."""
+
+    items: list[SparklineOut]
+
+
 class WorkbenchColumnListOut(BaseModel):
     items: list[WorkbenchColumnOut]
 
@@ -970,7 +987,7 @@ class DeletedOut(BaseModel):
 # Alarms (server-side engine — see app/services/alarm_engine.py)
 # ---------------------------------------------------------------------------
 
-AlarmKind = Literal["high", "low", "silent"]
+AlarmKind = Literal["high", "low", "silent", "expiring"]
 
 
 class AlarmEventOut(BaseModel):
@@ -1031,6 +1048,23 @@ class ArchiveListOut(BaseModel):
     items: list[ArchiveOut]
 
 
+class TagArchiveOut(BaseModel):
+    """One archived historian cycle (per-tag reset model)."""
+
+    tag_id: str
+    tag_label: str
+    file_name: str
+    web_link: str | None
+    row_count: int
+    cycle_start: str
+    cycle_end: str
+    created_at: str | None
+
+
+class TagArchiveListOut(BaseModel):
+    items: list[TagArchiveOut]
+
+
 class LatestItemOut(BaseModel):
     tag_id: str
     ts: str
@@ -1041,24 +1075,51 @@ class LatestOut(BaseModel):
     items: list[LatestItemOut]
 
 
-# Storage-interval choices offered by the UI (SourceDialog): 5 s … 24 h.
-ALLOWED_STORAGE_INTERVALS = {5, 10, 30, 60, 300, 900, 3600, 21600, 86400}
+# Sampling levels a tag may pick. The name→seconds mapping is admin-editable in
+# scada_settings (default fastest 2s / fast 5s / slow 30s / slowest 60s).
+SAMPLING_LEVELS = ("fastest", "fast", "slow", "slowest")
+# When "Simpan data" (store) is ON, only these are allowed — the fast levels are
+# reserved for the 24h ring lane so the 1-month historian never explodes.
+STORE_SAMPLING_LEVELS = ("slow", "slowest")
+
+SamplingLevel = Literal["fastest", "fast", "slow", "slowest"]
 
 
-def validate_storage_interval(source: str, config: dict | None) -> None:
+def validate_sampling_level(config: dict | None) -> None:
     """Shared by TagCreateRequest and the PATCH /tags router (which must
-    validate the MERGED source+config). Raises ValueError in Bahasa Indonesia
-    like the other tag validators."""
-    raw = (config or {}).get("storage_interval_s")
+    validate the MERGED config). Raises ValueError in Bahasa Indonesia like the
+    other tag validators. A missing level is allowed (runtime falls back)."""
+    cfg = config or {}
+    raw = cfg.get("sampling_level")
     if raw is None:
         return
-    try:
-        interval = int(raw)
-    except (TypeError, ValueError):
-        raise ValueError("Interval penyimpanan tidak valid")
-    if interval not in ALLOWED_STORAGE_INTERVALS:
-        raise ValueError("Interval penyimpanan tidak termasuk pilihan yang diizinkan")
-    if source == "simulator" and interval < 60:
+    if raw not in SAMPLING_LEVELS:
+        raise ValueError("Level sampling tidak valid")
+    if cfg.get("store_enabled") and raw not in STORE_SAMPLING_LEVELS:
         raise ValueError(
-            "Interval di bawah 1 menit hanya untuk tag MQTT (simulator berjalan per menit)"
+            "Saat simpan data aktif, level hanya boleh Slow atau Slowest"
         )
+
+
+class RnetSettingsOut(BaseModel):
+    """R-Net global settings (single row) — sampling-level durations + retention."""
+
+    level_fastest_s: int
+    level_fast_s: int
+    level_slow_s: int
+    level_slowest_s: int
+    ring_window_h: int
+    store_months: int
+    reset_warn_days: int
+
+
+class RnetSettingsUpdateRequest(BaseModel):
+    # All optional (partial update). Seconds bounded to sane ranges; the fast→
+    # slow ordering is not enforced server-side (admin's call).
+    level_fastest_s: int | None = Field(default=None, ge=1, le=86400)
+    level_fast_s: int | None = Field(default=None, ge=1, le=86400)
+    level_slow_s: int | None = Field(default=None, ge=1, le=86400)
+    level_slowest_s: int | None = Field(default=None, ge=1, le=86400)
+    ring_window_h: int | None = Field(default=None, ge=1, le=168)
+    store_months: int | None = Field(default=None, ge=1, le=24)
+    reset_warn_days: int | None = Field(default=None, ge=1, le=90)

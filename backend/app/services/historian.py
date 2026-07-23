@@ -27,7 +27,8 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.scada import ScadaSample, ScadaTag, ScadaTagLatest
+from app.services import rnet_settings
+from db.models.scada import ScadaRing, ScadaSample, ScadaTag, ScadaTagLatest
 
 logger = logging.getLogger(__name__)
 
@@ -95,24 +96,17 @@ def _compute_value(tag: ScadaTag, at: datetime) -> float:
     raise NotImplementedError(f"historian source '{tag.source}' not implemented yet")
 
 
-def _storage_interval(tag: ScadaTag, floor_s: int = 60) -> int:
-    """Per-tag storage interval from config `storage_interval_s`. In-process
-    (simulator) tags are floored to the 60 s sampler cadence; sub-minute
-    intervals are an MQTT-bridge-only feature."""
-    try:
-        interval = int((tag.config or {}).get("storage_interval_s"))
-    except (TypeError, ValueError):
-        return floor_s
-    return max(floor_s, interval)
-
-
 async def sample_once(db: AsyncSession) -> int:
     """Write one sample per enabled *in-process* tag whose storage interval
-    lands on the current aligned minute. Source "mqtt" tags are skipped here —
-    the standalone bridge (deploy/scada/mqtt-bridge/bridge.py) writes those
-    from broker messages."""
+    lands on the current aligned minute. Ring tags (store off) go to scada_ring,
+    historian tags (store on) to scada_samples. Source "mqtt" tags are skipped
+    here — the standalone bridge writes those from broker messages.
+
+    In-process cadence is 60 s, so intervals are floored to 60 s (sub-minute is
+    an MQTT-bridge-only feature)."""
     if not SIM_ENABLED:
         return 0
+    settings = await rnet_settings.get_settings(db)
     ts = _aligned_minute()
     epoch = int(ts.timestamp())
     result = await db.execute(
@@ -120,20 +114,28 @@ async def sample_once(db: AsyncSession) -> int:
             ScadaTag.enabled.is_(True), ScadaTag.source != "mqtt"
         )
     )
-    rows = []
+    ring_rows: list[dict] = []
+    hist_rows: list[dict] = []
     for tag in result.scalars().all():
-        if epoch % _storage_interval(tag) != 0:
+        interval = rnet_settings.resolve_interval(settings, tag.config, floor_s=60)
+        if epoch % interval != 0:
             continue  # not this tag's minute (e.g. interval 300 → every 5th)
         try:
-            rows.append({"tag_id": tag.id, "ts": ts, "value": _compute_value(tag, ts)})
+            row = {"tag_id": tag.id, "ts": ts, "value": _compute_value(tag, ts)}
         except NotImplementedError:
             logger.warning("Tag %s skipped: source '%s' has no adapter yet", tag.id, tag.source)
+            continue
         except Exception:
             logger.exception("Tag %s: value computation failed", tag.id)
-    if rows:
-        await db.execute(pg_insert(ScadaSample).values(rows).on_conflict_do_nothing())
+            continue
+        (ring_rows if rnet_settings.is_ring(tag.config) else hist_rows).append(row)
+    if ring_rows:
+        await db.execute(pg_insert(ScadaRing).values(ring_rows).on_conflict_do_nothing())
+    if hist_rows:
+        await db.execute(pg_insert(ScadaSample).values(hist_rows).on_conflict_do_nothing())
+    if ring_rows or hist_rows:
         await db.commit()
-    return len(rows)
+    return len(ring_rows) + len(hist_rows)
 
 
 async def latest_once(db: AsyncSession) -> int:
@@ -175,6 +177,11 @@ async def backfill(db: AsyncSession, tag: ScadaTag, days: int = BACKFILL_DAYS) -
     No-op unless HISTORIAN_SIMULATOR is on — fresh tags must start EMPTY."""
     if not SIM_ENABLED or tag.source != "simulator":
         return 0
+    # Ring tags keep only a 24h window, so seeding 7 days there is pointless —
+    # backfill only makes sense for historian (store on) tags.
+    if rnet_settings.is_ring(tag.config):
+        return 0
+    model = ScadaSample
     end = _aligned_minute()
     ts = end - timedelta(days=days)
     total = 0
@@ -182,12 +189,12 @@ async def backfill(db: AsyncSession, tag: ScadaTag, days: int = BACKFILL_DAYS) -
     while ts < end:
         batch.append({"tag_id": tag.id, "ts": ts, "value": sim_value(tag, ts)})
         if len(batch) >= _BATCH:
-            await db.execute(pg_insert(ScadaSample).values(batch).on_conflict_do_nothing())
+            await db.execute(pg_insert(model).values(batch).on_conflict_do_nothing())
             total += len(batch)
             batch = []
         ts += timedelta(minutes=1)
     if batch:
-        await db.execute(pg_insert(ScadaSample).values(batch).on_conflict_do_nothing())
+        await db.execute(pg_insert(model).values(batch).on_conflict_do_nothing())
         total += len(batch)
     await db.commit()
     return total

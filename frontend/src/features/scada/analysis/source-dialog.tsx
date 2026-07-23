@@ -71,7 +71,8 @@ export function SourceDialog({
     setSaving(true);
     try {
       // Preserve settings owned by the row-detail dropdown (store_enabled,
-      // storage_interval_s) — this dialog only owns topic/alarm/scaling.
+      // sampling_level, store_cycle_start) — this dialog only owns
+      // topic/alarm/scaling. Spreading ...cfg keeps them intact.
       const config: Record<string, unknown> = { ...cfg, mqtt_topic: topic.trim() };
       delete config.alarm_min;
       delete config.alarm_max;

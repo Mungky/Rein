@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
 import type { ChartRange, Panel, RecentSample, Sheet, Tag } from "../types";
 import { useScadaStore } from "../store";
+import { samplingIntervalMs } from "../sampling";
 import { RANGE_LABELS } from "../panels/chart-panel";
 import { usePanelRefresh } from "../panels/use-panel-refresh";
 import { RiwayatView } from "./riwayat-view";
@@ -64,13 +65,22 @@ function bounds(tag: Tag): { min: number | null; max: number | null } {
   return { min: num(cfg.alarm_min), max: num(cfg.alarm_max) };
 }
 
+/** Sambung ekor live (titik lebih baru dari bucket historis terakhir) ke deret
+ *  jendela waktu, supaya ujung sparkline bergerak tiap detik. Kedua argumen
+ *  urut menaik (ascending). */
+function withLiveTail(base: RecentSample[], live: RecentSample[]): RecentSample[] {
+  if (base.length === 0) return live;
+  const lastT = new Date(base[base.length - 1].ts).getTime();
+  const tail = live.filter((s) => new Date(s.ts).getTime() > lastT);
+  return tail.length ? base.concat(tail) : base;
+}
+
 /** Same silence window as the backend alarm engine: ring tags 60 s flat,
- *  interval tags 3× interval with a 60 s floor. */
+ *  store tags 3× their sampling interval with a 60 s floor. */
 function offlineAfterMs(tag: Tag): number {
   const cfg = tag.config as Record<string, unknown>;
   if (!cfg.store_enabled) return 60_000;
-  const interval = Number(cfg.storage_interval_s) || 60;
-  return Math.max(3 * interval, 60) * 1000;
+  return Math.max(3 * (samplingIntervalMs(cfg) / 1000), 60) * 1000;
 }
 
 export function AnalysisView({
@@ -107,9 +117,12 @@ export function AnalysisView({
   const [addingRow, setAddingRow] = useState(false);
   const [showAlarmSettings, setShowAlarmSettings] = useState(false);
 
-  // 100 data terakhir per tag — feeds the sparkline AND the detail dropdown.
-  // Refreshed on the shared panel cadence + the manual refresh button (nonce).
+  // 100 data terakhir per tag — feeds the detail dropdown's raw list + stats +
+  // the live status. Refreshed on the shared cadence + manual refresh (nonce).
   const [recent, setRecent] = useState<Record<string, RecentSample[]>>({});
+  // 12 jam terakhir (bucketed, satu request untuk semua tag) — feeds the mini
+  // sparkline in each table row.
+  const [sparkMap, setSparkMap] = useState<Record<string, RecentSample[]>>({});
   const [recentLoading, setRecentLoading] = useState(false);
   const tagIdsKey = useMemo(() => tags.map((t) => t.id).join(","), [tags]);
 
@@ -118,15 +131,26 @@ export function AnalysisView({
     setRecentLoading(true);
     try {
       const ids = tagIdsKey.split(",");
-      const results = await Promise.all(
-        ids.map((id) =>
-          scadaApi
-            .getRecentSamples(id, 100)
-            .then((res) => [id, res.items] as const)
-            .catch(() => [id, []] as const)
+      const [results, spark] = await Promise.all([
+        Promise.all(
+          ids.map((id) =>
+            scadaApi
+              .getRecentSamples(id, 100)
+              .then((res) => [id, res.items] as const)
+              .catch(() => [id, []] as const)
+          )
+        ),
+        scadaApi.getSparklines(12).catch(() => ({ items: [] })),
+      ]);
+      setRecent(Object.fromEntries(results));
+      setSparkMap(
+        Object.fromEntries(
+          spark.items.map((s) => [
+            s.tag_id,
+            s.points.map((p) => ({ ts: p.t, value: p.v })),
+          ])
         )
       );
-      setRecent(Object.fromEntries(results));
     } finally {
       setRecentLoading(false);
     }
@@ -718,8 +742,17 @@ export function AnalysisView({
                       )}
                     </td>
                     <td className="px-2 py-1">
-                      {/* Tabel = 50 titik terakhir; versi 100 titik ada di dropdown */}
-                      <TagSparkline samples={series.slice(-50)} status={sparkStatus} />
+                      {/* Tabel = 12 jam terakhir (bucketed) + ekor live sesi ini
+                          supaya ujungnya bergerak. Sensor baru (< 2 bucket) →
+                          pakai data live saja (bukan "menunggu data"). */}
+                      <TagSparkline
+                        samples={
+                          (sparkMap[tag.id]?.length ?? 0) >= 2
+                            ? withLiveTail(sparkMap[tag.id], series)
+                            : series.slice(-50)
+                        }
+                        status={sparkStatus}
+                      />
                     </td>
                     <td className="w-8 py-1.5 text-center">
                       <button
@@ -727,7 +760,7 @@ export function AnalysisView({
                           setExpandedTagId((cur) => (cur === tag.id ? null : tag.id))
                         }
                         className="cursor-pointer p-1 text-text-light hover:text-text"
-                        title="Detail, pengaturan penyimpanan & 100 data terakhir"
+                        title="Detail, pengaturan penyimpanan & grafik 24 jam"
                       >
                         {expandedTagId === tag.id ? (
                           <ChevronDown className="size-4" />

@@ -12,6 +12,7 @@ import {
   Hash,
   Folder,
   Sparkles,
+  Activity,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { PageGuard } from "@/components/guards/page-guard";
@@ -22,8 +23,9 @@ import { UsersTab } from "@/features/admin/users-tab";
 import { SequencesTab } from "@/features/admin/sequences-tab";
 import { DocTypesTab, type FileTypeRow } from "@/features/admin/file-types-tab";
 import { PermissionsTab } from "@/features/admin/permissions-tab";
+import { RnetTab } from "@/features/admin/rnet-tab";
 
-type AdminTab = "users" | "sequences" | "doctypes" | "permissions";
+type AdminTab = "users" | "sequences" | "doctypes" | "permissions" | "rnet";
 
 interface AdminStats {
   users: number | null;
@@ -134,6 +136,9 @@ export default function AdminPage() {
             <TabButton active={tab === "permissions"} onClick={() => setTab("permissions")} icon={<ShieldCheck className="w-3.5 h-3.5" />}>
               Permission Role
             </TabButton>
+            <TabButton active={tab === "rnet"} onClick={() => setTab("rnet")} icon={<Activity className="w-3.5 h-3.5" />}>
+              R-Net
+            </TabButton>
           </div>
         </div>
 
@@ -142,6 +147,7 @@ export default function AdminPage() {
           {tab === "sequences" && <SequencesTab />}
           {tab === "doctypes" && <DocTypesTab />}
           {tab === "permissions" && <PermissionsTab />}
+          {tab === "rnet" && <RnetTab />}
         </div>
       </div>
     </PageGuard>

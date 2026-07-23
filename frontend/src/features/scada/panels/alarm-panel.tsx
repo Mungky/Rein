@@ -146,7 +146,10 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
         const bounds = boundsOf(tag);
         const live = liveValues[tagId];
         const events = eventsByTag.get(tagId) ?? [];
-        const valueEvent = events.find((e) => e.kind !== "silent") ?? null;
+        // "expiring" is a reset reminder, not a value breach — never turn the
+        // tile red for it (it surfaces via the bell + history instead).
+        const valueEvent =
+          events.find((e) => e.kind === "high" || e.kind === "low") ?? null;
         const silentEvent = events.find((e) => e.kind === "silent") ?? null;
         const primary = valueEvent ?? silentEvent;
 

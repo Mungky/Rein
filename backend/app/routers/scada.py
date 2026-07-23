@@ -33,6 +33,7 @@ from app.schemas.scada import (
     HistoryOut,
     RecentSamplesOut,
     SamplesPageOut,
+    SparklinesOut,
     validate_channel_config,
     SheetCreateRequest,
     SheetListOut,
@@ -52,22 +53,28 @@ from app.schemas.scada import (
     StreamListOut,
     StreamOut,
     StreamUpdateRequest,
+    RnetSettingsOut,
+    RnetSettingsUpdateRequest,
     TagCreateRequest,
     TagListOut,
     TagOut,
     TagUpdateRequest,
-    validate_storage_interval,
+    validate_sampling_level,
     WorkbenchColumnCreateRequest,
     WorkbenchColumnListOut,
     WorkbenchColumnOut,
     WorkbenchColumnUpdateRequest,
 )
 from app.services import historian
+from app.services import rnet_settings
 from db.models.profile import Profile
 from db.models.scada import (
     ScadaChannel,
     ScadaPerspective,
+    ScadaRing,
     ScadaSample,
+    ScadaSampleAll,
+    ScadaSettings,
     ScadaSheet,
     ScadaSite,
     ScadaStream,
@@ -902,6 +909,10 @@ async def create_tag(
     await _get_sheet_or_404(db, body.sheet_id)
     if body.source == "mqtt":
         await _get_site_or_404(db, body.site_id)
+    # A tag created with "Simpan data" on starts its 1-month reset clock now.
+    config = dict(body.config)
+    if config.get("store_enabled") and not config.get("store_cycle_start"):
+        config["store_cycle_start"] = rnet_settings.now_iso()
     tag = ScadaTag(
         sheet_id=body.sheet_id,
         source=body.source,
@@ -910,7 +921,7 @@ async def create_tag(
         label=body.label,
         unit=body.unit,
         enabled=body.enabled,
-        config=body.config,
+        config=config,
         meta=body.meta,
     )
     db.add(tag)
@@ -934,6 +945,7 @@ async def update_tag(
     # A source switch means a DIFFERENT data stream — the old history (e.g.
     # simulator placeholder values) would only mislead, so it gets purged below.
     source_changed = body.source is not None and body.source != tag.source
+    old_store = bool((tag.config or {}).get("store_enabled"))
 
     if body.sheet_id is not None:
         await _get_sheet_or_404(db, body.sheet_id)
@@ -959,15 +971,25 @@ async def update_tag(
     if body.meta is not None:
         tag.meta = body.meta
 
-    # Interval rules depend on the MERGED source+config (either may have just
+    # Sampling/store rules depend on the MERGED config (which may have just
     # changed) — schema-level validation can't see the other half.
     try:
-        validate_storage_interval(tag.source, tag.config)
+        validate_sampling_level(tag.config)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    if source_changed:
+    # Toggling "Simpan data" flips a tag between the ring and historian lanes —
+    # a clean break: purge both tables and (re)start the reset clock on enable.
+    new_store = bool((tag.config or {}).get("store_enabled"))
+    store_changed = new_store != old_store
+    if new_store and not (tag.config or {}).get("store_cycle_start"):
+        cfg = dict(tag.config or {})
+        cfg["store_cycle_start"] = rnet_settings.now_iso()
+        tag.config = cfg
+
+    if source_changed or store_changed:
         await db.execute(delete(ScadaSample).where(ScadaSample.tag_id == tag.id))
+        await db.execute(delete(ScadaRing).where(ScadaRing.tag_id == tag.id))
         await db.execute(
             delete(ScadaTagLatest).where(ScadaTagLatest.tag_id == tag.id)
         )
@@ -1007,9 +1029,9 @@ async def get_recent_samples(
         raise HTTPException(status_code=404, detail="Tag tidak ditemukan")
 
     result = await db.execute(
-        select(ScadaSample)
-        .where(ScadaSample.tag_id == tag_id)
-        .order_by(ScadaSample.ts.desc())
+        select(ScadaSampleAll)
+        .where(ScadaSampleAll.tag_id == tag_id)
+        .order_by(ScadaSampleAll.ts.desc())
         .limit(limit)
     )
     return {
@@ -1039,10 +1061,10 @@ async def get_samples_page(
     if before is not None and before.tzinfo is None:
         before = before.replace(tzinfo=timezone.utc)
 
-    query = select(ScadaSample).where(ScadaSample.tag_id == tag_id)
+    query = select(ScadaSampleAll).where(ScadaSampleAll.tag_id == tag_id)
     if before is not None:
-        query = query.where(ScadaSample.ts < before)
-    result = await db.execute(query.order_by(ScadaSample.ts.desc()).limit(limit + 1))
+        query = query.where(ScadaSampleAll.ts < before)
+    result = await db.execute(query.order_by(ScadaSampleAll.ts.desc()).limit(limit + 1))
     rows = result.scalars().all()
     return {
         "items": [{"ts": s.ts.isoformat(), "value": s.value} for s in rows[:limit]],
@@ -1087,30 +1109,30 @@ async def get_history(
     tags = {t.id: t for t in (await db.execute(tag_query)).scalars().all()}
 
     # Bucket = span / point budget, floor 1 second. Sampling is per-tag now
-    # (as fast as 1 s in ring mode, or storage_interval_s when storing), so a
+    # (as fast as the tag's sampling level, e.g. 2 s), so a
     # minute floor would flatten a 3-second sensor into one point per minute —
     # the line looked stepped instead of live. The point budget still bounds
     # how many rows come back.
     span_s = (end - start).total_seconds()
     bucket_s = max(1, int(-(-span_s // points)))
     bucket = func.to_timestamp(
-        func.floor(func.extract("epoch", ScadaSample.ts) / bucket_s) * bucket_s
+        func.floor(func.extract("epoch", ScadaSampleAll.ts) / bucket_s) * bucket_s
     ).label("bucket")
 
     result = await db.execute(
         select(
-            ScadaSample.tag_id,
+            ScadaSampleAll.tag_id,
             bucket,
-            func.avg(ScadaSample.value).label("avg"),
-            func.min(ScadaSample.value).label("min"),
-            func.max(ScadaSample.value).label("max"),
+            func.avg(ScadaSampleAll.value).label("avg"),
+            func.min(ScadaSampleAll.value).label("min"),
+            func.max(ScadaSampleAll.value).label("max"),
         )
         .where(
-            ScadaSample.tag_id.in_(list(tags.keys())),
-            ScadaSample.ts >= start,
-            ScadaSample.ts < end,
+            ScadaSampleAll.tag_id.in_(list(tags.keys())),
+            ScadaSampleAll.ts >= start,
+            ScadaSampleAll.ts < end,
         )
-        .group_by(ScadaSample.tag_id, bucket)
+        .group_by(ScadaSampleAll.tag_id, bucket)
         .order_by(bucket)
     )
 
@@ -1274,27 +1296,27 @@ async def get_summary(
 
     agg_result = await db.execute(
         select(
-            ScadaSample.tag_id,
-            func.min(ScadaSample.value).label("min"),
-            func.max(ScadaSample.value).label("max"),
-            func.avg(ScadaSample.value).label("avg"),
+            ScadaSampleAll.tag_id,
+            func.min(ScadaSampleAll.value).label("min"),
+            func.max(ScadaSampleAll.value).label("max"),
+            func.avg(ScadaSampleAll.value).label("avg"),
         )
         .where(
-            ScadaSample.tag_id.in_(ordered),
-            ScadaSample.ts >= start,
-            ScadaSample.ts < end,
+            ScadaSampleAll.tag_id.in_(ordered),
+            ScadaSampleAll.ts >= start,
+            ScadaSampleAll.ts < end,
         )
-        .group_by(ScadaSample.tag_id)
+        .group_by(ScadaSampleAll.tag_id)
     )
     aggs = {row.tag_id: row for row in agg_result.all()}
 
     # Latest row per tag regardless of window (a gauge must show the current
     # value even if the stats window is short)
     last_result = await db.execute(
-        select(ScadaSample)
-        .distinct(ScadaSample.tag_id)
-        .where(ScadaSample.tag_id.in_(ordered))
-        .order_by(ScadaSample.tag_id, ScadaSample.ts.desc())
+        select(ScadaSampleAll)
+        .distinct(ScadaSampleAll.tag_id)
+        .where(ScadaSampleAll.tag_id.in_(ordered))
+        .order_by(ScadaSampleAll.tag_id, ScadaSampleAll.ts.desc())
     )
     lasts = {s.tag_id: s for s in last_result.scalars().all()}
 
@@ -1316,3 +1338,105 @@ async def get_summary(
             }
         )
     return {"items": items}
+
+
+# ---------------------------------------------------------------------------
+# Sparklines: bucketed mini-series for every visible tag (Analisis table)
+# ---------------------------------------------------------------------------
+
+SPARK_MAX_POINTS = 240
+
+
+@router.get("/sparklines", response_model=SparklinesOut)
+async def get_sparklines(
+    range_h: Annotated[int, Query(ge=1, le=168)] = 12,
+    points: Annotated[int, Query(ge=10, le=SPARK_MAX_POINTS)] = 120,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    """One bucketed series (avg per bucket) per visible tag over the last
+    `range_h` hours — feeds the 12-jam mini-charts in the Analisis table in a
+    single query instead of N per-tag requests. Same visibility rule as the tag
+    list: no scada:manage → enabled tags only."""
+    granted = await _load_permissions(db, profile.role)
+    tag_query = select(ScadaTag.id)
+    if "scada:manage" not in granted:
+        tag_query = tag_query.where(ScadaTag.enabled.is_(True))
+    tag_ids = [r[0] for r in (await db.execute(tag_query)).all()]
+    if not tag_ids:
+        return {"items": []}
+
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(hours=range_h)
+    span_s = (end - start).total_seconds()
+    bucket_s = max(1, int(-(-span_s // points)))
+    bucket = func.to_timestamp(
+        func.floor(func.extract("epoch", ScadaSampleAll.ts) / bucket_s) * bucket_s
+    ).label("bucket")
+
+    result = await db.execute(
+        select(
+            ScadaSampleAll.tag_id,
+            bucket,
+            func.avg(ScadaSampleAll.value).label("avg"),
+        )
+        .where(
+            ScadaSampleAll.tag_id.in_(tag_ids),
+            ScadaSampleAll.ts >= start,
+            ScadaSampleAll.ts < end,
+        )
+        .group_by(ScadaSampleAll.tag_id, bucket)
+        .order_by(ScadaSampleAll.tag_id, bucket)
+    )
+    by_tag: dict[uuid.UUID, list[dict]] = {tid: [] for tid in tag_ids}
+    for row in result.all():
+        by_tag[row.tag_id].append(
+            {"t": row.bucket.isoformat(), "v": round(float(row.avg), 4)}
+        )
+    return {"items": [{"tag_id": str(tid), "points": pts} for tid, pts in by_tag.items()]}
+
+
+# ---------------------------------------------------------------------------
+# R-Net settings (sampling-level durations + retention) — admin-tunable
+# ---------------------------------------------------------------------------
+
+_SETTINGS_FIELDS = (
+    "level_fastest_s",
+    "level_fast_s",
+    "level_slow_s",
+    "level_slowest_s",
+    "ring_window_h",
+    "store_months",
+    "reset_warn_days",
+)
+
+
+def _settings_dict(s: ScadaSettings) -> dict:
+    return {f: getattr(s, f) for f in _SETTINGS_FIELDS}
+
+
+@router.get("/settings", response_model=RnetSettingsOut)
+async def get_rnet_settings(
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    """Read the single R-Net settings row (created with defaults if missing)."""
+    return _settings_dict(await rnet_settings.get_settings(db))
+
+
+@router.patch("/settings", response_model=RnetSettingsOut)
+async def update_rnet_settings(
+    body: RnetSettingsUpdateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[
+        Profile, Depends(require_permission("scada:view", "scada:manage"))
+    ] = None,
+):
+    """Update sampling-level durations / retention knobs (partial). The bridge,
+    historian, alarm engine and archiver pick up changes on their next loop."""
+    s = await rnet_settings.get_settings(db)
+    for field, val in body.model_dump(exclude_unset=True).items():
+        setattr(s, field, val)
+    await db.flush()
+    await db.refresh(s)
+    return _settings_dict(s)

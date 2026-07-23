@@ -36,10 +36,10 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services import notifier
+from app.services import notifier, rnet_settings
 from db.models.scada import (
     ScadaAlarmEvent,
-    ScadaSample,
+    ScadaSampleAll,
     ScadaTag,
     ScadaTagLatest,
 )
@@ -66,17 +66,14 @@ def _bounds(config: dict | None) -> tuple[float | None, float | None]:
     return _num(cfg.get("alarm_min")), _num(cfg.get("alarm_max"))
 
 
-def _silent_after_s(config: dict | None) -> int:
+def _silent_after_s(settings, config: dict | None) -> int:
     """No data for longer than this ⇒ the sensor is considered silent.
-    Ring-mode tags (store_enabled off) live at ~1 s resolution, so the 60 s
-    floor is their whole window; interval tags get 3× their interval."""
+    Ring-mode tags (store_enabled off) sample fast, so the 60 s floor is their
+    whole window; historian tags get 3× their sampling interval."""
     cfg = config or {}
     if not cfg.get("store_enabled"):
         return SILENT_FLOOR_S
-    try:
-        interval = int(cfg.get("storage_interval_s"))
-    except (TypeError, ValueError):
-        interval = 60
+    interval = rnet_settings.resolve_interval(settings, cfg, floor_s=1)
     return max(SILENT_FACTOR * interval, SILENT_FLOOR_S)
 
 
@@ -153,9 +150,9 @@ async def _last_seen(
     if latest is not None:
         return latest.ts
     result = await db.execute(
-        select(ScadaSample.ts)
-        .where(ScadaSample.tag_id == tag.id)
-        .order_by(ScadaSample.ts.desc())
+        select(ScadaSampleAll.ts)
+        .where(ScadaSampleAll.tag_id == tag.id)
+        .order_by(ScadaSampleAll.ts.desc())
         .limit(1)
     )
     return result.scalar_one_or_none()
@@ -164,6 +161,7 @@ async def _last_seen(
 async def evaluate_once(db: AsyncSession) -> None:
     """One evaluation pass over every enabled tag."""
     now = datetime.now(timezone.utc)
+    settings = await rnet_settings.get_settings(db)
 
     tags = (
         (await db.execute(select(ScadaTag).where(ScadaTag.enabled.is_(True))))
@@ -211,13 +209,34 @@ async def evaluate_once(db: AsyncSession) -> None:
             # --- silence alarm -------------------------------------------- #
             if _wants_silent(tag):
                 last_seen = await _last_seen(db, tag, latest)
-                cutoff = now - timedelta(seconds=_silent_after_s(tag.config))
+                cutoff = now - timedelta(seconds=_silent_after_s(settings, tag.config))
                 is_silent = last_seen is not None and last_seen < cutoff
                 open_silent = open_events.get((tag.id, "silent"))
                 if is_silent and open_silent is None:
                     await _open_event(db, tag, "silent", None, None)
                 elif not is_silent and last_seen is not None and open_silent is not None:
                     await _clear_event(db, tag, open_silent)
+
+            # --- reset-reminder alarm (historian tags only) --------------- #
+            # H-`reset_warn_days` before a store tag's 1-month archive+reset, so
+            # the operator can export/verify before its data resets from 0.
+            open_expiring = open_events.get((tag.id, "expiring"))
+            cycle_start = (
+                None
+                if rnet_settings.is_ring(tag.config)
+                else rnet_settings.parse_cycle_start(tag.config)
+            )
+            if cycle_start is not None:
+                reset_at = rnet_settings.cycle_reset_at(settings, cycle_start)
+                warn_at = reset_at - timedelta(days=settings.reset_warn_days)
+                is_expiring = now >= warn_at
+                if is_expiring and open_expiring is None:
+                    await _open_event(db, tag, "expiring", None, None)
+                elif not is_expiring and open_expiring is not None:
+                    await _clear_event(db, tag, open_expiring)
+            elif open_expiring is not None:
+                # Store turned off / cycle cleared → the reminder no longer holds.
+                await _clear_event(db, tag, open_expiring)
         except Exception:
             logger.exception("Alarm evaluation failed for tag %s", tag.id)
 

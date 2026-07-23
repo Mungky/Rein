@@ -37,6 +37,7 @@ KIND_LABELS = {
     "high": "di atas batas",
     "low": "di bawah batas",
     "silent": "tidak mengirim data",
+    "expiring": "akan direset",
 }
 
 
@@ -60,6 +61,13 @@ def build_message(
     unit = f" {tag.unit}" if tag.unit else ""
     when = event.triggered_at.astimezone(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
     if transition == "cleared":
+        if event.kind == "expiring":
+            subject = f"SIKLUS BARU: {tag.label}"
+            body = (
+                f"Data {tag.label} sudah diarsip ke Google Drive dan direset — "
+                f"pencatatan mulai lagi dari 0."
+            )
+            return subject, body
         subject = f"NORMAL KEMBALI: {tag.label}"
         if event.kind == "silent":
             body = f"Sensor {tag.label} sudah mengirim data lagi."
@@ -71,7 +79,14 @@ def build_message(
             )
         return subject, body
 
-    if event.kind == "silent":
+    if event.kind == "expiring":
+        subject = f"PENGINGAT RESET: {tag.label}"
+        body = (
+            f"Data {tag.label} akan diarsip ke Google Drive lalu direset dari 0 "
+            f"dalam beberapa hari. Pastikan sudah diekspor bila perlu salinan "
+            f"tambahan."
+        )
+    elif event.kind == "silent":
         subject = f"SENSOR BISU: {tag.label}"
         body = (
             f"Sensor {tag.label} berhenti mengirim data (terdeteksi {when}). "

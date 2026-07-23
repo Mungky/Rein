@@ -1,27 +1,20 @@
 "use client";
 
 /** "Export Data" — download the selected sensors' history as Excel over a
- *  chosen range. "Semua" covers the DB's 90-day window; anything older has
- *  already been archived to Google Drive (R-Net Arsip) by the archiver. */
+ *  chosen range. "Semua" covers the current DB window; older cycles have
+ *  already been archived to Google Drive (R-Net Arsip) by the reset job. */
 
 import { useEffect, useState } from "react";
 import { Download, ExternalLink, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
-import type { Tag } from "../types";
+import type { Archive, Tag } from "../types";
 import {
   EXPORT_RANGE_LABELS,
   exportRangeToExcel,
   type ExportRangeKey,
 } from "./export-excel";
-
-interface ArchiveItem {
-  month: string;
-  file_name: string;
-  web_link: string | null;
-  row_count: number;
-}
 
 export function ExportRangeDialog({
   tags,
@@ -34,7 +27,7 @@ export function ExportRangeDialog({
 }) {
   const [range, setRange] = useState<ExportRangeKey>("today");
   const [busy, setBusy] = useState(false);
-  const [archives, setArchives] = useState<ArchiveItem[]>([]);
+  const [archives, setArchives] = useState<Archive[]>([]);
 
   useEffect(() => {
     scadaApi
@@ -107,14 +100,15 @@ export function ExportRangeDialog({
             </label>
           ))}
           <p className="mt-1 text-[11px] leading-snug text-text-light">
-            Data lebih tua dari 90 hari sudah diarsip otomatis ke Google Drive
-            (folder <span className="font-semibold">R-Net Arsip</span>).
+            Setiap sensor diakumulasi 1 bulan, lalu otomatis diarsip ke Google
+            Drive (folder <span className="font-semibold">R-Net Arsip</span>) dan
+            direset dari 0.
           </p>
           {archives.length > 0 && (
             <div className="mt-1 max-h-28 overflow-y-auto rounded-[var(--r)] border border-border-soft bg-bg-sidebar p-2">
               {archives.map((a) => (
                 <a
-                  key={a.month}
+                  key={`${a.tag_id}-${a.cycle_start}`}
                   href={a.web_link ?? undefined}
                   target="_blank"
                   rel="noreferrer"

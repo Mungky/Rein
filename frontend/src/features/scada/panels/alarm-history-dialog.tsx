@@ -16,6 +16,7 @@ const KIND_LABELS: Record<string, string> = {
   high: "Di atas batas",
   low: "Di bawah batas",
   silent: "Sensor bisu",
+  expiring: "Pengingat reset",
 };
 
 function fmt(iso: string | null): string {
@@ -128,6 +129,7 @@ export function AlarmHistoryDialog({
             <option value="high">Di atas batas</option>
             <option value="low">Di bawah batas</option>
             <option value="silent">Sensor bisu</option>
+            <option value="expiring">Pengingat reset</option>
           </select>
           {loading && <Loader2 className="size-4 animate-spin text-text-light" />}
         </div>

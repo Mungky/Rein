@@ -15,7 +15,7 @@ export const EXPORT_RANGE_LABELS: Record<ExportRangeKey, string> = {
   today: "Hari ini",
   week: "Minggu ini",
   month: "Bulan ini",
-  all: "Semua (90 hari)",
+  all: "Semua (1 bulan)",
 };
 
 function rangeStart(range: ExportRangeKey, now: Date): Date {

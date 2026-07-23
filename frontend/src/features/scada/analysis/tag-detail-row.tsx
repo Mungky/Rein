@@ -10,12 +10,12 @@
  *      (5/10/20/50/100 per page, newest first).
  *
  *  Storage model (user's CCTV analogy):
- *   - "Simpan data" OFF → ring mode: the DB keeps only the newest 100 rows
- *     (~1 s apart); row #101 in, oldest out.
- *   - ON → one row per chosen interval, kept 90 days, then auto-archived to
- *     Google Drive before deletion. */
+ *   - "Simpan data" OFF → ring mode: the DB keeps only the last 24 hours.
+ *   - ON → historian: accumulates a fixed 1 month, then auto-archives to Google
+ *     Drive and resets from 0. Fast levels are blocked while storing.
+ *  Both lanes sample at the tag's chosen level (admin sets the seconds). */
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -27,20 +27,32 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
-import type { RecentSample, Tag } from "../types";
+import type { RecentSample, SamplingLevel, Tag } from "../types";
 import { exportTagToExcel } from "./export-excel";
 import { TagSparkline, type SparkStatus } from "./tag-sparkline";
+import { usePanelRefresh } from "../panels/use-panel-refresh";
 
-const INTERVAL_OPTIONS: { value: number; label: string }[] = [
-  { value: 5, label: "5 detik" },
-  { value: 10, label: "10 detik" },
-  { value: 30, label: "30 detik" },
-  { value: 60, label: "1 menit" },
-  { value: 300, label: "5 menit" },
-  { value: 900, label: "15 menit" },
-  { value: 3600, label: "1 jam" },
-  { value: 21600, label: "6 jam" },
-  { value: 86400, label: "24 jam" },
+/** Sambung ekor live (titik lebih baru dari data historis terakhir) ke deret
+ *  jendela waktu, supaya ujung kurva bergerak tiap detik tanpa menunggu fetch
+ *  berikutnya — pola sama dengan ChartPanel di Monitor. */
+function withLiveTail(base: RecentSample[], live: RecentSample[]): RecentSample[] {
+  if (base.length === 0) return live;
+  const lastT = new Date(base[base.length - 1].ts).getTime();
+  const tail = live.filter((s) => new Date(s.ts).getTime() > lastT);
+  return tail.length ? base.concat(tail) : base;
+}
+
+/** The 4 sampling levels. Fast levels are ring-only (blocked when storing) so
+ *  the 1-month historian never explodes; their seconds are admin-tunable. */
+const LEVEL_OPTIONS: {
+  value: SamplingLevel;
+  label: string;
+  ringOnly: boolean;
+}[] = [
+  { value: "fastest", label: "Fastest", ringOnly: true },
+  { value: "fast", label: "Fast", ringOnly: true },
+  { value: "slow", label: "Slow", ringOnly: false },
+  { value: "slowest", label: "Slowest", ringOnly: false },
 ];
 
 const PAGE_SIZES = [5, 10, 20, 50, 100];
@@ -81,7 +93,7 @@ export function TagDetailRow({
 }) {
   const cfg = tag.config as Record<string, unknown>;
   const storeEnabled = Boolean(cfg.store_enabled);
-  const intervalS = Number(cfg.storage_interval_s) || 60;
+  const level = (cfg.sampling_level as SamplingLevel) || "fast";
   const topic = String(cfg.mqtt_topic ?? "");
   const alarmMin = cfg.alarm_min ?? null;
   const alarmMax = cfg.alarm_max ?? null;
@@ -91,7 +103,35 @@ export function TagDetailRow({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  // `samples` (dari analysis-view) sudah = data tersimpan + titik live sesi ini.
   const ascending = useMemo(() => [...samples].reverse(), [samples]);
+
+  // Grafik besar = 24 jam terakhir (bucketed dari server). Di-fetch ulang pada
+  // irama panel (60 dtk) supaya bucket baru masuk; di antara fetch, ekor live
+  // ditempel dari `ascending` supaya ujung kurva bergerak tiap detik.
+  const [chart24h, setChart24h] = useState<RecentSample[] | null>(null);
+  const loadChart = useCallback(async () => {
+    const end = new Date();
+    const start = new Date(end.getTime() - 86_400_000);
+    try {
+      const res = await scadaApi.getHistory([tag.id], start, end);
+      const pts = res.series[0]?.points ?? [];
+      setChart24h(pts.map((p) => ({ ts: p.t, value: p.avg })));
+    } catch {
+      /* biarkan tampilan lama; usePanelRefresh coba lagi */
+    }
+  }, [tag.id]);
+  usePanelRefresh(loadChart);
+
+  // Grafik 24 jam + ekor live bila datanya cukup; sensor baru (< 2 titik dalam
+  // 24 jam) pakai data live sesi ini supaya langsung tergambar & bergerak.
+  const chartSamples = useMemo(
+    () =>
+      chart24h && chart24h.length >= 2
+        ? withLiveTail(chart24h, ascending)
+        : ascending,
+    [chart24h, ascending]
+  );
 
   const stats = useMemo(() => {
     if (samples.length === 0) return null;
@@ -153,7 +193,7 @@ export function TagDetailRow({
         <div className="mb-3 rounded-[var(--r-lg)] border border-border-soft bg-bg p-2">
           <div className="mb-1 flex items-center gap-2 px-1">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-text-light">
-              {samples.length} data terakhir
+              24 jam terakhir
             </span>
             {online ? (
               <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-green">
@@ -162,16 +202,19 @@ export function TagDetailRow({
             ) : (
               <span className="text-[10.5px] text-text-light">offline</span>
             )}
-            {loading && <Loader2 className="size-3 animate-spin text-text-light" />}
+            {(loading || chart24h === null) && (
+              <Loader2 className="size-3 animate-spin text-text-light" />
+            )}
             <div className="flex-1" />
-            {samples.length > 0 && (
+            {chartSamples.length > 0 && (
               <span className="text-[10.5px] tabular-nums text-text-light">
-                {fmtTs(samples[samples.length - 1].ts)} — {fmtTs(samples[0].ts)}
+                {fmtTs(chartSamples[0].ts)} —{" "}
+                {fmtTs(chartSamples[chartSamples.length - 1].ts)}
               </span>
             )}
           </div>
           <TagSparkline
-            samples={ascending}
+            samples={chartSamples}
             status={sparkStatus}
             width={720}
             height={110}
@@ -196,48 +239,56 @@ export function TagDetailRow({
                 className="mt-0.5 accent-[var(--rein-primary)]"
                 checked={storeEnabled}
                 disabled={!canManage || saving}
-                onChange={(e) =>
-                  void patchConfig({
-                    store_enabled: e.target.checked ? true : undefined,
-                  })
-                }
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  const patch: Record<string, unknown> = {
+                    store_enabled: on ? true : undefined,
+                  };
+                  // Store hanya boleh Slow/Slowest — naikkan otomatis bila perlu.
+                  if (on && (level === "fastest" || level === "fast")) {
+                    patch.sampling_level = "slow";
+                  }
+                  void patchConfig(patch);
+                }}
               />
               <span className="text-[12.5px] text-text">
                 <span className="font-semibold">Simpan data ke riwayat</span>
                 <span className="block text-[11px] leading-snug text-text-light">
                   {storeEnabled
-                    ? "Disimpan sesuai interval, ditahan 90 hari, lalu otomatis diarsip ke Google Drive."
-                    : "Hanya 100 data terakhir yang disimpan (seperti SD card CCTV) — data ke-101 masuk, data tertua terhapus."}
+                    ? "Diakumulasi 1 bulan, lalu otomatis diarsip ke Google Drive dan direset dari 0."
+                    : "Hanya 24 jam terakhir yang disimpan (seperti SD card CCTV) — data lama otomatis terhapus."}
                 </span>
               </span>
             </label>
 
-            {storeEnabled && (
-              <div className="pl-6">
-                <label className="mb-1 block text-[11px] font-semibold text-text-muted">
-                  Interval Penyimpanan
-                </label>
-                <select
-                  className="field-select h-8 cursor-pointer text-[12px]"
-                  value={intervalS}
-                  disabled={!canManage || saving}
-                  onChange={(e) =>
-                    void patchConfig({
-                      storage_interval_s:
-                        Number(e.target.value) === 60
-                          ? undefined
-                          : Number(e.target.value),
-                    })
-                  }
-                >
-                  {INTERVAL_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div className="pl-6">
+              <label className="mb-1 block text-[11px] font-semibold text-text-muted">
+                Kecepatan Sampling
+              </label>
+              <select
+                className="field-select h-8 cursor-pointer text-[12px]"
+                value={level}
+                disabled={!canManage || saving}
+                onChange={(e) =>
+                  void patchConfig({ sampling_level: e.target.value })
+                }
+              >
+                {LEVEL_OPTIONS.map((o) => (
+                  <option
+                    key={o.value}
+                    value={o.value}
+                    disabled={storeEnabled && o.ringOnly}
+                  >
+                    {o.label}
+                    {storeEnabled && o.ringOnly ? " (mode 24 jam saja)" : ""}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[10.5px] leading-snug text-text-light">
+                Fastest &amp; Fast hanya untuk mode 24 jam. Durasi tiap level
+                diatur admin di Panel Administrasi → R-Net.
+              </p>
+            </div>
 
             <label
               className={cn(

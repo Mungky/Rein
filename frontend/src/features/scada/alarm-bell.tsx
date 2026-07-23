@@ -26,6 +26,7 @@ const KIND_LABELS: Record<string, string> = {
   high: "di atas batas",
   low: "di bawah batas",
   silent: "sensor bisu",
+  expiring: "akan diarsip & direset",
 };
 
 function beep() {

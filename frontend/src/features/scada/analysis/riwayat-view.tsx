@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
-import { Download, Loader2, RefreshCw, X, XCircle } from "lucide-react";
+import { ArrowLeft, Download, Loader2, RefreshCw, X, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import {
   CartesianGrid,
@@ -105,16 +105,21 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
 
   /* ── virtualisasi ── */
 
+  // Depend on initialLoaded: the scroller only mounts AFTER the first page
+  // loads (a spinner shows before that), so an effect with [] would run while
+  // scrollerRef is still null and never attach — leaving viewH at 0, which
+  // renders only the overscan (~10) rows. Re-run when the scroller appears.
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
+    setViewH(el.clientHeight); // measure immediately, don't wait for a resize
     const ro = new ResizeObserver((entries) => {
       const r = entries[0]?.contentRect;
       if (r) setViewH(r.height);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [initialLoaded]);
 
   function onScroll() {
     const el = scrollerRef.current;
@@ -228,6 +233,13 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
     <div className="fixed inset-0 z-40 flex flex-col bg-bg">
       {/* ── Header ── */}
       <div className="flex shrink-0 items-start gap-3 border-b border-border-soft px-5 pb-3 pt-4">
+        <button
+          onClick={onClose}
+          className="btn btn-ghost btn-sm shrink-0 gap-1.5"
+          title="Kembali ke daftar sensor"
+        >
+          <ArrowLeft className="size-4" /> Kembali
+        </button>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-[15px] font-bold text-text">
             Riwayat — {tag.label}
@@ -236,8 +248,8 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
             )}
           </h2>
           <p className="mt-0.5 text-[11.5px] text-text-muted">
-            {tag.device_key} · {tag.source} · data disimpan 90 hari — lebih lama
-            ada di arsip Google Drive
+            {tag.device_key} · {tag.source} · diakumulasi 1 bulan, lalu diarsip
+            ke Google Drive &amp; direset — arsip lama ada di Drive
           </p>
         </div>
         <button

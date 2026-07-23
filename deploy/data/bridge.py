@@ -4,10 +4,13 @@
 WHAT IT DOES
     V-Boxes (or any device) publish sensor values to an MQTT broker. This
     bridge subscribes to the topics configured in the R-Net UI, keeps the
-    latest value per tag, and every minute writes one row per tag into the
-    SAME `scada_samples` table the R-Net dashboards already read. No second
-    database, no second data model — the charts/gauges/Analisis light up with
-    real data automatically.
+    latest value per tag, and writes rows into the two historian lanes the
+    R-Net dashboards read through the `scada_samples_all` view:
+      - ring tags ("Simpan data" OFF) → `scada_ring` (24h buffer, pruned here)
+      - store tags ("Simpan data" ON)  → `scada_samples` (monthly archive+reset)
+    Both sample at the tag's chosen sampling level (fastest/fast/slow/slowest,
+    seconds set by admin in scada_settings). No second database — the
+    charts/gauges/Analisis light up with real data automatically.
 
 CONFIG LIVES IN THE DATABASE, NOT HERE
     Sites (brokers) and tags (topics) are managed entirely from the R-Net
@@ -22,14 +25,13 @@ RESOLUTION — TWO LANES
     live numbers (Supabase Realtime) and the backend alarm engine — no history
     rows are created by this lane, however fast a device publishes.
 
-    History lane: each tag has its own storage interval (config
-    `storage_interval_s`, default FLUSH_INTERVAL_S = 60). MQTT is push
-    (messages arrive any time), but we store one row per tag per interval
-    bucket: the latest value received in a bucket is written when the bucket
-    boundary passes, stamped at that boundary (PK tag_id+ts, ON CONFLICT DO
-    NOTHING). A tag that sends nothing in a bucket produces a gap — exactly
-    what a real sampled historian should show (the UI already flags stale
-    data).
+    History lane: each tag samples at its `sampling_level` interval (seconds
+    from scada_settings). MQTT is push (messages arrive any time), but we store
+    one row per tag per interval bucket: the latest value received in a bucket
+    is written when the bucket boundary passes, stamped at that boundary (PK
+    tag_id+ts, ON CONFLICT DO NOTHING), into scada_ring or scada_samples per the
+    tag's store flag. A tag that sends nothing in a bucket produces a gap —
+    exactly what a real sampled historian should show (the UI flags stale data).
 
 RESILIENCE (never crash the box)
     - Broker down / drops     → paho auto-reconnects; on reconnect we
@@ -93,15 +95,19 @@ LATEST_FLUSH_S = float(os.getenv("LATEST_FLUSH_S", "1.0"))
 LATEST_ENABLED = os.getenv("LATEST_ENABLED", "1") not in ("0", "false", "False")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
-# Fastest storage interval a tag may configure (seconds).
-MIN_INTERVAL_S = 5
+# Fastest storage interval a tag may configure (seconds) — floor for the
+# "Fastest" sampling level.
+MIN_INTERVAL_S = 2
 
-# Ring mode ("simpan data" NOT ticked): like a CCTV SD card — the tag keeps
-# only its newest RING_KEEP rows in scada_samples, written at 1 s resolution;
-# row #101 in, oldest row out. Ticked tags store per storage_interval_s and
-# are kept 90 days + archived instead.
-RING_INTERVAL_S = 1
-RING_KEEP = int(os.getenv("RING_KEEP", "100"))
+# Sampling-level → seconds defaults, used until the scada_settings row is read
+# (admin can retune them). A tag stores config.sampling_level ∈ these keys.
+DEFAULT_LEVELS = {"fastest": 2, "fast": 5, "slow": 30, "slowest": 60}
+DEFAULT_LEVEL = "fast"
+
+# Ring mode ("simpan data" NOT ticked): like a CCTV SD card kept by TIME — ring
+# rows go to scada_ring and are pruned to the last `ring_window_h` hours (24h
+# default). Store tags go to scada_samples and are archived+reset monthly.
+DEFAULT_RING_WINDOW_H = 24
 PRUNE_EVERY_S = int(os.getenv("PRUNE_EVERY_S", "60"))
 
 logging.basicConfig(
@@ -127,20 +133,21 @@ class SiteCfg:
     topics: dict[str, str] = field(default_factory=dict)
 
 
-def _parse_interval(config: dict | None) -> tuple[int, bool]:
+def _parse_interval(config: dict | None, levels: dict[str, int]) -> tuple[int, bool]:
     """Per-tag storage plan from config: returns (interval_s, is_ring).
 
-    `store_enabled` truthy → interval mode: one row per `storage_interval_s`
-    (default 60 s), retained long-term. Otherwise → ring mode: one row per
-    second, pruned to the newest RING_KEEP rows (CCTV SD-card behavior)."""
+    Both lanes sample at the tag's chosen `sampling_level` (fastest/fast/slow/
+    slowest → seconds from the admin-tunable scada_settings). `store_enabled`
+    only decides WHICH table + retention: off → ring (scada_ring, 24h window),
+    on → historian (scada_samples, monthly archive+reset)."""
     cfg = config or {}
-    if not cfg.get("store_enabled"):
-        return RING_INTERVAL_S, True
+    level = cfg.get("sampling_level") or DEFAULT_LEVEL
+    seconds = levels.get(level, levels.get(DEFAULT_LEVEL, DEFAULT_LEVELS[DEFAULT_LEVEL]))
     try:
-        interval = int(cfg.get("storage_interval_s"))
+        seconds = max(MIN_INTERVAL_S, int(seconds))
     except (TypeError, ValueError):
-        return FLUSH_INTERVAL_S, False
-    return max(MIN_INTERVAL_S, interval), False
+        seconds = DEFAULT_LEVELS[DEFAULT_LEVEL]
+    return seconds, not cfg.get("store_enabled")
 
 
 def _coerce_value(payload: bytes) -> float | None:
@@ -211,10 +218,13 @@ class Bridge:
         self._pending: dict[str, float] = {}
         # Live lane: newest (ts, value) per tag since the last latest-flush.
         self._latest_pending: dict[str, tuple[datetime, float]] = {}
-        # tag_id -> storage interval in seconds (from config storage_interval_s)
+        # tag_id -> storage interval in seconds (resolved from sampling_level)
         self._interval: dict[str, int] = {}
-        # tag_ids in ring mode (store_enabled off) — pruned to RING_KEEP rows
+        # tag_ids in ring mode (store_enabled off) — written to scada_ring
         self._ring: set[str] = set()
+        # sampling-level durations + ring window, read from scada_settings
+        self._levels: dict[str, int] = dict(DEFAULT_LEVELS)
+        self._ring_window_h: int = DEFAULT_RING_WINDOW_H
         # tag_id -> last bucket index a sample was stored for (or the bucket a
         # first pending value was "armed" in) — see flush()
         self._bucket: dict[str, int] = {}
@@ -252,6 +262,25 @@ class Bridge:
         interval: dict[str, int] = {}
         ring: set[str] = set()
         with self._db().cursor() as cur:
+            # Admin-tunable sampling-level durations + ring window (single row).
+            try:
+                cur.execute(
+                    "SELECT level_fastest_s, level_fast_s, level_slow_s, "
+                    "level_slowest_s, ring_window_h FROM scada_settings WHERE id = 1"
+                )
+                srow = cur.fetchone()
+                if srow:
+                    self._levels = {
+                        "fastest": int(srow[0]),
+                        "fast": int(srow[1]),
+                        "slow": int(srow[2]),
+                        "slowest": int(srow[3]),
+                    }
+                    self._ring_window_h = int(srow[4])
+            except Exception:
+                # Table missing (pre-migration DB) → keep defaults, don't crash.
+                log.warning("scada_settings tidak terbaca, memakai default level")
+
             cur.execute(
                 "SELECT id, mqtt_host, mqtt_port, mqtt_username, mqtt_password "
                 "FROM scada_sites WHERE enabled = true"
@@ -271,7 +300,7 @@ class Bridge:
                 if isinstance(topic, str) and topic.strip():
                     site.topics[topic.strip()] = str(tag_id)
                     xform[str(tag_id)] = _parse_transform(config)
-                    interval[str(tag_id)], is_ring = _parse_interval(config)
+                    interval[str(tag_id)], is_ring = _parse_interval(config, self._levels)
                     if is_ring:
                         ring.add(str(tag_id))
         return sites, xform, interval, ring
@@ -415,14 +444,28 @@ class Bridge:
 
         if not rows:
             return
+        # Route each row to its lane: ring tags → scada_ring (24h buffer),
+        # store tags → scada_samples (historian).
+        ring_rows = [r for r in rows if r[0] in self._ring]
+        hist_rows = [r for r in rows if r[0] not in self._ring]
         try:
             with self._db().cursor() as cur:
-                cur.executemany(
-                    "INSERT INTO scada_samples (tag_id, ts, value) "
-                    "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                    rows,
-                )
-            log.info("Flush: %d nilai riwayat tersimpan", len(rows))
+                if ring_rows:
+                    cur.executemany(
+                        "INSERT INTO scada_ring (tag_id, ts, value) "
+                        "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                        ring_rows,
+                    )
+                if hist_rows:
+                    cur.executemany(
+                        "INSERT INTO scada_samples (tag_id, ts, value) "
+                        "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                        hist_rows,
+                    )
+            log.info(
+                "Flush: %d ring + %d historian tersimpan",
+                len(ring_rows), len(hist_rows),
+            )
         except Exception:
             # Keep going — put the values back so the next pass retries them
             log.exception("Gagal menyimpan ke database, akan dicoba lagi")
@@ -431,19 +474,15 @@ class Bridge:
                     self._pending.setdefault(tag_id, value)
 
     def prune_ring(self) -> None:
-        """Ring-mode tags keep only their newest RING_KEEP rows — row #101 in,
-        oldest row out (CCTV SD-card model). Runs every PRUNE_EVERY_S."""
-        if not self._ring:
-            return
+        """Ring lane keeps only the last `ring_window_h` hours (CCTV-by-time
+        model): rows older than the window are deleted. One statement across all
+        of scada_ring — runs every PRUNE_EVERY_S."""
         try:
             with self._db().cursor() as cur:
-                for tag_id in list(self._ring):
-                    cur.execute(
-                        "DELETE FROM scada_samples WHERE tag_id = %s AND ts < ("
-                        "SELECT ts FROM scada_samples WHERE tag_id = %s "
-                        "ORDER BY ts DESC OFFSET %s LIMIT 1)",
-                        (tag_id, tag_id, RING_KEEP - 1),
-                    )
+                cur.execute(
+                    "DELETE FROM scada_ring WHERE ts < now() - make_interval(hours => %s)",
+                    (self._ring_window_h,),
+                )
         except Exception:
             log.exception("Gagal memangkas data ring, akan dicoba lagi")
 
