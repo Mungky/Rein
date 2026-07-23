@@ -32,8 +32,26 @@ jobs:
         continue-on-error: true
 
   backend:
-    name: Backend (pytest)
+    name: Backend (pytest + cek RLS)
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rein
+      # Tes RLS (backend/tests/test_rls.py) TIDAK boleh skip di CI —
+      # database service + migrasi penuh selalu tersedia di job ini.
+      RLS_TEST_REQUIRED: "1"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rein
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,5 +59,14 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r backend/requirements-dev.txt
+      - name: Shim Supabase (schema auth/storage, role, publication realtime)
+        run: psql "$DATABASE_URL" -f db/ci_supabase_shim.sql
+      - name: Migrasi penuh (alembic upgrade head)
+        run: alembic upgrade head
+        working-directory: db
+        env:
+          # sslmode=disable — Postgres service CI tidak ber-TLS (env.py
+          # menambahkan sslmode=require kalau tidak disebut eksplisit).
+          MIGRATION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rein?sslmode=disable
       - run: python -m pytest -q
         working-directory: backend
