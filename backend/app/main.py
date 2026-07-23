@@ -39,7 +39,7 @@ from app.routers import (
     scada_alarms,
 )
 from app.services.task_queue import task_queue, TaskType
-from app.services import alarm_engine, archiver, historian
+from app.services import alarm_engine, archiver, health_monitor, historian
 
 logger = logging.getLogger(__name__)
 
@@ -122,11 +122,18 @@ async def lifespan(app: FastAPI):
     archiver_task = (
         asyncio.create_task(archiver.archiver_loop()) if archiver.ENABLED else None
     )
+    health_task = (
+        asyncio.create_task(health_monitor.health_loop())
+        if health_monitor.ENABLED
+        else None
+    )
     logger.info("REIN API started — task queue active, cleanup every %ds", CLEANUP_INTERVAL)
     if historian_task is None:
         logger.warning("Historian sampler DISABLED via HISTORIAN_ENABLED")
     if alarm_task is None:
         logger.warning("Alarm engine DISABLED via ALARM_ENGINE_ENABLED")
+    if health_task is None:
+        logger.warning("Health monitor DISABLED via HEALTH_MONITOR_ENABLED")
     yield
     cleanup_task.cancel()
     if historian_task:
@@ -137,6 +144,8 @@ async def lifespan(app: FastAPI):
         alarm_task.cancel()
     if archiver_task:
         archiver_task.cancel()
+    if health_task:
+        health_task.cancel()
     await task_queue.stop()
     logger.info("REIN API shutting down")
 
@@ -175,7 +184,9 @@ async def security_headers(request: Request, call_next):
 
 @app.middleware("http")
 async def log_server_errors(request: Request, call_next):
-    """Server errors must never be silent — log path + traceback for every 5xx.
+    """Server errors must never be silent — log path + traceback for every 5xx,
+    plus a throttled Telegram alert via the health monitor (fire-and-forget so
+    the response path is never blocked by the Telegram API).
 
     This is the minimum observability floor; pipe logs to an error tracker
     (e.g. Sentry) when an account/DSN is available.
@@ -186,10 +197,18 @@ async def log_server_errors(request: Request, call_next):
         logger.exception(
             "Unhandled exception on %s %s", request.method, request.url.path
         )
+        asyncio.create_task(
+            health_monitor.report_server_error(request.method, request.url.path, 500)
+        )
         raise
     if response.status_code >= 500:
         logger.error(
             "HTTP %d on %s %s", response.status_code, request.method, request.url.path
+        )
+        asyncio.create_task(
+            health_monitor.report_server_error(
+                request.method, request.url.path, response.status_code
+            )
         )
     return response
 

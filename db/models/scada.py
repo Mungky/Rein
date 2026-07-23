@@ -292,6 +292,29 @@ class ScadaTagLatest(Base):
     )
 
 
+class ScadaBridgeStatus(Base):
+    """Heartbeat bridge MQTT per site — bahan alarm kesehatan sistem.
+
+    Di-UPSERT setiap ~15 s oleh bridge di PC site: `connected` = status
+    koneksi ke broker site itu, `changed_at` = kapan status terakhir
+    berubah, `updated_at` = detak jantung. Health monitor backend
+    membacanya: updated_at basi ⇒ bridge mati/PC padam; connected=false
+    lama ⇒ broker tak terjangkau."""
+
+    __tablename__ = "scada_bridge_status"
+
+    site_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scada_sites.id", ondelete="CASCADE"), primary_key=True
+    )
+    connected: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    changed_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
 class ScadaAlarmEvent(UUIDMixin, TimestampMixin, Base):
     """One alarm occurrence — permanent history, rows are never deleted.
 

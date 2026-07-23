@@ -110,6 +110,11 @@ DEFAULT_LEVEL = "fast"
 DEFAULT_RING_WINDOW_H = 24
 PRUNE_EVERY_S = int(os.getenv("PRUNE_EVERY_S", "60"))
 
+# Health lane: seberapa sering status koneksi tiap site di-UPSERT ke
+# scada_bridge_status (detak jantung). Health monitor backend menganggap
+# bridge mati bila baris ini basi > 2 menit — jadi jangan set di atas itu.
+HEARTBEAT_S = int(os.getenv("HEARTBEAT_S", "15"))
+
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s %(message)s",
@@ -236,6 +241,9 @@ class Bridge:
         self._xform: dict[str, Transform] = {}
         self._conn: psycopg.Connection | None = None
         self._stop = threading.Event()
+        # Heartbeat pernah gagal? (tabel belum ada di DB pra-migrasi) —
+        # supaya log tidak banjir warning tiap HEARTBEAT_S.
+        self._hb_warned = False
 
     # -- database ---------------------------------------------------------- #
 
@@ -522,6 +530,46 @@ class Bridge:
                 for tag_id, pair in batch:
                     self._latest_pending.setdefault(tag_id, pair)
 
+    def heartbeat(self) -> None:
+        """Health lane: catat status koneksi tiap site ke scada_bridge_status.
+
+        `updated_at` selalu maju (detak jantung — basi berarti bridge mati),
+        `changed_at` hanya bergeser saat status connect berubah. Health
+        monitor backend membaca keduanya lalu mengirim alarm Telegram."""
+        rows = [
+            (site_id, client.is_connected())
+            for site_id, client in self._clients.items()
+        ]
+        if not rows:
+            return
+        try:
+            with self._db().cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO scada_bridge_status "
+                    "  (site_id, connected, changed_at, updated_at) "
+                    "VALUES (%s, %s, now(), now()) "
+                    "ON CONFLICT (site_id) DO UPDATE SET "
+                    "  connected = EXCLUDED.connected, "
+                    "  changed_at = CASE "
+                    "    WHEN scada_bridge_status.connected "
+                    "         IS DISTINCT FROM EXCLUDED.connected "
+                    "    THEN now() ELSE scada_bridge_status.changed_at END, "
+                    "  updated_at = now()",
+                    rows,
+                )
+            self._hb_warned = False
+        except Exception:
+            # Tabel belum ada (DB pra-migrasi) atau DB down — jangan crash,
+            # dan jangan banjiri log: warning sekali, sisanya debug.
+            if not self._hb_warned:
+                log.warning(
+                    "Gagal menulis heartbeat — tabel scada_bridge_status "
+                    "belum ada (jalankan migrasi) atau database down"
+                )
+                self._hb_warned = True
+            else:
+                log.debug("Heartbeat masih gagal", exc_info=True)
+
     # -- main loop --------------------------------------------------------- #
 
     def run(self) -> None:
@@ -538,6 +586,7 @@ class Bridge:
         )
         self.reconcile()
         last_latest = last_refresh = last_prune = time.monotonic()
+        last_hb = 0.0  # heartbeat pertama langsung pada tick pertama
 
         while not self._stop.is_set():
             now = time.monotonic()
@@ -552,6 +601,9 @@ class Bridge:
             if now - last_prune >= PRUNE_EVERY_S:
                 self.prune_ring()
                 last_prune = now
+            if now - last_hb >= HEARTBEAT_S:
+                self.heartbeat()
+                last_hb = now
             self._stop.wait(1.0)
 
         # Graceful shutdown: push the freshest live values, then close.
