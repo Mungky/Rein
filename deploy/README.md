@@ -54,7 +54,7 @@ bisa publish ke sana, dan jarak bukan lagi masalah.
 
 ```
 V-Box ──publish topik  vbox/...   ─┐
-                                    ├─►  Mosquitto di VPS (port 1883)
+                                    ├─►  Mosquitto di VPS (port 8883, TLS)
 Node-RED ─subscribe vbox/... , olah/kalibrasi,
           ─publish topik  rnet/<site>/<device>/<metric> ─┘
                                                  │

@@ -252,7 +252,7 @@ Yang diisi di **V-Net / V-Box** (menu MQTT perangkat):
 | Kolom di V-Net | Isi |
 |---|---|
 | Broker/Host | alamat broker VPS |
-| Port | 1883 (atau yang diset di VPS) |
+| Port | 8883 + centang SSL/TLS (1883 hanya untuk broker uji lokal) |
 | Username / Password | akun broker VPS |
 | Topik | bebas tapi konsisten, mis. `rnet/site1/boiler1/suhu` |
 | Payload | `{"value": 72.5}` atau angka polos `72.5` |

@@ -449,8 +449,8 @@ if ($doData) {
         Info "Broker MQTT ada di VPS (bukan di PC ini). Isi sebagai CATATAN untuk"
         Info "menyetel node MQTT di Node-RED nanti - Enter kalau belum tahu."
         $mqHost = (Read-Host "   MQTT_HOST - alamat broker VPS (mis. mqtt.remula.online)").Trim()
-        $mqPort = (Read-Host "   MQTT_PORT (Enter = 1883)").Trim()
-        if (-not $mqPort) { $mqPort = "1883" }
+        $mqPort = (Read-Host "   MQTT_PORT (Enter = 8883, TLS)").Trim()
+        if (-not $mqPort) { $mqPort = "8883" }
         $mqUser = (Read-Host "   MQTT_USERNAME").Trim()
         Set-ConfigKey $P.Config "MQTT_HOST" $mqHost "[DATA] Broker MQTT di VPS - CATATAN untuk menyetel Node-RED (tidak dibaca skrip)"
         Set-ConfigKey $P.Config "MQTT_PORT" $mqPort

@@ -351,6 +351,11 @@ class Bridge:
         )
         if site.username:
             client.username_pw_set(site.username, site.password or None)
+        if site.port == 8883:
+            # Port standar MQTT-TLS → broker VPS memakai sertifikat Let's
+            # Encrypt; verifikasi lewat CA bawaan OS (tanpa file CA khusus).
+            # Port lain (1883 dsb.) tetap plaintext — broker uji lokal.
+            client.tls_set()
         client.reconnect_delay_set(min_delay=1, max_delay=60)
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect

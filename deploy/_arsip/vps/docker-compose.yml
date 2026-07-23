@@ -10,7 +10,8 @@
 #  Arsitektur:
 #    OBS site ──RTMP push (1935)──▶ mediamtx ──LL-HLS (8888)──▶ Coolify/Traefik
 #                                                                (HTTPS domain tetap)
-#    V-Box    ──MQTT (1883)──▶ mosquitto ◀── bridge historian (resource terpisah)
+#    V-Box    ──MQTT+TLS (8883)──▶ mosquitto ◀── bridge historian (resource terpisah)
+#    (1883 plaintext hanya bisa diakses dari dalam VPS itu sendiri — localhost)
 #
 #  Site meng-upload SEKALI; VPS yang melayani semua penonton.
 # ==========================================================================
@@ -34,10 +35,19 @@ services:
     image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:
-      - "1883:1883"        # MQTT dari V-Box (batasi via firewall bila bisa)
+      # 1883 (plaintext) SENGAJA diikat ke 127.0.0.1 host — hanya bisa dipakai
+      # dari dalam VPS (debug via mosquitto_sub di VPS). Dari internet: refused.
+      - "127.0.0.1:1883:1883"
+      # 8883 = MQTT over TLS (sertifikat Let's Encrypt) — jalur publik satu-satunya.
+      - "8883:8883"
     environment:
       MQTT_USER: ${MQTT_USER:-vbox}
       MQTT_PASS: ${MQTT_PASS:?set MQTT_PASS di Environment Variables Coolify}
+    volumes:
+      # Salinan sertifikat Let's Encrypt (diisi deploy-hook certbot di host,
+      # chown 1883:1883 — lihat PANDUAN-VPS-RELAY.md §7a). JANGAN mount
+      # /etc/letsencrypt langsung: privkey-nya hanya terbaca root.
+      - /data/mosquitto-certs:/mosquitto/certs:ro
     configs:
       - source: mosquitto-config
         target: /mosquitto/config/mosquitto.conf
@@ -52,7 +62,16 @@ services:
 configs:
   mosquitto-config:
     content: |
+      # Plaintext — dalam jaringan docker saja; host cuma memetakan 127.0.0.1
+      # (lihat "ports" di atas), jadi dari internet port ini tertutup.
       listener 1883 0.0.0.0
+
+      # TLS — jalur publik untuk V-Box / Node-RED site / bridge (port 8883).
+      # Sertifikat Let's Encrypt disalin certbot deploy-hook ke /data/mosquitto-certs.
+      listener 8883 0.0.0.0
+      certfile /mosquitto/certs/fullchain.pem
+      keyfile /mosquitto/certs/privkey.pem
+
       allow_anonymous false
       password_file /mosquitto/config/passwd
       persistence false

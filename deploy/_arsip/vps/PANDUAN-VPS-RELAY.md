@@ -27,9 +27,13 @@ Buat **A record**: `stream` → IP VPS.
 ## 2. Firewall VPS (panel Hostinger)
 
 Port yang harus terbuka: **80, 443** (sudah, untuk Coolify), tambah
-**1935/TCP** (RTMP dari site), **1883/TCP** (MQTT dari V-Box),
+**1935/TCP** (RTMP dari site), **8883/TCP** (MQTT+TLS dari V-Box/site),
 **8189/UDP** (media WebRTC — delay <1 detik), dan **8890/UDP** (SRT —
 jalur kirim anti-jaringan-goyang, lihat §11). Selain itu tutup.
+
+> **1883 JANGAN dibuka.** Compose memetakan 1883 hanya ke `127.0.0.1` VPS
+> (plaintext untuk debug lokal); jalur publik satu-satunya adalah **8883
+> dengan TLS** (setup sertifikat di §7a).
 
 ## 3. Pasang relay di Coolify (±5 menit)
 
@@ -105,12 +109,68 @@ sebagai cadangan/darurat.)
 ## 7. V-Box / MQTT
 
 - R-Net → Data → **Kelola Site**: Host `stream.remula-inti.com`, Port
-  `1883`, User/Pass = `MQTT_USER`/`MQTT_PASS`.
-- V-Net (Wecon): arahkan publish MQTT ke alamat yang sama.
-- Data mengalir: V-Box → mosquitto (VPS) → bridge → historian → tab Data.
+  **`8883`**, User/Pass = `MQTT_USER`/`MQTT_PASS`. (Bridge otomatis memakai
+  TLS saat port site = 8883 — tidak ada setelan tambahan.)
+- V-Net (Wecon): arahkan publish MQTT ke alamat yang sama, port 8883,
+  centang SSL/TLS di setelan V-Box.
+- Data mengalir: V-Box → mosquitto (VPS, TLS) → bridge → historian → tab Data.
 
-> Port 1883 tanpa enkripsi. Password tetap wajib, tapi untuk jangka panjang
-> upgrade ke TLS 8883 (Fase berikutnya) atau batasi firewall ke IP site.
+## 7a. Sertifikat TLS untuk MQTT (certbot / Let's Encrypt)
+
+Coolify/Traefik hanya mengurus HTTPS untuk domain web — MQTT adalah TCP
+mentah, jadi mosquitto perlu sertifikatnya sendiri. Karena port 80/443 sudah
+dipakai Traefik dan DNS ada di Cloudflare, pakai **tantangan DNS-01**:
+
+```bash
+# 1. Pasang certbot + plugin Cloudflare (sekali)
+apt install certbot python3-certbot-dns-cloudflare
+
+# 2. Token API Cloudflare (Zone:DNS:Edit untuk remula-inti.com)
+install -m 600 /dev/null /root/.secrets/cloudflare.ini
+echo "dns_cloudflare_api_token = ISI_TOKEN_CLOUDFLARE" > /root/.secrets/cloudflare.ini
+
+# 3. Deploy-hook: salin sertifikat ke folder yang di-mount mosquitto.
+#    (JANGAN mount /etc/letsencrypt langsung — privkey hanya terbaca root;
+#    user mosquitto di container ber-uid 1883.)
+cat > /etc/letsencrypt/renewal-hooks/deploy/mosquitto.sh <<'EOF'
+#!/bin/sh
+mkdir -p /data/mosquitto-certs
+cp /etc/letsencrypt/live/stream.remula-inti.com/fullchain.pem /data/mosquitto-certs/
+cp /etc/letsencrypt/live/stream.remula-inti.com/privkey.pem   /data/mosquitto-certs/
+chown -R 1883:1883 /data/mosquitto-certs
+chmod 640 /data/mosquitto-certs/privkey.pem
+docker restart $(docker ps -q --filter ancestor=eclipse-mosquitto:2) 2>/dev/null || true
+EOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/mosquitto.sh
+
+# 4. Terbitkan sertifikat (deploy-hook ikut terpanggil; renew otomatis
+#    lewat timer systemd bawaan certbot)
+certbot certonly --dns-cloudflare \
+  --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
+  -d stream.remula-inti.com
+```
+
+Lalu redeploy resource mosquitto di Coolify (compose sudah membuka 8883 dan
+me-mount `/data/mosquitto-certs`).
+
+**Tes penerimaan TLS:**
+
+```bash
+# DARI LUAR VPS (laptop/PC site) — 1883 HARUS gagal (refused/timeout):
+mosquitto_sub -h stream.remula-inti.com -p 1883 -t 'rnet/#' -u vbox -P PASS
+#   → "Connection refused" ✔
+
+# 8883 dengan TLS HARUS jalan:
+mosquitto_sub -h stream.remula-inti.com -p 8883 -t 'rnet/#' -u vbox -P PASS --capath /etc/ssl/certs
+#   (Windows: mosquitto_sub ... -p 8883 --tls-use-os-certs)
+
+# Cek sertifikat tersaji benar:
+openssl s_client -connect stream.remula-inti.com:8883 -servername stream.remula-inti.com </dev/null
+#   → "Verify return code: 0 (ok)" dan issuer Let's Encrypt ✔
+
+# DARI DALAM VPS — plaintext lokal masih bisa (debug):
+mosquitto_sub -h 127.0.0.1 -p 1883 -t 'rnet/#' -u vbox -P PASS
+```
 
 ## 8. Pantau bandwidth (bulan pertama)
 
