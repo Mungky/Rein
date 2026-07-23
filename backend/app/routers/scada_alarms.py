@@ -15,12 +15,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.dependencies import require_permission
+from app.limiter import READ_LIMIT, WRITE_LIMIT, limiter
 from app.schemas.scada import (
     AlarmActiveOut,
     AlarmEventOut,
@@ -70,7 +71,9 @@ async def _tags_by_id(db: AsyncSession, tag_ids: set) -> dict:
 
 
 @router.get("/alarms/active", response_model=AlarmActiveOut)
+@limiter.limit(READ_LIMIT)
 async def list_active_alarms(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -86,7 +89,9 @@ async def list_active_alarms(
 
 
 @router.get("/alarms/history", response_model=AlarmHistoryOut)
+@limiter.limit(READ_LIMIT)
 async def list_alarm_history(
+    request: Request,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
     tag_id: uuid.UUID | None = None,
@@ -130,7 +135,9 @@ async def list_alarm_history(
 
 
 @router.post("/alarms/{event_id}/ack", response_model=AlarmEventOut)
+@limiter.limit(WRITE_LIMIT)
 async def ack_alarm(
+    request: Request,
     event_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:ack"))] = None,
@@ -156,7 +163,9 @@ async def ack_alarm(
 
 
 @router.get("/latest", response_model=LatestOut)
+@limiter.limit(READ_LIMIT)
 async def get_latest(
+    request: Request,
     tag_ids: Annotated[str, Query(min_length=1)] = "",
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
@@ -185,7 +194,9 @@ async def get_latest(
 
 
 @router.get("/archives", response_model=TagArchiveListOut)
+@limiter.limit(READ_LIMIT)
 async def list_archives(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -216,7 +227,9 @@ async def list_archives(
 
 
 @router.post("/archives/run")
+@limiter.limit(WRITE_LIMIT)
 async def run_archiver_now(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
@@ -249,7 +262,9 @@ async def _get_settings_row(db: AsyncSession) -> ScadaAlarmSettings:
 
 
 @router.get("/alarm-settings", response_model=AlarmSettingsOut)
+@limiter.limit(READ_LIMIT)
 async def get_alarm_settings(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -259,7 +274,9 @@ async def get_alarm_settings(
 
 
 @router.put("/alarm-settings", response_model=AlarmSettingsOut)
+@limiter.limit(WRITE_LIMIT)
 async def update_alarm_settings(
+    request: Request,
     body: AlarmSettingsUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -282,7 +299,9 @@ async def update_alarm_settings(
 
 
 @router.post("/alarm-settings/test")
+@limiter.limit(WRITE_LIMIT)
 async def send_test_notification(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):

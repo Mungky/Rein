@@ -3,11 +3,12 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_profile, require_permission
+from app.limiter import READ_LIMIT, limiter
 from db.models.document import Document, DocStatus
 from db.models.profile import Profile
 from db.models.upload_queue import UploadQueue, UploadStatus
@@ -18,7 +19,9 @@ router = APIRouter()
 
 
 @router.get("/stats")
+@limiter.limit(READ_LIMIT)
 async def get_dashboard_stats(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("dashboard:view"))] = None,
 ):
@@ -70,7 +73,9 @@ async def get_dashboard_stats(
 
 
 @router.get("/activity")
+@limiter.limit(READ_LIMIT)
 async def get_recent_activity(
+    request: Request,
     limit: int = 10,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("dashboard:view"))] = None,

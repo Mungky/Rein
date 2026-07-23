@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.dependencies import get_current_profile, require_role
-from app.limiter import limiter
+from app.limiter import READ_LIMIT, limiter
 from app.services.email import send_email
 from db.models.audit_job import AuditJob, LAYER_NAMES
 from db.models.library_audit_log import (
@@ -97,7 +97,9 @@ FolderNode.model_rebuild()
 
 
 @router.get("/file-types")
+@limiter.limit(READ_LIMIT)
 async def list_active_file_types(
+    request: Request,
     _profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -120,7 +122,9 @@ async def list_active_file_types(
 
 
 @router.get("/tree")
+@limiter.limit(READ_LIMIT)
 async def get_folder_tree(
+    request: Request,
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -207,7 +211,9 @@ async def get_folder_tree(
 # ---------------------------------------------------------------------------
 
 @router.get("/public-index")
+@limiter.limit(READ_LIMIT)
 async def get_public_index(
+    request: Request,
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -259,7 +265,9 @@ async def get_public_index(
 # ---------------------------------------------------------------------------
 
 @router.get("/folders/{folder_id}/files")
+@limiter.limit(READ_LIMIT)
 async def list_folder_files(
+    request: Request,
     folder_id: uuid.UUID,
     profile: Annotated[Profile, Depends(get_current_profile)],
     db: Annotated[AsyncSession, Depends(get_db)],

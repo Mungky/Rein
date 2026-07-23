@@ -3,12 +3,13 @@
 import uuid
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_profile, require_permission
+from app.limiter import READ_LIMIT, limiter
 from db.models.document import Document, DocType, DocStatus
 from db.models.profile import Profile
 from db.session import get_db
@@ -78,7 +79,9 @@ class DocumentUpdateRequest(BaseModel):
 
 
 @router.get("/stats")
+@limiter.limit(READ_LIMIT)
 async def document_stats(
+    request: Request,
     _profile: Annotated[Profile, Depends(require_permission("dcc:view"))],
 ) -> dict:
     """Return total document count (from public index) and URL to the public index spreadsheet."""
@@ -90,7 +93,9 @@ async def document_stats(
 
 
 @router.get("/", response_model=dict)
+@limiter.limit(READ_LIMIT)
 async def list_documents(
+    request: Request,
     doc_type: Optional[str] = None,
     status: Optional[str] = None,
     client: Optional[str] = None,
@@ -174,7 +179,9 @@ async def list_documents(
 
 
 @router.get("/search", response_model=dict)
+@limiter.limit(READ_LIMIT)
 async def search_documents(
+    request: Request,
     q: str = Query(..., min_length=1),
     doc_type: Optional[str] = None,
     limit: int = Query(default=10, le=50),
@@ -227,7 +234,9 @@ async def search_documents(
 
 
 @router.get("/{document_id}", response_model=dict)
+@limiter.limit(READ_LIMIT)
 async def get_document(
+    request: Request,
     document_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("dcc:view"))] = None,

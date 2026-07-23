@@ -16,12 +16,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import TypeAdapter
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import _load_permissions, require_permission
+from app.limiter import READ_LIMIT, WRITE_LIMIT, limiter
 from app.schemas.scada import (
     Panel,
     PerspectiveLayout,
@@ -223,7 +224,9 @@ async def _bootstrap_default(db: AsyncSession, owner_id: uuid.UUID) -> ScadaPers
 
 
 @router.get("/perspectives", response_model=PerspectiveListOut)
+@limiter.limit(READ_LIMIT)
 async def list_perspectives(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -257,7 +260,9 @@ async def list_perspectives(
 
 
 @router.get("/perspectives/published", response_model=PublishedLayoutOut)
+@limiter.limit(READ_LIMIT)
 async def get_published_perspective(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -275,7 +280,9 @@ async def get_published_perspective(
 
 
 @router.post("/perspectives", response_model=PerspectiveOut, status_code=201)
+@limiter.limit(WRITE_LIMIT)
 async def create_perspective(
+    request: Request,
     body: PerspectiveCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:edit_layout"))] = None,
@@ -299,7 +306,9 @@ async def create_perspective(
 
 
 @router.patch("/perspectives/{perspective_id}", response_model=PerspectiveOut)
+@limiter.limit(WRITE_LIMIT)
 async def update_perspective(
+    request: Request,
     perspective_id: uuid.UUID,
     body: PerspectiveUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -318,7 +327,9 @@ async def update_perspective(
 
 
 @router.delete("/perspectives/{perspective_id}", response_model=DeletedOut)
+@limiter.limit(WRITE_LIMIT)
 async def delete_perspective(
+    request: Request,
     perspective_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:edit_layout"))] = None,
@@ -351,7 +362,9 @@ async def delete_perspective(
 
 
 @router.post("/perspectives/{perspective_id}/default", response_model=PerspectiveOut)
+@limiter.limit(WRITE_LIMIT)
 async def set_default_perspective(
+    request: Request,
     perspective_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:edit_layout"))] = None,
@@ -377,7 +390,9 @@ async def set_default_perspective(
 
 
 @router.post("/perspectives/{perspective_id}/publish", response_model=PerspectiveOut)
+@limiter.limit(WRITE_LIMIT)
 async def publish_perspective(
+    request: Request,
     perspective_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -393,7 +408,9 @@ async def publish_perspective(
 
 
 @router.post("/perspectives/{perspective_id}/unpublish", response_model=PerspectiveOut)
+@limiter.limit(WRITE_LIMIT)
 async def unpublish_perspective(
+    request: Request,
     perspective_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -409,7 +426,9 @@ async def unpublish_perspective(
 @router.post(
     "/perspectives/{perspective_id}/reset-to-default", response_model=PerspectiveOut
 )
+@limiter.limit(WRITE_LIMIT)
 async def reset_perspective_to_published(
+    request: Request,
     perspective_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
@@ -437,7 +456,9 @@ async def reset_perspective_to_published(
 
 
 @router.get("/streams", response_model=StreamListOut)
+@limiter.limit(READ_LIMIT)
 async def list_streams(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -453,7 +474,9 @@ async def list_streams(
 
 
 @router.post("/streams", response_model=StreamOut, status_code=201)
+@limiter.limit(WRITE_LIMIT)
 async def create_stream(
+    request: Request,
     body: StreamCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -476,7 +499,9 @@ async def create_stream(
 
 
 @router.patch("/streams/{stream_id}", response_model=StreamOut)
+@limiter.limit(WRITE_LIMIT)
 async def update_stream(
+    request: Request,
     stream_id: uuid.UUID,
     body: StreamUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -519,7 +544,9 @@ async def update_stream(
 
 
 @router.delete("/streams/{stream_id}", response_model=DeletedOut)
+@limiter.limit(WRITE_LIMIT)
 async def delete_stream(
+    request: Request,
     stream_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -566,7 +593,9 @@ async def _check_channel_number_free(
 
 
 @router.get("/channels", response_model=ChannelListOut)
+@limiter.limit(READ_LIMIT)
 async def list_channels(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -575,7 +604,9 @@ async def list_channels(
 
 
 @router.post("/channels", response_model=ChannelOut, status_code=201)
+@limiter.limit(WRITE_LIMIT)
 async def create_channel(
+    request: Request,
     body: ChannelCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -595,7 +626,9 @@ async def create_channel(
 
 
 @router.patch("/channels/{channel_id}", response_model=ChannelOut)
+@limiter.limit(WRITE_LIMIT)
 async def update_channel(
+    request: Request,
     channel_id: uuid.UUID,
     body: ChannelUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -633,7 +666,9 @@ async def update_channel(
 
 
 @router.delete("/channels/{channel_id}", response_model=DeletedOut)
+@limiter.limit(WRITE_LIMIT)
 async def delete_channel(
+    request: Request,
     channel_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -675,7 +710,9 @@ async def _get_site_or_404(db: AsyncSession, site_id: uuid.UUID | None) -> Scada
 
 
 @router.get("/sites", response_model=SiteListOut)
+@limiter.limit(READ_LIMIT)
 async def list_sites(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -684,7 +721,9 @@ async def list_sites(
 
 
 @router.post("/sites", response_model=SiteOut, status_code=201)
+@limiter.limit(WRITE_LIMIT)
 async def create_site(
+    request: Request,
     body: SiteCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -705,7 +744,9 @@ async def create_site(
 
 
 @router.patch("/sites/{site_id}", response_model=SiteOut)
+@limiter.limit(WRITE_LIMIT)
 async def update_site(
+    request: Request,
     site_id: uuid.UUID,
     body: SiteUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -737,7 +778,9 @@ async def update_site(
 
 
 @router.delete("/sites/{site_id}", response_model=DeletedOut)
+@limiter.limit(WRITE_LIMIT)
 async def delete_site(
+    request: Request,
     site_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -783,7 +826,9 @@ async def _get_sheet_or_404(db: AsyncSession, sheet_id: uuid.UUID) -> ScadaSheet
 
 
 @router.get("/sheets", response_model=SheetListOut)
+@limiter.limit(READ_LIMIT)
 async def list_sheets(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -803,7 +848,9 @@ async def list_sheets(
 
 
 @router.post("/sheets", response_model=SheetOut, status_code=201)
+@limiter.limit(WRITE_LIMIT)
 async def create_sheet(
+    request: Request,
     body: SheetCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -817,7 +864,9 @@ async def create_sheet(
 
 
 @router.patch("/sheets/{sheet_id}", response_model=SheetOut)
+@limiter.limit(WRITE_LIMIT)
 async def update_sheet(
+    request: Request,
     sheet_id: uuid.UUID,
     body: SheetUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -834,7 +883,9 @@ async def update_sheet(
 
 
 @router.delete("/sheets/{sheet_id}", response_model=DeletedOut)
+@limiter.limit(WRITE_LIMIT)
 async def delete_sheet(
+    request: Request,
     sheet_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -883,7 +934,9 @@ def _tag_dict(t: ScadaTag) -> dict:
 
 
 @router.get("/tags", response_model=TagListOut)
+@limiter.limit(READ_LIMIT)
 async def list_tags(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -898,7 +951,9 @@ async def list_tags(
 
 
 @router.post("/tags", response_model=TagOut, status_code=201)
+@limiter.limit(WRITE_LIMIT)
 async def create_tag(
+    request: Request,
     body: TagCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -932,7 +987,9 @@ async def create_tag(
 
 
 @router.patch("/tags/{tag_id}", response_model=TagOut)
+@limiter.limit(WRITE_LIMIT)
 async def update_tag(
+    request: Request,
     tag_id: uuid.UUID,
     body: TagUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -1000,7 +1057,9 @@ async def update_tag(
 
 
 @router.delete("/tags/{tag_id}", response_model=DeletedOut)
+@limiter.limit(WRITE_LIMIT)
 async def delete_tag(
+    request: Request,
     tag_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -1016,7 +1075,9 @@ async def delete_tag(
 
 
 @router.get("/tags/{tag_id}/recent", response_model=RecentSamplesOut)
+@limiter.limit(READ_LIMIT)
 async def get_recent_samples(
+    request: Request,
     tag_id: uuid.UUID,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -1042,7 +1103,9 @@ async def get_recent_samples(
 
 
 @router.get("/tags/{tag_id}/samples", response_model=SamplesPageOut)
+@limiter.limit(READ_LIMIT)
 async def get_samples_page(
+    request: Request,
     tag_id: uuid.UUID,
     before: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=5000)] = 2000,
@@ -1082,7 +1145,9 @@ MAX_HISTORY_SPAN = timedelta(days=45)
 
 
 @router.get("/history", response_model=HistoryOut)
+@limiter.limit(READ_LIMIT)
 async def get_history(
+    request: Request,
     tag_ids: Annotated[list[uuid.UUID], Query(min_length=1, max_length=MAX_HISTORY_TAGS)],
     start: datetime,
     end: datetime,
@@ -1181,7 +1246,9 @@ def _column_dict(c: ScadaWorkbenchColumn) -> dict:
 
 
 @router.get("/workbench/columns", response_model=WorkbenchColumnListOut)
+@limiter.limit(READ_LIMIT)
 async def list_workbench_columns(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -1194,7 +1261,9 @@ async def list_workbench_columns(
 
 
 @router.post("/workbench/columns", response_model=WorkbenchColumnOut, status_code=201)
+@limiter.limit(WRITE_LIMIT)
 async def create_workbench_column(
+    request: Request,
     body: WorkbenchColumnCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -1223,7 +1292,9 @@ async def create_workbench_column(
 
 
 @router.patch("/workbench/columns/{column_id}", response_model=WorkbenchColumnOut)
+@limiter.limit(WRITE_LIMIT)
 async def update_workbench_column(
+    request: Request,
     column_id: uuid.UUID,
     body: WorkbenchColumnUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -1250,7 +1321,9 @@ async def update_workbench_column(
 
 
 @router.delete("/workbench/columns/{column_id}", response_model=DeletedOut)
+@limiter.limit(WRITE_LIMIT)
 async def delete_workbench_column(
+    request: Request,
     column_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
@@ -1268,7 +1341,9 @@ MAX_SUMMARY_TAGS = 8
 
 
 @router.get("/summary", response_model=SummaryOut)
+@limiter.limit(READ_LIMIT)
 async def get_summary(
+    request: Request,
     tag_ids: Annotated[list[uuid.UUID], Query(min_length=1, max_length=MAX_SUMMARY_TAGS)],
     start: datetime,
     end: datetime,
@@ -1348,7 +1423,9 @@ SPARK_MAX_POINTS = 240
 
 
 @router.get("/sparklines", response_model=SparklinesOut)
+@limiter.limit(READ_LIMIT)
 async def get_sparklines(
+    request: Request,
     range_h: Annotated[int, Query(ge=1, le=168)] = 12,
     points: Annotated[int, Query(ge=10, le=SPARK_MAX_POINTS)] = 120,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -1416,7 +1493,9 @@ def _settings_dict(s: ScadaSettings) -> dict:
 
 
 @router.get("/settings", response_model=RnetSettingsOut)
+@limiter.limit(READ_LIMIT)
 async def get_rnet_settings(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
@@ -1425,7 +1504,9 @@ async def get_rnet_settings(
 
 
 @router.patch("/settings", response_model=RnetSettingsOut)
+@limiter.limit(WRITE_LIMIT)
 async def update_rnet_settings(
+    request: Request,
     body: RnetSettingsUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[
