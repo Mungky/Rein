@@ -76,6 +76,53 @@ async def _build_tag_workbook(
     return buf.getvalue(), len(rows)
 
 
+async def _email_backup(
+    db: AsyncSession,
+    tag: ScadaTag,
+    file_name: str,
+    content: bytes,
+    row_count: int,
+    cycle_start: datetime,
+    cycle_end: datetime,
+    web_link: str | None,
+) -> None:
+    """Kirim file backup siklus ke penerima email alarm (scada_alarm_settings).
+
+    Gate-nya HANYA daftar penerima terisi — bukan email_enabled, karena flag itu
+    mengatur berisiknya notifikasi alarm; laporan backup sebulan sekali harus
+    tetap sampai selama ada alamat tujuan. Never raises."""
+    from app.services import email_notifier, notifier
+
+    try:
+        alarm_settings = await notifier.get_settings(db)
+        recipients = alarm_settings.email_recipients if alarm_settings else ""
+        if not recipients.strip():
+            logger.info("Backup %s: penerima email kosong — email dilewati", tag.label)
+            return
+        period = f"{cycle_start.strftime('%d-%m-%Y')} s/d {cycle_end.strftime('%d-%m-%Y')}"
+        drive_line = (
+            f"Salinan juga tersimpan di Google Drive: {web_link}"
+            if web_link
+            else "Salinan Google Drive: (upload dilewati — siklus kosong)"
+        )
+        body = (
+            f"Backup data R-Net untuk sensor '{tag.label}'.\n\n"
+            f"Periode : {period}\n"
+            f"Jumlah  : {row_count} baris\n"
+            f"File    : {file_name} (terlampir)\n\n"
+            f"{drive_line}\n\n"
+            f"Data di database akan direset dan pencatatan mulai lagi dari 0."
+        )
+        await email_notifier.send_to_list(
+            recipients,
+            subject=f"Backup R-Net: {tag.label} ({period})",
+            body=body,
+            attachment=(file_name, content),
+        )
+    except Exception:
+        logger.exception("Email backup %s gagal — reset tetap lanjut", tag.label)
+
+
 async def archive_tag_cycle(
     db: AsyncSession, tag: ScadaTag, cycle_start: datetime
 ) -> dict | None:
@@ -134,6 +181,15 @@ async def archive_tag_cycle(
         row.web_link = web_link
         row.row_count = row_count
         await db.commit()
+
+        # Email = jalur PENGIRIMAN utama backup ke manusia (attachment Excel);
+        # Drive tetap jangkar KEAMANAN data (tanpa Drive sukses tidak ada
+        # penghapusan). Gagal email tidak menggagalkan reset — file sudah
+        # verifiably di Drive. Best-effort, never raises.
+        if row_count > 0:
+            await _email_backup(
+                db, tag, file_name, content, row_count, cycle_start, now, web_link
+            )
 
         # Only now may we wipe — the cycle is verifiably on Drive (or empty).
         purged = await db.execute(

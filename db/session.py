@@ -47,8 +47,18 @@ _ssl_ctx.verify_mode = ssl.CERT_NONE
 # clients (local dev + deployed backend + MQTT bridge + Alembic) can share the
 # small server pool without hitting "max clients reached". The session pooler
 # (port 5432) pins one server slot per client connection and exhausts the cap.
-_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "3"))
-_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "2"))
+#
+# These are per-process caps on how many concurrent queries THIS backend holds
+# open to the pooler (pool_size steady + max_overflow burst). The old 3+2 (peak
+# 5) throttled ~50 concurrent /summary readers into a queue. Because Supavisor
+# multiplexes, a higher client-side cap is cheap. Defaults target Supabase Pro
+# production (peak 20/process); set both LOWER on a dev laptop via .env so the
+# shared pooler keeps headroom for the server + bridge + Alembic, e.g.
+#   DB_POOL_SIZE=5  DB_MAX_OVERFLOW=5   (dev)
+# Confirm your pooler's "Pool Size" / max client connections in the Supabase
+# dashboard before raising these further.
+_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
+_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 
 async_engine = create_async_engine(
     _database_url,

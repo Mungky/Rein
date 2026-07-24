@@ -43,6 +43,31 @@ from app.services import alarm_engine, archiver, health_monitor, historian
 
 logger = logging.getLogger(__name__)
 
+# --- Sentry (M4) — pelacak error menggantikan "log 5xx cuma ke stdout" ------ #
+# Aktif hanya bila SENTRY_DSN diisi (.env). Integrasi FastAPI/Starlette otomatis
+# menangkap unhandled exception per-request; logging ERROR ke atas ikut jadi
+# event. traces_sample_rate 0 = tanpa performance tracing (hemat kuota free
+# tier 5rb event/bulan). Import dibungkus supaya deployment lama yang belum
+# `pip install sentry-sdk` tetap hidup.
+_sentry_on = False
+if settings.sentry_dsn:
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.sentry_environment,
+            traces_sample_rate=0.0,
+            send_default_pii=False,
+        )
+        _sentry_on = True
+        logger.info("Sentry aktif (environment=%s)", settings.sentry_environment)
+    except ImportError:
+        logger.warning(
+            "SENTRY_DSN diset tapi sentry-sdk belum terpasang — "
+            "jalankan: pip install -r requirements.txt"
+        )
+
 # Periodic cleanup interval (seconds)
 CLEANUP_INTERVAL = 300  # 5 minutes
 
@@ -188,8 +213,9 @@ async def log_server_errors(request: Request, call_next):
     plus a throttled Telegram alert via the health monitor (fire-and-forget so
     the response path is never blocked by the Telegram API).
 
-    This is the minimum observability floor; pipe logs to an error tracker
-    (e.g. Sentry) when an account/DSN is available.
+    Sentry (bila aktif) menangkap unhandled exception lewat integrasinya
+    sendiri; blok `capture_message` di bawah menambal satu celah yang tersisa —
+    respons 5xx yang DIKEMBALIKAN handler tanpa exception.
     """
     try:
         response = await call_next(request)
@@ -205,6 +231,13 @@ async def log_server_errors(request: Request, call_next):
         logger.error(
             "HTTP %d on %s %s", response.status_code, request.method, request.url.path
         )
+        if _sentry_on:
+            import sentry_sdk
+
+            sentry_sdk.capture_message(
+                f"HTTP {response.status_code} on {request.method} {request.url.path}",
+                level="error",
+            )
         asyncio.create_task(
             health_monitor.report_server_error(
                 request.method, request.url.path, response.status_code

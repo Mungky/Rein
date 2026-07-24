@@ -5,9 +5,9 @@
  *  value whenever it's newer — the number ticks live between refetches. */
 
 import { useCallback, useState } from "react";
-import { scadaApi } from "@/lib/api/scada";
 import { useScadaStore } from "../store";
 import type { SummaryItem, Tag } from "../types";
+import { getSummaryItem } from "./summary-batch";
 import { usePanelRefresh } from "./use-panel-refresh";
 
 const STATS_WINDOW_MS = 86_400_000; // min/max footer selalu 24 jam terakhir
@@ -39,11 +39,11 @@ export function useTagValue(tagId: string | null, tags: Tag[]): TagValueState {
       return;
     }
     try {
-      const end = new Date();
-      const start = new Date(end.getTime() - STATS_WINDOW_MS);
-      const res = await scadaApi.getSummary([tagId], start, end);
-      setItem(res.items[0] ?? null);
-      setFetchedAt(end.getTime());
+      // Coalesced with every other panel's 24h summary fetch this tick into one
+      // request (see summary-batch); the window's `end` is taken at flush time.
+      const item = await getSummaryItem(tagId, STATS_WINDOW_MS);
+      setItem(item);
+      setFetchedAt(Date.now());
       setLoaded(true);
       setError(false);
     } catch {

@@ -26,6 +26,23 @@ from .library_file import LibraryFile, LibraryFileStatus
 from .audit_job import AuditJob, AuditJobStatus, LAYER_NAMES, LAYER_LABELS
 from .view_request import ViewRequest, ViewRequestStatus, VIEW_REQUEST_TTL_SECONDS
 from .library_audit_log import LibraryAuditLog
+from .scada_audit_log import (
+    ScadaAuditLog,
+    LOG_CREATE,
+    LOG_UPDATE,
+    LOG_DELETE,
+    TARGET_TAG,
+    TARGET_SITE,
+    TARGET_STREAM,
+    TARGET_ALARM_SETTINGS,
+    TARGET_SETTINGS,
+)
+from .scada_data_access_log import (
+    ScadaDataAccessLog,
+    ACCESS_RECENT,
+    ACCESS_SAMPLES,
+    ACCESS_HISTORY,
+)
 from .document_sequence import DocumentSequence, KNOWN_DOC_TYPES, DOC_TYPE_LABELS
 from .folder_permission import FolderPermission
 from .scada import (
@@ -100,6 +117,19 @@ __all__ = [
     "ViewRequestStatus",
     "VIEW_REQUEST_TTL_SECONDS",
     "LibraryAuditLog",
+    "ScadaAuditLog",
+    "LOG_CREATE",
+    "LOG_UPDATE",
+    "LOG_DELETE",
+    "TARGET_TAG",
+    "TARGET_SITE",
+    "TARGET_STREAM",
+    "TARGET_ALARM_SETTINGS",
+    "TARGET_SETTINGS",
+    "ScadaDataAccessLog",
+    "ACCESS_RECENT",
+    "ACCESS_SAMPLES",
+    "ACCESS_HISTORY",
     "DocumentSequence",
     "KNOWN_DOC_TYPES",
     "DOC_TYPE_LABELS",

@@ -1,4 +1,4 @@
-"""Alarm kesehatan SISTEM R-Net → Telegram (reuse jalur notifier alarm sensor).
+"""Alarm kesehatan SISTEM R-Net → Telegram + email (reuse jalur notifier alarm).
 
 Tiga sumber (W4):
 1. Bridge MQTT mati / gagal konek broker > BRIDGE_OFFLINE_S (2 menit) —
@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services import notifier
+from app.services import email_notifier, notifier
 from db.models.scada import (
     ScadaBridgeStatus,
     ScadaSite,
@@ -58,14 +58,28 @@ _err_last_sent: float | None = None
 
 
 async def _send(db: AsyncSession, text: str) -> None:
-    """Kirim ke chat Telegram alarm (setelan scada_alarm_settings). Never raises."""
+    """Kirim ke Telegram + email alarm (setelan scada_alarm_settings, saklar &
+    penerima yang sama dengan alarm sensor). Anti-spam sudah ditangani pemanggil
+    (transisi 🔴/🟢 + throttle 5xx) — email dan Telegram kena jatah yang sama.
+    Never raises."""
     alarm_settings = await notifier.get_settings(db)
-    if alarm_settings is None or not (
+    telegram_on = alarm_settings is not None and (
         alarm_settings.telegram_enabled and alarm_settings.telegram_chat_id
-    ):
-        logger.info("Alarm kesehatan (Telegram nonaktif): %s", text)
+    )
+    email_on = alarm_settings is not None and (
+        alarm_settings.email_enabled and alarm_settings.email_recipients
+    )
+    if not telegram_on and not email_on:
+        logger.info("Alarm kesehatan (notifikasi nonaktif): %s", text)
         return
-    await notifier.send_telegram(alarm_settings.telegram_chat_id, text)
+    if telegram_on:
+        await notifier.send_telegram(alarm_settings.telegram_chat_id, text)
+    if email_on:
+        await email_notifier.send_to_list(
+            alarm_settings.email_recipients,
+            subject=f"R-Net Kesehatan Sistem: {text[:70]}",
+            body=text,
+        )
 
 
 async def _send_text(text: str) -> None:

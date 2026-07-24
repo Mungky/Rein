@@ -86,5 +86,16 @@ class Settings:
     # in the scada_alarm_settings table (edited from the Data tab).
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
+    # R-Net email via Resend (alarm sensor, kesehatan sistem, backup bulanan).
+    # Kosong → email_notifier fallback ke SMTP di atas, atau dilewati.
+    resend_api_key: str = os.getenv("RESEND_API_KEY", "")
+    # Alamat pengirim. onboarding@resend.dev hanya bisa mengirim ke email akun
+    # Resend sendiri — verifikasi domain di dashboard Resend untuk penerima lain.
+    resend_from: str = os.getenv("RESEND_FROM", "R-Net <onboarding@resend.dev>")
+
+    # Sentry error tracking (M4). Kosong = nonaktif (dev lokal).
+    sentry_dsn: str = os.getenv("SENTRY_DSN", "")
+    sentry_environment: str = os.getenv("SENTRY_ENVIRONMENT", "production")
+
 
 settings = Settings()

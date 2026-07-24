@@ -11,7 +11,10 @@ player must append as query params, and the endpoint is gated behind
 `scada:view` — every recipient is an authorized viewer.
 """
 
+import asyncio
+import os
 import re
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -66,9 +69,25 @@ from app.schemas.scada import (
     WorkbenchColumnOut,
     WorkbenchColumnUpdateRequest,
 )
+from app.services import data_access_monitor
 from app.services import historian
 from app.services import rnet_settings
+from app.services import scada_audit
 from db.models.profile import Profile
+from db.models.scada_audit_log import (
+    LOG_CREATE,
+    LOG_DELETE,
+    LOG_UPDATE,
+    TARGET_SETTINGS,
+    TARGET_SITE,
+    TARGET_STREAM,
+    TARGET_TAG,
+)
+from db.models.scada_data_access_log import (
+    ACCESS_HISTORY,
+    ACCESS_RECENT,
+    ACCESS_SAMPLES,
+)
 from db.models.scada import (
     ScadaChannel,
     ScadaPerspective,
@@ -479,7 +498,7 @@ async def create_stream(
     request: Request,
     body: StreamCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     stream = ScadaStream(
         name=body.name,
@@ -495,6 +514,11 @@ async def create_stream(
     db.add(stream)
     await db.flush()
     await db.refresh(stream)
+    scada_audit.log_scada_change(
+        db, profile, LOG_CREATE, TARGET_STREAM,
+        target_id=stream.id, target_label=stream.name,
+        changes=scada_audit.diff_fields({}, scada_audit.stream_snapshot(stream)),
+    )
     return _stream_dict(stream)
 
 
@@ -505,11 +529,12 @@ async def update_stream(
     stream_id: uuid.UUID,
     body: StreamUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     stream = await db.get(ScadaStream, stream_id)
     if stream is None:
         raise HTTPException(status_code=404, detail="Stream tidak ditemukan")
+    before = scada_audit.stream_snapshot(stream)
 
     if body.name is not None:
         stream.name = body.name
@@ -540,6 +565,12 @@ async def update_stream(
 
     await db.flush()
     await db.refresh(stream)
+    changes = scada_audit.diff_fields(before, scada_audit.stream_snapshot(stream))
+    if changes:
+        scada_audit.log_scada_change(
+            db, profile, LOG_UPDATE, TARGET_STREAM,
+            target_id=stream.id, target_label=stream.name, changes=changes,
+        )
     return _stream_dict(stream)
 
 
@@ -549,14 +580,21 @@ async def delete_stream(
     request: Request,
     stream_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     stream = await db.get(ScadaStream, stream_id)
     if stream is None:
         raise HTTPException(status_code=404, detail="Stream tidak ditemukan")
 
+    snapshot = scada_audit.stream_snapshot(stream)
+    label = stream.name
     await db.delete(stream)
     await db.flush()
+    scada_audit.log_scada_change(
+        db, profile, LOG_DELETE, TARGET_STREAM,
+        target_id=stream_id, target_label=label,
+        changes=scada_audit.diff_fields(snapshot, {}),
+    )
     return {"deleted": str(stream_id)}
 
 
@@ -726,7 +764,7 @@ async def create_site(
     request: Request,
     body: SiteCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     site = ScadaSite(
         name=body.name,
@@ -740,6 +778,11 @@ async def create_site(
     db.add(site)
     await db.flush()
     await db.refresh(site)
+    scada_audit.log_scada_change(
+        db, profile, LOG_CREATE, TARGET_SITE,
+        target_id=site.id, target_label=site.name,
+        changes=scada_audit.diff_fields({}, scada_audit.site_snapshot(site)),
+    )
     return _site_dict(site)
 
 
@@ -750,11 +793,12 @@ async def update_site(
     site_id: uuid.UUID,
     body: SiteUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     site = await db.get(ScadaSite, site_id)
     if site is None:
         raise HTTPException(status_code=404, detail="Site tidak ditemukan")
+    before = scada_audit.site_snapshot(site)
 
     if body.name is not None:
         site.name = body.name
@@ -774,6 +818,12 @@ async def update_site(
 
     await db.flush()
     await db.refresh(site)
+    changes = scada_audit.diff_fields(before, scada_audit.site_snapshot(site))
+    if changes:
+        scada_audit.log_scada_change(
+            db, profile, LOG_UPDATE, TARGET_SITE,
+            target_id=site.id, target_label=site.name, changes=changes,
+        )
     return _site_dict(site)
 
 
@@ -783,7 +833,7 @@ async def delete_site(
     request: Request,
     site_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     site = await db.get(ScadaSite, site_id)
     if site is None:
@@ -798,8 +848,15 @@ async def delete_site(
             detail="Site masih dipakai tag — hapus atau pindahkan tag-nya dulu",
         )
 
+    snapshot = scada_audit.site_snapshot(site)
+    label = site.name
     await db.delete(site)
     await db.flush()
+    scada_audit.log_scada_change(
+        db, profile, LOG_DELETE, TARGET_SITE,
+        target_id=site_id, target_label=label,
+        changes=scada_audit.diff_fields(snapshot, {}),
+    )
     return {"deleted": str(site_id)}
 
 
@@ -956,7 +1013,7 @@ async def create_tag(
     request: Request,
     body: TagCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     """Create a tag. Simulator tags get 7 days of backfilled history so charts
     are demo-ready immediately; MQTT tags start empty and fill as the bridge
@@ -983,6 +1040,11 @@ async def create_tag(
     await db.flush()
     await db.refresh(tag)
     await historian.backfill(db, tag)
+    scada_audit.log_scada_change(
+        db, profile, LOG_CREATE, TARGET_TAG,
+        target_id=tag.id, target_label=tag.label,
+        changes=scada_audit.diff_fields({}, scada_audit.tag_snapshot(tag)),
+    )
     return _tag_dict(tag)
 
 
@@ -993,11 +1055,12 @@ async def update_tag(
     tag_id: uuid.UUID,
     body: TagUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     tag = await db.get(ScadaTag, tag_id)
     if tag is None:
         raise HTTPException(status_code=404, detail="Tag tidak ditemukan")
+    before = scada_audit.tag_snapshot(tag)
 
     # A source switch means a DIFFERENT data stream — the old history (e.g.
     # simulator placeholder values) would only mislead, so it gets purged below.
@@ -1053,6 +1116,12 @@ async def update_tag(
 
     await db.flush()
     await db.refresh(tag)
+    changes = scada_audit.diff_fields(before, scada_audit.tag_snapshot(tag))
+    if changes:
+        scada_audit.log_scada_change(
+            db, profile, LOG_UPDATE, TARGET_TAG,
+            target_id=tag.id, target_label=tag.label, changes=changes,
+        )
     return _tag_dict(tag)
 
 
@@ -1062,15 +1131,22 @@ async def delete_tag(
     request: Request,
     tag_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     tag = await db.get(ScadaTag, tag_id)
     if tag is None:
         raise HTTPException(status_code=404, detail="Tag tidak ditemukan")
 
+    snapshot = scada_audit.tag_snapshot(tag)
+    label = tag.label
     # Samples go with it via ON DELETE CASCADE
     await db.delete(tag)
     await db.flush()
+    scada_audit.log_scada_change(
+        db, profile, LOG_DELETE, TARGET_TAG,
+        target_id=tag_id, target_label=label,
+        changes=scada_audit.diff_fields(snapshot, {}),
+    )
     return {"deleted": str(tag_id)}
 
 
@@ -1095,11 +1171,11 @@ async def get_recent_samples(
         .order_by(ScadaSampleAll.ts.desc())
         .limit(limit)
     )
-    return {
-        "items": [
-            {"ts": s.ts.isoformat(), "value": s.value} for s in result.scalars().all()
-        ]
-    }
+    rows = result.scalars().all()
+    await data_access_monitor.log_big_read(
+        db, profile, ACCESS_RECENT, [tag.label], None, None, len(rows)
+    )
+    return {"items": [{"ts": s.ts.isoformat(), "value": s.value} for s in rows]}
 
 
 @router.get("/tags/{tag_id}/samples", response_model=SamplesPageOut)
@@ -1129,6 +1205,9 @@ async def get_samples_page(
         query = query.where(ScadaSampleAll.ts < before)
     result = await db.execute(query.order_by(ScadaSampleAll.ts.desc()).limit(limit + 1))
     rows = result.scalars().all()
+    await data_access_monitor.log_big_read(
+        db, profile, ACCESS_SAMPLES, [tag.label], None, before, len(rows[:limit])
+    )
     return {
         "items": [{"ts": s.ts.isoformat(), "value": s.value} for s in rows[:limit]],
         "has_more": len(rows) > limit,
@@ -1202,7 +1281,17 @@ async def get_history(
     )
 
     points_by_tag: dict[uuid.UUID, list[dict]] = {tid: [] for tid in tags}
-    for row in result.all():
+    bucket_rows = result.all()
+    await data_access_monitor.log_big_read(
+        db,
+        profile,
+        ACCESS_HISTORY,
+        [t.label for t in tags.values()],
+        start,
+        end,
+        len(bucket_rows),
+    )
+    for row in bucket_rows:
         points_by_tag[row.tag_id].append(
             {
                 "t": row.bucket.isoformat(),
@@ -1337,7 +1426,165 @@ async def delete_workbench_column(
     return {"deleted": str(column_id)}
 
 
-MAX_SUMMARY_TAGS = 8
+# A summary request now carries every tag shown on one page (batched by the
+# frontend), not one tag per request, so the cap is a page's worth of panels.
+MAX_SUMMARY_TAGS = 60
+
+# --- Per-tag summary cache (W5) --------------------------------------------- #
+# Each gauge/level/LED panel refetches its 24h min/max/avg every 60 s, and every
+# viewer of the same page does so independently — so the identical aggregation
+# ran once per panel per viewer per minute. This collapses it: the min/max/avg
+# for a (tag, window) is computed once and reused for SUMMARY_CACHE_TTL_S, so all
+# viewers within that window share one query. The live number still ticks from
+# Supabase Realtime on the client, so a slightly stale cached snapshot is fine.
+#
+# Key = (tag_id, start_bucket, end_bucket) where buckets quantize the window to
+# TTL-wide slots — concurrent viewers whose "now" differs by a few seconds land
+# on the same slot and share the result, while a genuinely different (e.g.
+# historical) window keeps its own key. TTL=0 disables the cache (tests/dev).
+_SUMMARY_CACHE_TTL_S = float(os.getenv("SUMMARY_CACHE_TTL_S", "45"))
+_SUMMARY_CACHE_MAX = 5000
+_summary_cache: dict[tuple[uuid.UUID, int, int], tuple[float, dict]] = {}
+# Single-flight: while a (tag, window) is being aggregated, concurrent requests
+# await the SAME future instead of each firing their own query — so a burst of
+# 50 simultaneous viewers computes each tag exactly once, not 50×. Cleared as
+# soon as the result (or error) is set; the TTL cache then serves everyone else.
+_summary_inflight: dict[tuple[uuid.UUID, int, int], "asyncio.Future[dict]"] = {}
+
+
+def _summary_bucket(dt: datetime) -> int:
+    ttl = _SUMMARY_CACHE_TTL_S or 1
+    return int(dt.timestamp() // ttl)
+
+
+def _summary_cache_get(key: tuple, now_mono: float) -> dict | None:
+    if _SUMMARY_CACHE_TTL_S <= 0:
+        return None
+    hit = _summary_cache.get(key)
+    if hit is None:
+        return None
+    expires, item = hit
+    if expires <= now_mono:
+        _summary_cache.pop(key, None)
+        return None
+    return item
+
+
+def _summary_cache_put(key: tuple, now_mono: float, item: dict) -> None:
+    if _SUMMARY_CACHE_TTL_S <= 0:
+        return
+    if len(_summary_cache) >= _SUMMARY_CACHE_MAX:
+        # Cheap bound: drop everything already expired; if still full, reset.
+        for k in [k for k, (exp, _) in _summary_cache.items() if exp <= now_mono]:
+            _summary_cache.pop(k, None)
+        if len(_summary_cache) >= _SUMMARY_CACHE_MAX:
+            _summary_cache.clear()
+    _summary_cache[key] = (now_mono + _SUMMARY_CACHE_TTL_S, item)
+
+
+async def _compute_summaries(
+    db: AsyncSession, tags: dict[uuid.UUID, ScadaTag], start: datetime, end: datetime
+) -> dict[uuid.UUID, dict]:
+    """Min/max/avg over [start, end) + latest value, for `tags`, in two batched
+    queries regardless of how many tags — the piece worth caching per tag."""
+    ids = list(tags.keys())
+    agg_result = await db.execute(
+        select(
+            ScadaSampleAll.tag_id,
+            func.min(ScadaSampleAll.value).label("min"),
+            func.max(ScadaSampleAll.value).label("max"),
+            func.avg(ScadaSampleAll.value).label("avg"),
+        )
+        .where(
+            ScadaSampleAll.tag_id.in_(ids),
+            ScadaSampleAll.ts >= start,
+            ScadaSampleAll.ts < end,
+        )
+        .group_by(ScadaSampleAll.tag_id)
+    )
+    aggs = {row.tag_id: row for row in agg_result.all()}
+
+    # Latest row per tag regardless of window (a gauge must show the current
+    # value even if the stats window is short)
+    last_result = await db.execute(
+        select(ScadaSampleAll)
+        .distinct(ScadaSampleAll.tag_id)
+        .where(ScadaSampleAll.tag_id.in_(ids))
+        .order_by(ScadaSampleAll.tag_id, ScadaSampleAll.ts.desc())
+    )
+    lasts = {s.tag_id: s for s in last_result.scalars().all()}
+
+    out: dict[uuid.UUID, dict] = {}
+    for tid, tag in tags.items():
+        agg = aggs.get(tid)
+        last = lasts.get(tid)
+        out[tid] = {
+            "tag_id": str(tid),
+            "label": tag.label,
+            "unit": tag.unit,
+            "last": last.value if last else None,
+            "last_ts": last.ts.isoformat() if last else None,
+            "min": round(float(agg.min), 4) if agg else None,
+            "max": round(float(agg.max), 4) if agg else None,
+            "avg": round(float(agg.avg), 4) if agg else None,
+        }
+    return out
+
+
+async def _summarize(
+    db: AsyncSession,
+    ordered: list[uuid.UUID],
+    visible: dict[uuid.UUID, ScadaTag],
+    start: datetime,
+    end: datetime,
+) -> list[dict]:
+    """Return summary items for `ordered` tags, serving the per-tag TTL cache and
+    coalescing concurrent misses via single-flight so each (tag, window) is
+    aggregated once. Factored out of the endpoint so tests/benchmarks can drive
+    the exact same cache path."""
+    now_mono = time.monotonic()
+    sb, eb = _summary_bucket(start), _summary_bucket(end)
+    items_by_tag: dict[uuid.UUID, dict] = {}
+    to_compute: dict[uuid.UUID, ScadaTag] = {}  # this request owns the query
+    my_futures: dict[uuid.UUID, "asyncio.Future[dict]"] = {}
+    awaiting: dict[uuid.UUID, "asyncio.Future[dict]"] = {}  # another request owns it
+    loop = asyncio.get_event_loop()
+    for tid in ordered:
+        key = (tid, sb, eb)
+        cached = _summary_cache_get(key, now_mono)
+        if cached is not None:
+            items_by_tag[tid] = cached
+        elif (inflight := _summary_inflight.get(key)) is not None:
+            awaiting[tid] = inflight
+        else:
+            fut: asyncio.Future[dict] = loop.create_future()
+            _summary_inflight[key] = fut
+            my_futures[tid] = fut
+            to_compute[tid] = visible[tid]
+
+    if to_compute:
+        try:
+            computed = await _compute_summaries(db, to_compute, start, end)
+        except Exception as exc:
+            # Fail the futures so waiters don't hang, and clear the claim so a
+            # retry can recompute.
+            for tid, fut in my_futures.items():
+                _summary_inflight.pop((tid, sb, eb), None)
+                if not fut.done():
+                    fut.set_exception(exc)
+            raise
+        for tid, fut in my_futures.items():
+            item = computed[tid]
+            _summary_cache_put((tid, sb, eb), now_mono, item)
+            items_by_tag[tid] = item
+            _summary_inflight.pop((tid, sb, eb), None)
+            if not fut.done():
+                fut.set_result(item)
+
+    for tid, fut in awaiting.items():
+        items_by_tag[tid] = await fut
+
+    return [items_by_tag[tid] for tid in ordered]
 
 
 @router.get("/summary", response_model=SummaryOut)
@@ -1351,7 +1598,8 @@ async def get_summary(
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
     """Per-tag snapshot for table/gauge panels: latest value plus
-    min/avg/max over [start, end)."""
+    min/avg/max over [start, end). One request carries all of a page's tags;
+    each tag's aggregation is cached for SUMMARY_CACHE_TTL_S (see above)."""
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
     if end.tzinfo is None:
@@ -1368,51 +1616,10 @@ async def get_summary(
     # Preserve the caller's ordering — panels rely on it
     visible = {t.id: t for t in (await db.execute(tag_query)).scalars().all()}
     ordered = [tid for tid in tag_ids if tid in visible]
+    if not ordered:
+        return {"items": []}
 
-    agg_result = await db.execute(
-        select(
-            ScadaSampleAll.tag_id,
-            func.min(ScadaSampleAll.value).label("min"),
-            func.max(ScadaSampleAll.value).label("max"),
-            func.avg(ScadaSampleAll.value).label("avg"),
-        )
-        .where(
-            ScadaSampleAll.tag_id.in_(ordered),
-            ScadaSampleAll.ts >= start,
-            ScadaSampleAll.ts < end,
-        )
-        .group_by(ScadaSampleAll.tag_id)
-    )
-    aggs = {row.tag_id: row for row in agg_result.all()}
-
-    # Latest row per tag regardless of window (a gauge must show the current
-    # value even if the stats window is short)
-    last_result = await db.execute(
-        select(ScadaSampleAll)
-        .distinct(ScadaSampleAll.tag_id)
-        .where(ScadaSampleAll.tag_id.in_(ordered))
-        .order_by(ScadaSampleAll.tag_id, ScadaSampleAll.ts.desc())
-    )
-    lasts = {s.tag_id: s for s in last_result.scalars().all()}
-
-    items = []
-    for tid in ordered:
-        tag = visible[tid]
-        agg = aggs.get(tid)
-        last = lasts.get(tid)
-        items.append(
-            {
-                "tag_id": str(tid),
-                "label": tag.label,
-                "unit": tag.unit,
-                "last": last.value if last else None,
-                "last_ts": last.ts.isoformat() if last else None,
-                "min": round(float(agg.min), 4) if agg else None,
-                "max": round(float(agg.max), 4) if agg else None,
-                "avg": round(float(agg.avg), 4) if agg else None,
-            }
-        )
-    return {"items": items}
+    return {"items": await _summarize(db, ordered, visible, start, end)}
 
 
 # ---------------------------------------------------------------------------
@@ -1509,15 +1716,22 @@ async def update_rnet_settings(
     request: Request,
     body: RnetSettingsUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[
+    profile: Annotated[
         Profile, Depends(require_permission("scada:view", "scada:manage"))
     ] = None,
 ):
     """Update sampling-level durations / retention knobs (partial). The bridge,
     historian, alarm engine and archiver pick up changes on their next loop."""
     s = await rnet_settings.get_settings(db)
+    before = scada_audit.rnet_settings_snapshot(s)
     for field, val in body.model_dump(exclude_unset=True).items():
         setattr(s, field, val)
     await db.flush()
     await db.refresh(s)
+    changes = scada_audit.diff_fields(before, scada_audit.rnet_settings_snapshot(s))
+    if changes:
+        scada_audit.log_scada_change(
+            db, profile, LOG_UPDATE, TARGET_SETTINGS,
+            target_label="Pengaturan R-Net", changes=changes,
+        )
     return _settings_dict(s)

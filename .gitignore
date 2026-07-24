@@ -11,6 +11,11 @@ out/
 dist/
 build/
 
+# R-Net bridge local store-and-forward buffer (runtime, per-PC — never commit)
+bridge_buffer.db
+bridge_buffer.db-wal
+bridge_buffer.db-shm
+
 # Environment
 .env
 .env.local

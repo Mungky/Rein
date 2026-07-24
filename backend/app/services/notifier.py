@@ -28,7 +28,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.services.email import send_email
+from app.services import email_notifier
 from db.models.scada import ScadaAlarmEvent, ScadaAlarmSettings, ScadaTag
 
 logger = logging.getLogger(__name__)
@@ -201,10 +201,9 @@ async def notify_alarm(
         subject, body = build_message(event, tag, transition)
 
         if email_on:
-            for recipient in alarm_settings.email_recipients.split(","):
-                recipient = recipient.strip()
-                if recipient:
-                    await send_email(to=recipient, subject=subject, body=body)
+            await email_notifier.send_to_list(
+                alarm_settings.email_recipients, subject, body
+            )
         if telegram_on:
             await send_telegram(alarm_settings.telegram_chat_id, f"{subject}\n{body}")
     except Exception:

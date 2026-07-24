@@ -20,7 +20,7 @@ foreach ($line in Get-Content $Config) {
     if ($i -lt 1) { continue }
     $k = $t.Substring(0, $i).Trim()
     $v = $t.Substring($i + 1).Trim().Trim('"').Trim("'")
-    if ($k -in @("DATABASE_URL", "FLUSH_INTERVAL_S", "RING_KEEP", "LOG_LEVEL", "LATEST_FLUSH_S")) {
+    if ($k -in @("DATABASE_URL", "FLUSH_INTERVAL_S", "RING_KEEP", "LOG_LEVEL", "LATEST_FLUSH_S", "SENTRY_DSN")) {
         Set-Item -Path "Env:$k" -Value $v
     }
 }

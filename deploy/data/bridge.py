@@ -37,7 +37,12 @@ RESILIENCE (never crash the box)
     - Broker down / drops     → paho auto-reconnects; on reconnect we
                                 re-subscribe.
     - Database down           → the flush is retried next minute; buffered
-                                values are kept.
+                                values are kept (in memory AND on disk).
+    - Process killed / PC     → each received value is written to a local SQLite
+      restart                   buffer (bridge_buffer.db) before it hits memory,
+                                and replayed to Supabase on the next start, so a
+                                crash mid-bucket no longer punches a hole in the
+                                history (W3 store-and-forward).
     - Malformed payload       → logged and skipped.
     - Any unexpected error    → logged; the loop keeps running.
 
@@ -59,6 +64,7 @@ import json
 import logging
 import os
 import signal
+import sqlite3
 import threading
 import time
 import uuid
@@ -115,11 +121,47 @@ PRUNE_EVERY_S = int(os.getenv("PRUNE_EVERY_S", "60"))
 # bridge mati bila baris ini basi > 2 menit — jadi jangan set di atas itu.
 HEARTBEAT_S = int(os.getenv("HEARTBEAT_S", "15"))
 
+# Store-and-forward berbasis disk (W3). Nilai history yang diterima tapi belum
+# sempat di-flush ke Supabase (menunggu batas bucket, atau Supabase sedang down)
+# hanya ada di memori — hilang kalau proses mati / PC restart, bikin lubang di
+# riwayat. Buffer SQLite lokal ini menyimpannya ke disk: ditulis saat pesan
+# masuk, dihapus setelah baris-nya benar-benar tersimpan di Supabase, dan
+# diputar ulang saat start (recovery). Murni lapisan persistensi — tidak
+# mengubah cara/skema penyimpanan ke Supabase.
+BUFFER_ENABLED = os.getenv("BRIDGE_BUFFER_ENABLED", "1") not in ("0", "false", "False")
+BUFFER_DB_PATH = os.getenv(
+    "BRIDGE_BUFFER_DB",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge_buffer.db"),
+)
+
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s %(message)s",
 )
 log = logging.getLogger("rnet-bridge")
+
+# Sentry (M4) — OPSIONAL: aktif hanya bila SENTRY_DSN diisi di config.env DAN
+# sentry-sdk terpasang. Bridge didesain "never crash" (semua error ditangkap
+# dan dicatat log), jadi integrasi logging Sentry-lah yang bekerja: setiap
+# log.error/exception otomatis jadi event. Tanpa DSN/paket, bridge jalan
+# persis seperti sebelumnya.
+SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+if SENTRY_DSN:
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment=os.getenv("SENTRY_ENVIRONMENT", "bridge"),
+            traces_sample_rate=0.0,
+            send_default_pii=False,
+        )
+        log.info("Sentry aktif untuk bridge")
+    except ImportError:
+        log.warning(
+            "SENTRY_DSN diset tapi sentry-sdk belum terpasang — "
+            "jalankan: pip install sentry-sdk"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -212,7 +254,7 @@ def _apply_transform(raw: float, xform: Transform) -> float:
 
 
 class Bridge:
-    def __init__(self, dsn: str) -> None:
+    def __init__(self, dsn: str, buffer_path: str | None = None) -> None:
         self.dsn = dsn
         # Random per-process suffix for MQTT client ids (see _make_client)
         self._instance_id = uuid.uuid4().hex[:6]
@@ -244,6 +286,15 @@ class Bridge:
         # Heartbeat pernah gagal? (tabel belum ada di DB pra-migrasi) —
         # supaya log tidak banjir warning tiap HEARTBEAT_S.
         self._hb_warned = False
+        # Disk store-and-forward buffer (W3). Separate lock: the SQLite write in
+        # _on_message must not block flush()/flush_latest() waiting on self._lock.
+        self._buf_path = buffer_path or BUFFER_DB_PATH
+        self._buf_lock = threading.Lock()
+        self._buf: sqlite3.Connection | None = None
+        # tag_id -> ts (datetime) of the value currently persisted in the buffer,
+        # so flush() can delete exactly the row it just stored (and never a newer
+        # one an incoming message replaced meanwhile).
+        self._buf_ts: dict[str, datetime] = {}
 
     # -- database ---------------------------------------------------------- #
 
@@ -255,6 +306,108 @@ class Bridge:
                 self.dsn, autocommit=True, connect_timeout=10, prepare_threshold=None
             )
         return self._conn
+
+    # -- disk store-and-forward buffer (W3) -------------------------------- #
+
+    def _buffer_db(self) -> sqlite3.Connection:
+        """Lazily open the local SQLite buffer. WAL + synchronous=NORMAL: cheap
+        writes that survive a process kill (the crash the buffer defends against);
+        the one row per tag holds that tag's newest not-yet-persisted value."""
+        if self._buf is None:
+            conn = sqlite3.connect(self._buf_path, check_same_thread=False, timeout=5)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS pending_samples ("
+                "tag_id TEXT PRIMARY KEY, ts TEXT NOT NULL, value REAL NOT NULL)"
+            )
+            conn.commit()
+            self._buf = conn
+        return self._buf
+
+    def _buffer_put(self, tag_id: str, ts: datetime, value: float) -> None:
+        """Persist a tag's newest history value to disk BEFORE it lands in
+        memory. Never raises — a buffer hiccup must not stop ingest."""
+        if not BUFFER_ENABLED:
+            return
+        try:
+            with self._buf_lock:
+                db = self._buffer_db()
+                db.execute(
+                    "INSERT OR REPLACE INTO pending_samples (tag_id, ts, value) "
+                    "VALUES (?, ?, ?)",
+                    (tag_id, ts.isoformat(), value),
+                )
+                db.commit()
+        except Exception:
+            log.exception("Gagal menulis buffer disk (lanjut dari memori)")
+
+    def _buffer_delete_many(self, items: list[tuple[str, str]]) -> None:
+        """Drop rows (by (tag_id, ts_iso)) that were confirmed stored in Supabase.
+        Matching the exact ts string means a newer value an incoming message
+        wrote (different ts) is never removed by mistake."""
+        if not BUFFER_ENABLED or not items:
+            return
+        try:
+            with self._buf_lock:
+                db = self._buffer_db()
+                db.executemany(
+                    "DELETE FROM pending_samples WHERE tag_id = ? AND ts = ?",
+                    items,
+                )
+                db.commit()
+        except Exception:
+            log.exception("Gagal membersihkan buffer disk (akan dicoba lagi)")
+
+    def _buffer_all(self) -> list[tuple[str, str, float]]:
+        if not BUFFER_ENABLED:
+            return []
+        try:
+            with self._buf_lock:
+                db = self._buffer_db()
+                return db.execute(
+                    "SELECT tag_id, ts, value FROM pending_samples"
+                ).fetchall()
+        except Exception:
+            log.exception("Gagal membaca buffer disk")
+            return []
+
+    def recover_buffer(self) -> None:
+        """On start (after reconcile, so intervals + ring set are known): replay
+        every buffered value left by a previous crash/restart into the historian,
+        stamped at its interval bucket and routed to scada_ring / scada_samples
+        like a normal flush. ON CONFLICT DO NOTHING makes replay idempotent.
+        Rows that fail (e.g. Supabase still down) stay for the next start."""
+        rows = self._buffer_all()
+        if not rows:
+            return
+        recovered = 0
+        done: list[tuple[str, str]] = []  # (tag_id, ts_iso) rows safe to remove
+        for tag_id, ts_iso, value in rows:
+            try:
+                dt = datetime.fromisoformat(ts_iso)
+            except ValueError:
+                done.append((tag_id, ts_iso))  # unparseable → drop, can't replay
+                continue
+            interval = self._interval.get(tag_id, FLUSH_INTERVAL_S)
+            boundary = int(dt.timestamp() // interval) * interval
+            bts = datetime.fromtimestamp(boundary, tz=timezone.utc)
+            table = "scada_ring" if tag_id in self._ring else "scada_samples"
+            try:
+                with self._db().cursor() as cur:
+                    cur.execute(
+                        f"INSERT INTO {table} (tag_id, ts, value) "
+                        "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                        (tag_id, bts, value),
+                    )
+                recovered += 1
+                done.append((tag_id, ts_iso))
+            except Exception:
+                # DB still unreachable / tag removed → leave in buffer, retry later
+                log.exception("Recovery: gagal mengirim 1 nilai (tag %s)", tag_id)
+        self._buffer_delete_many(done)
+        if recovered:
+            log.info("Recovery: %d nilai dari buffer disk terkirim ke database", recovered)
 
     def load_config(
         self,
@@ -340,9 +493,14 @@ class Bridge:
             return
         # Scale/tune the raw sensor value before storing (config set in R-Net).
         value = _apply_transform(raw, self._xform.get(tag_id, (1.0, 0.0, None)))
+        now = datetime.now(timezone.utc)
+        # Persist to disk FIRST: if the box dies before flush() reaches the next
+        # bucket boundary, this value survives and is replayed on restart.
+        self._buffer_put(tag_id, now, value)
         with self._lock:
             self._pending[tag_id] = value
-            self._latest_pending[tag_id] = (datetime.now(timezone.utc), value)
+            self._latest_pending[tag_id] = (now, value)
+            self._buf_ts[tag_id] = now
 
     # -- client lifecycle -------------------------------------------------- #
 
@@ -434,6 +592,9 @@ class Bridge:
         now_epoch = time.time()
         rows: list[tuple[str, datetime, float]] = []
         stored: list[str] = []
+        # (tag_id, ts_iso) of the buffer rows backing the values we're storing —
+        # deleted only after Supabase confirms the write.
+        buf_deletes: list[tuple[str, str]] = []
         with self._lock:
             for tag_id, value in self._pending.items():
                 interval = self._interval.get(tag_id, FLUSH_INTERVAL_S)
@@ -454,6 +615,9 @@ class Bridge:
                 self._bucket[tag_id] = int(
                     now_epoch // self._interval.get(tag_id, FLUSH_INTERVAL_S)
                 )
+                buf_ts = self._buf_ts.get(tag_id)
+                if buf_ts is not None:
+                    buf_deletes.append((tag_id, buf_ts.isoformat()))
 
         if not rows:
             return
@@ -479,8 +643,12 @@ class Bridge:
                 "Flush: %d ring + %d historian tersimpan",
                 len(ring_rows), len(hist_rows),
             )
+            # Durably stored in Supabase now → drop the disk copies.
+            self._buffer_delete_many(buf_deletes)
         except Exception:
-            # Keep going — put the values back so the next pass retries them
+            # Keep going — put the values back so the next pass retries them.
+            # The buffer rows are intentionally NOT deleted here, so a crash
+            # during a Supabase outage still recovers on restart.
             log.exception("Gagal menyimpan ke database, akan dicoba lagi")
             with self._lock:
                 for tag_id, _ts, value in rows:
@@ -585,6 +753,9 @@ class Bridge:
             CONFIG_REFRESH_S,
         )
         self.reconcile()
+        # Recover anything a previous crash/restart left in the disk buffer, now
+        # that reconcile() has loaded intervals + ring flags to stamp/route them.
+        self.recover_buffer()
         last_latest = last_refresh = last_prune = time.monotonic()
         last_hb = 0.0  # heartbeat pertama langsung pada tick pertama
 
@@ -606,9 +777,11 @@ class Bridge:
                 last_hb = now
             self._stop.wait(1.0)
 
-        # Graceful shutdown: push the freshest live values, then close.
-        # Pending history values whose bucket hasn't ended yet are dropped on
-        # purpose — a gap is honest, an early-stamped sample is not.
+        # Graceful shutdown: push the freshest live values, then close. Pending
+        # history values whose bucket hasn't ended yet are NOT force-stamped now
+        # (an early-stamped sample would lie about when the bucket ended) — they
+        # stay in the disk buffer and are replayed at their true boundary on the
+        # next start, so a restart no longer leaves a hole.
         log.info("Menghentikan bridge…")
         self.flush()
         if LATEST_ENABLED:
@@ -617,13 +790,18 @@ class Bridge:
             self._teardown_client(site_id)
         if self._conn is not None and not self._conn.closed:
             self._conn.close()
+        if self._buf is not None:
+            try:
+                self._buf.close()  # checkpoints WAL
+            except Exception:
+                pass
 
     def stop(self, *_args) -> None:
         self._stop.set()
 
 
 def main() -> None:
-    bridge = Bridge(DATABASE_URL)
+    bridge = Bridge(DATABASE_URL, buffer_path=BUFFER_DB_PATH)
     signal.signal(signal.SIGINT, bridge.stop)
     signal.signal(signal.SIGTERM, bridge.stop)
     bridge.run()

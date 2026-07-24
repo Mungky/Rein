@@ -31,8 +31,9 @@ from app.schemas.scada import (
     LatestOut,
     TagArchiveListOut,
 )
-from app.services import archiver, notifier
+from app.services import archiver, email_notifier, notifier, scada_audit
 from db.models.profile import Profile
+from db.models.scada_audit_log import LOG_UPDATE, TARGET_ALARM_SETTINGS
 from db.models.scada import (
     ScadaAlarmEvent,
     ScadaAlarmSettings,
@@ -279,9 +280,10 @@ async def update_alarm_settings(
     request: Request,
     body: AlarmSettingsUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
 ):
     row = await _get_settings_row(db)
+    before = scada_audit.alarm_settings_snapshot(row)
     for field in (
         "email_enabled",
         "email_recipients",
@@ -295,6 +297,12 @@ async def update_alarm_settings(
             setattr(row, field, value)
     await db.flush()
     await db.refresh(row)
+    changes = scada_audit.diff_fields(before, scada_audit.alarm_settings_snapshot(row))
+    if changes:
+        scada_audit.log_scada_change(
+            db, profile, LOG_UPDATE, TARGET_ALARM_SETTINGS,
+            target_label="Pengaturan alarm", changes=changes,
+        )
     return _settings_dict(row)
 
 
@@ -316,10 +324,7 @@ async def send_test_notification(
     )
     sent: list[str] = []
     if row.email_enabled and row.email_recipients:
-        for recipient in row.email_recipients.split(","):
-            recipient = recipient.strip()
-            if recipient:
-                await notifier.send_email(to=recipient, subject=subject, body=body)
+        await email_notifier.send_to_list(row.email_recipients, subject, body)
         sent.append("email")
     if row.telegram_enabled and row.telegram_chat_id:
         await notifier.send_telegram(row.telegram_chat_id, f"{subject}\n{body}")
