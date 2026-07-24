@@ -92,8 +92,15 @@ export function ExportRangeDialog({
       await exportRangeToExcel({ tags, sheetName, start: fromDate, end: toDate });
       toast.success("File Excel diunduh");
       onClose();
-    } catch {
-      toast.error("Gagal membuat file Excel");
+    } catch (e) {
+      // Munculkan penyebab aslinya (status + detail dari backend) daripada
+      // pesan generik — mempercepat diagnosa (mis. 429 rate limit / 422).
+      const status = (e as { status?: number }).status;
+      const detail = e instanceof Error ? e.message : String(e);
+      console.error("Export gagal:", e);
+      toast.error(
+        `Gagal membuat file Excel${status ? ` (${status})` : ""}: ${detail.slice(0, 200)}`
+      );
     } finally {
       setBusy(false);
     }
