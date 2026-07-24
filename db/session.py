@@ -1,6 +1,5 @@
 """Database session management — async SQLAlchemy session factory."""
 
-import logging
 import os
 import ssl
 from collections.abc import AsyncGenerator
@@ -28,28 +27,20 @@ _database_url = os.getenv(
 if "+asyncpg" not in _database_url:
     _database_url = _database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-# Supabase pooler requires SSL. Verify the server certificate against the
-# Supabase CA (their pooler/db certs are signed by Supabase's own CA, not a
-# public one — system CAs alone can't validate them). The CA file is public;
-# download + placement instructions: db/certs/README.md. Path can be
-# overridden with DB_SSL_ROOT_CERT (useful on servers that mount the cert
-# elsewhere). If the file is missing we fall back to encrypt-only so a dev
-# machine still boots, but log loudly — production must have the CA file.
-_ca_file = os.getenv("DB_SSL_ROOT_CERT", "").strip() or os.path.join(
-    _project_root, "db", "certs", "prod-ca-2021.crt"
-)
-if os.path.exists(_ca_file):
-    _ssl_ctx = ssl.create_default_context(cafile=_ca_file)
-else:
-    logging.getLogger(__name__).warning(
-        "CA Supabase tidak ditemukan di %s — koneksi DB terenkripsi TANPA "
-        "verifikasi sertifikat. Unduh CA-nya (lihat db/certs/README.md) "
-        "atau set DB_SSL_ROOT_CERT.",
-        _ca_file,
-    )
-    _ssl_ctx = ssl.create_default_context()
-    _ssl_ctx.check_hostname = False
-    _ssl_ctx.verify_mode = ssl.CERT_NONE
+# Supabase pooler requires SSL. Create an SSL context that does not
+# verify the certificate (required for Supabase pooled connections)
+# while still encrypting the connection.
+#
+# NB: verifikasi CA SENGAJA tidak dipakai. Pooler Supabase (Supavisor,
+# aws-*.pooler.supabase.com:6543) memakai rantai self-signed yang butuh
+# CA `prod-ca-2021.crt`, tapi CA itu ditolak OpenSSL 3 ("CA cert does not
+# include key usage extension") — jadi verify+CA maupun verify+system-CA
+# sama-sama gagal dan mematikan SELURUH koneksi database. Sampai Supabase
+# menerbitkan CA yang sesuai OpenSSL 3, encrypt-only adalah satu-satunya
+# mode yang berfungsi untuk pooler ini.
+_ssl_ctx = ssl.create_default_context()
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode = ssl.CERT_NONE
 
 # Connection budget. DATABASE_URL must point at Supabase's TRANSACTION pooler
 # (port 6543): server slots are only held for the duration of a query, so many
