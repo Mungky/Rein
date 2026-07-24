@@ -4,16 +4,50 @@
 
 import { format } from "date-fns";
 import { scadaApi } from "@/lib/api/scada";
-import type { Tag } from "../types";
+import type { RecentSample, Tag } from "../types";
 
-const HISTORY_CHUNK = 4; // /history accepts max 4 tags per call
-const HISTORY_WINDOW_MS = 44 * 24 * 3600_000; // /history caps spans at 45 days
+const PAGE_LIMIT = 5000; // maksimum baris per panggilan /samples
+const MAX_PAGES = 400; // pengaman: 400 × 5000 = 2 juta baris/tag
 
-/** Wide time-series export (Waktu | tag1 | tag2 | …) over an explicit
- *  [start, end] window chosen with the From/To calendars. Long ranges are
- *  fetched in ≤44-day windows (the /history span cap) and merged; tags are
- *  chunked by 4 (the /history tag cap). Rows are written oldest → newest so an
- *  Excel chart reads left-to-right in time. */
+/** Tarik SEMUA baris mentah satu tag dalam [start, end) persis seperti
+ *  tersimpan di database — tanpa bucket/resample. Endpoint /samples urut
+ *  terbaru-dulu dengan keyset `before` (ts < before); kita page mundur dari
+ *  `end` sampai melewati `start`. Kembalian urut menaik (lama → baru). */
+async function fetchRawRows(
+  tagId: string,
+  start: Date,
+  end: Date
+): Promise<RecentSample[]> {
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  const out: RecentSample[] = [];
+  let before: string | undefined = end.toISOString();
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const res = await scadaApi.getSamplesPage(tagId, {
+      before,
+      limit: PAGE_LIMIT,
+    });
+    if (res.items.length === 0) break;
+    for (const s of res.items) {
+      const t = new Date(s.ts).getTime();
+      if (t >= startMs && t < endMs) out.push(s);
+    }
+    const oldest = res.items[res.items.length - 1];
+    // Sudah melewati awal jendela, atau tidak ada halaman lagi → berhenti.
+    if (new Date(oldest.ts).getTime() < startMs || !res.has_more) break;
+    before = oldest.ts;
+  }
+
+  out.reverse(); // terbaru-dulu → lama-dulu
+  return out;
+}
+
+/** Wide time-series export (Waktu | tag1 | tag2 | …) atas jendela [start, end]
+ *  dari kalender Dari/Sampai. Mengekspor ISI DATABASE apa adanya: setiap baris
+ *  mentah pada resolusi aslinya (mis. 2 dtk untuk Fastest), TANPA
+ *  bucket/rata-rata. Timestamp digabung antar-tag; sel kosong = tag itu tidak
+ *  punya baris pada detik itu. Ditulis lama → baru. */
 export async function exportRangeToExcel(opts: {
   tags: Tag[];
   sheetName: string;
@@ -22,35 +56,23 @@ export async function exportRangeToExcel(opts: {
 }): Promise<void> {
   const XLSX = await import("xlsx");
   const { tags, sheetName, start, end } = opts;
-  const tagIds = tags.map((t) => t.id);
 
-  const windows: [Date, Date][] = [];
-  for (let t = start.getTime(); t < end.getTime(); t += HISTORY_WINDOW_MS) {
-    windows.push([new Date(t), new Date(Math.min(t + HISTORY_WINDOW_MS, end.getTime()))]);
-  }
-  const chunks: string[][] = [];
-  for (let i = 0; i < tagIds.length; i += HISTORY_CHUNK) {
-    chunks.push(tagIds.slice(i, i + HISTORY_CHUNK));
-  }
+  // Baris mentah per tag (paralel), lalu digabung ke peta ts → {tag: nilai}.
+  const perTag = await Promise.all(
+    tags.map((t) => fetchRawRows(t.id, start, end))
+  );
 
   const byTime = new Map<string, Record<string, number>>();
-  for (const [ws, we] of windows) {
-    const results = await Promise.all(
-      chunks.map((ids) => scadaApi.getHistory(ids, ws, we, 720))
-    );
-    for (const res of results) {
-      for (const s of res.series) {
-        for (const p of s.points) {
-          let row = byTime.get(p.t);
-          if (!row) {
-            row = {};
-            byTime.set(p.t, row);
-          }
-          row[s.tag_id] = p.avg;
-        }
+  tags.forEach((t, i) => {
+    for (const s of perTag[i]) {
+      let row = byTime.get(s.ts);
+      if (!row) {
+        row = {};
+        byTime.set(s.ts, row);
       }
+      row[t.id] = s.value;
     }
-  }
+  });
 
   const times = [...byTime.keys()].sort();
   const header = [
@@ -58,8 +80,9 @@ export async function exportRangeToExcel(opts: {
     ...tags.map((t) => (t.unit ? `${t.label} (${t.unit})` : t.label)),
   ];
   const body = times.map((t) => [
-    format(new Date(t), "yyyy-MM-dd HH:mm"),
-    ...tagIds.map((id) => byTime.get(t)?.[id] ?? null),
+    // Detik ikut ditulis — data bisa per-2-detik, jangan dipangkas ke menit.
+    format(new Date(t), "yyyy-MM-dd HH:mm:ss"),
+    ...tags.map((tag) => byTime.get(t)?.[tag.id] ?? null),
   ]);
   const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
 
