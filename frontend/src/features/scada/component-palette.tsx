@@ -60,9 +60,6 @@ const DATA_COMPONENTS: CompSpec[] = [
       title: "Gauge",
       config: {
         tag_id: null,
-        warning: null,
-        critical: null,
-        direction: "above",
         style: "arc",
         min: 0,
         max: 100,
@@ -94,9 +91,6 @@ const DATA_COMPONENTS: CompSpec[] = [
       title: "Gauge",
       config: {
         tag_id: null,
-        warning: null,
-        critical: null,
-        direction: "above",
         style: "donut",
         min: 0,
         max: 100,
@@ -133,7 +127,7 @@ const DATA_COMPONENTS: CompSpec[] = [
       id: newId(),
       type: "gauge",
       title: "Angka",
-      config: { tag_id: null, warning: null, critical: null, direction: "above", style: "stat" },
+      config: { tag_id: null, style: "stat" },
     }),
     preview: (
       <svg viewBox="0 0 100 56" className={pv}>
@@ -162,9 +156,6 @@ const DATA_COMPONENTS: CompSpec[] = [
         tag_id: null,
         min: 0,
         max: 100,
-        warning: null,
-        critical: null,
-        direction: "above",
       },
     }),
     preview: (

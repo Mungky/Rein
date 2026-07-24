@@ -3,8 +3,8 @@
 /** Perkakas bersama komponen nilai (gauge / level / LED / bar):
  *  - LAYOUT_PRESETS: kotak bawaan tiap elemen per jenis komponen
  *  - resolveLayout: config.elements + config.layout → daftar elemen siap render
- *  - Status/statusOf/StatusChip: ambang → Normal/Waspada/Kritis (token REIN,
- *    selalu ikon + teks — tidak pernah warna saja)
+ *  - Status/tagStatusOf/StatusChip: ambang TAG → Normal/Waspada/Kritis (token
+ *    REIN, selalu ikon + teks — tidak pernah warna saja)
  *
  *  Semua ukuran teks di sini memakai `em` supaya ikut tinggi kotak elemen
  *  (lihat panels/layout-box.tsx). */
@@ -173,18 +173,42 @@ export function layoutMap(
 
 export type Status = "normal" | "waspada" | "kritis";
 
-export function statusOf(
-  value: number,
-  config: {
-    warning: number | null;
-    critical: number | null;
-    direction: "above" | "below";
-  }
-): Status {
-  const bad = (threshold: number) =>
-    config.direction === "above" ? value >= threshold : value <= threshold;
-  if (config.critical !== null && bad(config.critical)) return "kritis";
-  if (config.warning !== null && bad(config.warning)) return "waspada";
+/** Ambang status sebuah tag — sumber tunggal, diatur di "Atur Sumber".
+ *  Kritis = di luar alarm_min/alarm_max; Waspada = di luar warn_min/warn_max
+ *  tapi masih di dalam alarm. Panel gauge/level MEMBACA ini, tidak lagi punya
+ *  ambang sendiri (revisi: satu tempat pengaturan alarm). */
+export interface TagThresholds {
+  warn_min: number | null;
+  warn_max: number | null;
+  alarm_min: number | null;
+  alarm_max: number | null;
+}
+
+export function readTagThresholds(
+  config: Record<string, unknown> | undefined | null
+): TagThresholds {
+  const num = (v: unknown) =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  const c = config ?? {};
+  return {
+    warn_min: num(c.warn_min),
+    warn_max: num(c.warn_max),
+    alarm_min: num(c.alarm_min),
+    alarm_max: num(c.alarm_max),
+  };
+}
+
+export function tagStatusOf(value: number, t: TagThresholds): Status {
+  if (
+    (t.alarm_min !== null && value < t.alarm_min) ||
+    (t.alarm_max !== null && value > t.alarm_max)
+  )
+    return "kritis";
+  if (
+    (t.warn_min !== null && value < t.warn_min) ||
+    (t.warn_max !== null && value > t.warn_max)
+  )
+    return "waspada";
   return "normal";
 }
 

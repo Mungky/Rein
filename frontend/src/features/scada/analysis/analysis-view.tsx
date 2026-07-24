@@ -370,7 +370,7 @@ export function AnalysisView({
         id: crypto.randomUUID(),
         type: "gauge",
         title: firstTag.label,
-        config: { tag_id: ids[0], warning: null, critical: null, direction: "above" },
+        config: { tag_id: ids[0] },
       };
     } else if (kind === "bar") {
       panel = {

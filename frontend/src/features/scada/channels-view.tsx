@@ -51,12 +51,14 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
     sorted.find((c) => c.id === selectedId) ?? sorted[0] ?? null;
 
   // ── Sources: one row per registered Source, with the channels using it ──
+  // Alamat (hls_url/url) SENGAJA tidak diikutkan di sini: panel Sources terlihat
+  // semua pemegang scada:view, dan URL-nya membocorkan hostname named tunnel /
+  // broker kita. Alamat hanya tampil (dan bisa diubah) di dalam "Kelola Screen"
+  // yang khusus scada:manage.
   const sources = useMemo(() => {
     return store.streams.map((s) => ({
       key: `src:${s.id}`,
       label: s.name,
-      detail:
-        (s.source_type === "stream" ? s.hls_url : s.url) ?? "(tanpa alamat)",
       type: SOURCE_TYPE_LABEL[s.source_type],
       usedBy: store.channels
         .filter(
@@ -370,12 +372,6 @@ export function ChannelsView({ canManage }: { canManage: boolean }) {
                     <span className="shrink-0 rounded-full bg-bg-sidebar px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-text-muted">
                       {s.type}
                     </span>
-                  </div>
-                  <div
-                    className="mt-0.5 truncate text-[10.5px] font-mono text-text-light"
-                    title={s.detail}
-                  >
-                    {s.detail}
                   </div>
                   <div className="mt-1 text-[11px] text-text-muted">
                     {s.usedBy.length === 0 ? (

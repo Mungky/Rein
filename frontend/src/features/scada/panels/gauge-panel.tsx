@@ -21,9 +21,10 @@ import {
   StatusChip,
   layoutKindOf,
   layoutMap,
-  statusOf,
+  readTagThresholds,
+  tagStatusOf,
 } from "./elements";
-import type { Status } from "./elements";
+import type { Status, TagThresholds } from "./elements";
 
 function fmt(value: number, decimals: number | null | undefined): string {
   return value.toLocaleString(
@@ -34,27 +35,30 @@ function fmt(value: number, decimals: number | null | undefined): string {
   );
 }
 
-/** Zona [f0..f1] (fraksi skala) per status — dihitung dari ambang + arah. */
-function zonesOf(config: GaugePanelConfig, min: number, max: number) {
+/** Zona [f0..f1] (fraksi skala) per status — dari ambang TAG (warn/alarm dua
+ *  sisi) yang dipetakan ke skala min–max gauge. Ambang yang null dilewati, jadi
+ *  tag yang hanya punya batas atas tetap tergambar benar. */
+function zonesFromTag(t: TagThresholds, min: number, max: number) {
   const span = max - min || 1;
   const frac = (v: number) => Math.min(1, Math.max(0, (v - min) / span));
+  const cuts = Array.from(
+    new Set(
+      [t.alarm_min, t.warn_min, t.warn_max, t.alarm_max]
+        .filter((v): v is number => v !== null)
+        .map(frac)
+        .concat([0, 1])
+    )
+  ).sort((a, b) => a - b);
   const zones: { f0: number; f1: number; status: Status }[] = [];
-  const w = config.warning;
-  const c = config.critical;
-  if (config.direction === "above") {
-    const fw = w !== null ? frac(w) : 1;
-    const fc = c !== null ? frac(c) : 1;
-    if (fw > 0) zones.push({ f0: 0, f1: fw, status: "normal" });
-    if (fc > fw) zones.push({ f0: fw, f1: fc, status: "waspada" });
-    if (fc < 1) zones.push({ f0: fc, f1: 1, status: "kritis" });
-  } else {
-    const fc = c !== null ? frac(c) : 0;
-    const fw = w !== null ? frac(w) : 0;
-    if (fc > 0) zones.push({ f0: 0, f1: fc, status: "kritis" });
-    if (fw > fc) zones.push({ f0: fc, f1: fw, status: "waspada" });
-    if (fw < 1) zones.push({ f0: fw, f1: 1, status: "normal" });
+  for (let i = 0; i < cuts.length - 1; i++) {
+    const f0 = cuts[i];
+    const f1 = cuts[i + 1];
+    if (f1 - f0 <= 0.001) continue;
+    // Status di tengah segmen menentukan warna seluruh segmen.
+    const mid = min + ((f0 + f1) / 2) * span;
+    zones.push({ f0, f1, status: tagStatusOf(mid, t) });
   }
-  return zones.filter((z) => z.f1 - z.f0 > 0.001);
+  return zones;
 }
 
 export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: Tag[] }) {
@@ -90,12 +94,14 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
   }
 
   const value = state.value;
-  const status = statusOf(value, config);
+  const tag = tags.find((t) => t.id === config.tag_id);
+  const thresholds = readTagThresholds(tag?.config);
+  const status = tagStatusOf(value, thresholds);
   const lastTs = state.valueTs ? new Date(state.valueTs) : null;
   const style = config.style ?? "stat";
   const kind = layoutKindOf("gauge", config) ?? "gauge-stat";
   const el = layoutMap(kind, config.elements, config.layout);
-  const device = tags.find((t) => t.id === config.tag_id)?.device_key ?? "";
+  const device = tag?.device_key ?? "";
 
   const min = config.min ?? 0;
   const max = config.max ?? 100;
@@ -117,7 +123,7 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
           {style === "arc" ? (
             <ArcGauge
               f={f}
-              zones={zonesOf(config, min, max)}
+              zones={zonesFromTag(thresholds, min, max)}
               colorOf={colorOf}
               minText={fmt(min, config.decimals)}
               maxText={fmt(max, config.decimals)}

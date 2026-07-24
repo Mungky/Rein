@@ -355,53 +355,16 @@ const ELEMENT_HINTS: Partial<Record<string, string>> = {
   footer: "Info bawah (Diperbarui / rentang)",
 };
 
-const THRESHOLD_HINT =
-  '"Di atas ambang" = nilai tinggi berbahaya; "Di bawah" = nilai rendah berbahaya.';
-
-function ThresholdFields({
-  warning,
-  critical,
-  direction,
-  onPatch,
-}: {
-  warning: number | null;
-  critical: number | null;
-  direction: "above" | "below";
-  onPatch: (p: {
-    warning?: number | null;
-    critical?: number | null;
-    direction?: "above" | "below";
-  }) => void;
-}) {
+/** Ambang Waspada/Kritis tidak lagi diatur per-panel: kini satu sumber di
+ *  tag (Analisis → Atur Sumber → Waspada/Alarm bawah & atas), supaya semua
+ *  gauge/level sensor yang sama sepakat. Panel otomatis ikut ambang tag. */
+function ThresholdNote() {
   return (
-    <>
-      <div className="grid grid-cols-2 gap-3">
-        <NumField
-          label="Ambang Waspada"
-          value={warning}
-          placeholder="tanpa"
-          onChange={(v) => onPatch({ warning: v })}
-        />
-        <NumField
-          label="Ambang Kritis"
-          value={critical}
-          placeholder="tanpa"
-          onChange={(v) => onPatch({ critical: v })}
-        />
-      </div>
-      <div>
-        <label className={labelCls}>Arah Bahaya</label>
-        <select
-          className="field-select cursor-pointer"
-          value={direction}
-          onChange={(e) => onPatch({ direction: e.target.value as "above" | "below" })}
-        >
-          <option value="above">Di atas ambang = bahaya</option>
-          <option value="below">Di bawah ambang = bahaya</option>
-        </select>
-        <p className="mt-1 text-[11px] text-text-light">{THRESHOLD_HINT}</p>
-      </div>
-    </>
+    <div className="rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2 text-[11px] leading-snug text-text-light">
+      Ambang <b>Waspada</b> &amp; <b>Alarm</b> (warna hijau/amber/merah) diatur
+      di sensornya — buka <b>Analisis → Atur Sumber</b>. Panel ini otomatis
+      mengikutinya, jadi semua tampilan sensor yang sama selalu sepakat.
+    </div>
   );
 }
 
@@ -674,12 +637,7 @@ function GaugeForm({
           />
         </div>
       )}
-      <ThresholdFields
-        warning={config.warning}
-        critical={config.critical}
-        direction={config.direction}
-        onPatch={patch}
-      />
+      <ThresholdNote />
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className={labelCls}>Label (opsional)</label>
@@ -763,12 +721,7 @@ function LevelForm({
           Skala maks harus lebih besar dari min — perbaiki sebelum Simpan.
         </p>
       )}
-      <ThresholdFields
-        warning={config.warning}
-        critical={config.critical}
-        direction={config.direction}
-        onPatch={patch}
-      />
+      <ThresholdNote />
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className={labelCls}>Label (opsional)</label>

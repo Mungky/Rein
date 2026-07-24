@@ -104,6 +104,8 @@ export function TagDetailRow({
   const topic = String(cfg.mqtt_topic ?? "");
   const alarmMin = cfg.alarm_min ?? null;
   const alarmMax = cfg.alarm_max ?? null;
+  const warnMin = cfg.warn_min ?? null;
+  const warnMax = cfg.warn_max ?? null;
 
   const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(1);
@@ -349,6 +351,14 @@ export function TagDetailRow({
                   {alarmMin === null && alarmMax === null
                     ? "belum diatur"
                     : `${alarmMin ?? "−∞"} s.d. ${alarmMax ?? "∞"}${tag.unit ? ` ${tag.unit}` : ""}`}
+                </dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="w-20 shrink-0 text-text-light">Batas waspada</dt>
+                <dd className="tabular-nums text-text-muted">
+                  {warnMin === null && warnMax === null
+                    ? "belum diatur"
+                    : `${warnMin ?? "−∞"} s.d. ${warnMax ?? "∞"}${tag.unit ? ` ${tag.unit}` : ""}`}
                 </dd>
               </div>
               <div className="flex gap-2">

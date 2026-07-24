@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import type { LevelPanelConfig, Tag } from "../types";
 import { useTagValue } from "./use-tag-value";
 import { LayoutItem, LayoutSurface } from "./layout-box";
-import { layoutMap, statusOf } from "./elements";
+import { layoutMap, readTagThresholds, tagStatusOf } from "./elements";
 
 export function LevelPanel({ config, tags }: { config: LevelPanelConfig; tags: Tag[] }) {
   const state = useTagValue(config.tag_id ?? null, tags);
@@ -45,7 +45,8 @@ export function LevelPanel({ config, tags }: { config: LevelPanelConfig; tags: T
   const value = state.value;
   const span = config.max - config.min || 1;
   const f = Math.min(1, Math.max(0, (value - config.min) / span));
-  const status = statusOf(value, config);
+  const tag = tags.find((t) => t.id === config.tag_id);
+  const status = tagStatusOf(value, readTagThresholds(tag?.config));
   const fill =
     status === "kritis"
       ? "var(--rein-red)"
@@ -54,7 +55,7 @@ export function LevelPanel({ config, tags }: { config: LevelPanelConfig; tags: T
         : config.color ?? "var(--rnet-chart-1)";
   const lastTs = state.valueTs ? new Date(state.valueTs) : null;
   const el = layoutMap("level", config.elements, config.layout);
-  const device = tags.find((t) => t.id === config.tag_id)?.device_key ?? "";
+  const device = tag?.device_key ?? "";
 
   return (
     <LayoutSurface>

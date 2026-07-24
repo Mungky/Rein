@@ -38,6 +38,13 @@ export function SourceDialog({
   const [alarmMax, setAlarmMax] = useState(
     cfg.alarm_max === undefined || cfg.alarm_max === null ? "" : String(cfg.alarm_max)
   );
+  // Waspada = zona kuning DI DALAM batas alarm (mendekati bahaya, belum bahaya).
+  const [warnMin, setWarnMin] = useState(
+    cfg.warn_min === undefined || cfg.warn_min === null ? "" : String(cfg.warn_min)
+  );
+  const [warnMax, setWarnMax] = useState(
+    cfg.warn_max === undefined || cfg.warn_max === null ? "" : String(cfg.warn_max)
+  );
   // Scaling / calibration: stored = raw * scale + offset, rounded to `decimals`.
   const [scale, setScale] = useState(
     cfg.scale === undefined || cfg.scale === null ? "" : String(cfg.scale)
@@ -76,14 +83,20 @@ export function SourceDialog({
       const config: Record<string, unknown> = { ...cfg, mqtt_topic: topic.trim() };
       delete config.alarm_min;
       delete config.alarm_max;
+      delete config.warn_min;
+      delete config.warn_max;
       delete config.scale;
       delete config.offset;
       delete config.decimals;
       delete config.silent_alarm; // sensor-bisu is automatic now
       const min = alarmMin.trim().replace(",", ".");
       const max = alarmMax.trim().replace(",", ".");
+      const wmin = warnMin.trim().replace(",", ".");
+      const wmax = warnMax.trim().replace(",", ".");
       if (min !== "" && Number.isFinite(Number(min))) config.alarm_min = Number(min);
       if (max !== "" && Number.isFinite(Number(max))) config.alarm_max = Number(max);
+      if (wmin !== "" && Number.isFinite(Number(wmin))) config.warn_min = Number(wmin);
+      if (wmax !== "" && Number.isFinite(Number(wmax))) config.warn_max = Number(wmax);
       // Scaling / calibration — omit no-op values to keep config clean
       const sc = scale.trim().replace(",", ".");
       const of = offset.trim().replace(",", ".");
@@ -171,33 +184,77 @@ export function SourceDialog({
                   Samakan persis dengan topik di node <span className="font-mono">mqtt out</span> Node-RED.
                 </p>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                    Alarm bila &lt;
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    className="field-input"
-                    placeholder="min (opsional)"
-                    value={alarmMin}
-                    onChange={(e) => setAlarmMin(e.target.value)}
-                  />
+              {/* Ambang status — dipakai SEMUA panel gauge/level sensor ini
+                  (satu sumber). Urut nilai: Alarm bawah < Waspada bawah <
+                  aman < Waspada atas < Alarm atas. */}
+              <div className="rounded-[var(--r-lg)] border border-border-soft bg-bg-sidebar p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-[12px] font-semibold text-text">
+                    Ambang Status <span className="font-normal text-text-light">(opsional)</span>
+                  </span>
+                  <span className="flex items-center gap-2 text-[10px] font-semibold">
+                    <span className="text-amber">● Waspada</span>
+                    <span className="text-red">● Alarm</span>
+                  </span>
                 </div>
-                <div>
-                  <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                    Alarm bila &gt;
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    className="field-input"
-                    placeholder="maks (opsional)"
-                    value={alarmMax}
-                    onChange={(e) => setAlarmMax(e.target.value)}
-                  />
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-text-muted">
+                      Alarm bila &lt; <span className="text-red">(bawah)</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      className="field-input"
+                      placeholder="min"
+                      value={alarmMin}
+                      onChange={(e) => setAlarmMin(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-text-muted">
+                      Alarm bila &gt; <span className="text-red">(atas)</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      className="field-input"
+                      placeholder="maks"
+                      value={alarmMax}
+                      onChange={(e) => setAlarmMax(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-text-muted">
+                      Waspada bila &lt; <span className="text-amber">(bawah)</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      className="field-input"
+                      placeholder="mendekati min"
+                      value={warnMin}
+                      onChange={(e) => setWarnMin(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-text-muted">
+                      Waspada bila &gt; <span className="text-amber">(atas)</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      className="field-input"
+                      placeholder="mendekati maks"
+                      value={warnMax}
+                      onChange={(e) => setWarnMax(e.target.value)}
+                    />
+                  </div>
                 </div>
+                <p className="mt-2 text-[11px] text-text-light">
+                  Waspada = kuning saat nilai mulai mendekati batas; Alarm = merah
+                  saat melewatinya (memicu notifikasi). Kosongkan yang tidak perlu.
+                </p>
               </div>
 
               {/* Scaling / kalibrasi — mentah → satuan teknik */}

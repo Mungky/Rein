@@ -110,9 +110,8 @@ export type GaugeStyle = "stat" | "arc" | "donut";
 
 export interface GaugePanelConfig {
   tag_id: string | null; // null = belum diatur (dipasang dari palet, diatur lewat inspector)
-  warning: number | null;
-  critical: number | null;
-  direction: "above" | "below"; // which side of the threshold is bad
+  // Ambang Waspada/Kritis TIDAK di sini lagi — dibaca dari tag (config.warn_min/
+  // warn_max/alarm_min/alarm_max) lewat readTagThresholds. Satu sumber ambang.
   /** Bentuk tampilan: "stat" (angka besar, bawaan), "arc" (jarum), "donut". */
   style?: GaugeStyle;
   /** Skala gauge untuk arc/donut; null = 0–100. */
@@ -147,9 +146,7 @@ export interface LevelPanelConfig {
   tag_id: string | null;
   min: number;
   max: number;
-  warning: number | null;
-  critical: number | null;
-  direction: "above" | "below";
+  // Ambang Waspada/Kritis dibaca dari tag (lihat GaugePanelConfig), bukan di sini.
   /** Warna cairan saat normal; null = warna chart bawaan. */
   color?: string | null;
   label?: string | null;
