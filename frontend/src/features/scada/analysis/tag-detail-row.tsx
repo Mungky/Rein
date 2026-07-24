@@ -27,9 +27,10 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
-import type { RecentSample, SamplingLevel, Tag } from "../types";
+import type { ChartRange, RecentSample, SamplingLevel, SummaryItem, Tag } from "../types";
 import { exportTagToExcel } from "./export-excel";
 import { TagSparkline, type SparkStatus } from "./tag-sparkline";
+import { RANGE_LABELS, RANGE_MS, RANGE_POINTS } from "../panels/chart-panel";
 import { usePanelRefresh } from "../panels/use-panel-refresh";
 
 /** Sambung ekor live (titik lebih baru dari data historis terakhir) ke deret
@@ -69,6 +70,7 @@ function fmtTs(iso: string): string {
 
 export function TagDetailRow({
   tag,
+  range,
   samples,
   sparkStatus,
   online,
@@ -80,6 +82,9 @@ export function TagDetailRow({
   onOpenHistory,
 }: {
   tag: Tag;
+  /** Jendela waktu bersama (selektor "Rentang" di toolbar) — dipakai grafik
+   *  besar + statistik Min/Rata/Maks supaya seragam dengan sparkline. */
+  range: ChartRange;
   /** Newest first — stored samples + session live points, already merged. */
   samples: RecentSample[];
   sparkStatus: SparkStatus;
@@ -106,41 +111,59 @@ export function TagDetailRow({
   // `samples` (dari analysis-view) sudah = data tersimpan + titik live sesi ini.
   const ascending = useMemo(() => [...samples].reverse(), [samples]);
 
-  // Grafik besar = 24 jam terakhir (bucketed dari server). Di-fetch ulang pada
-  // irama panel (60 dtk) supaya bucket baru masuk; di antara fetch, ekor live
-  // ditempel dari `ascending` supaya ujung kurva bergerak tiap detik.
-  const [chart24h, setChart24h] = useState<RecentSample[] | null>(null);
-  const loadChart = useCallback(async () => {
+  // Grafik besar = jendela "Rentang" terpilih (bucketed dari server), dan
+  // statistik Min/Rata/Maks = agregat SUNGGUHAN atas jendela yang sama
+  // (getSummary, bukan cuma 100 titik terakhir) — jadi grafik, sparkline, dan
+  // statistik semuanya bercerita hal yang sama. Di-fetch ulang pada irama panel
+  // (60 dtk); di antara fetch, ekor live ditempel supaya ujung kurva bergerak.
+  const [chartPts, setChartPts] = useState<RecentSample[] | null>(null);
+  const [summary, setSummary] = useState<SummaryItem | null>(null);
+  const loadRange = useCallback(async () => {
     const end = new Date();
-    const start = new Date(end.getTime() - 86_400_000);
+    const start = new Date(end.getTime() - RANGE_MS[range]);
     try {
-      const res = await scadaApi.getHistory([tag.id], start, end);
-      const pts = res.series[0]?.points ?? [];
-      setChart24h(pts.map((p) => ({ ts: p.t, value: p.avg })));
+      const [hist, sum] = await Promise.all([
+        scadaApi.getHistory([tag.id], start, end, RANGE_POINTS[range]),
+        scadaApi.getSummary([tag.id], start, end),
+      ]);
+      const pts = hist.series[0]?.points ?? [];
+      setChartPts(pts.map((p) => ({ ts: p.t, value: p.avg })));
+      setSummary(sum.items[0] ?? null);
     } catch {
       /* biarkan tampilan lama; usePanelRefresh coba lagi */
     }
-  }, [tag.id]);
-  usePanelRefresh(loadChart);
+  }, [tag.id, range]);
+  usePanelRefresh(loadRange);
 
-  // Grafik 24 jam + ekor live bila datanya cukup; sensor baru (< 2 titik dalam
-  // 24 jam) pakai data live sesi ini supaya langsung tergambar & bergerak.
+  // Grafik rentang + ekor live bila datanya cukup; sensor baru (< 2 titik dalam
+  // rentang) pakai data live sesi ini supaya langsung tergambar & bergerak.
   const chartSamples = useMemo(
     () =>
-      chart24h && chart24h.length >= 2
-        ? withLiveTail(chart24h, ascending)
+      chartPts && chartPts.length >= 2
+        ? withLiveTail(chartPts, ascending)
         : ascending,
-    [chart24h, ascending]
+    [chartPts, ascending]
   );
 
+  // Statistik: agregat server atas rentang bila tersedia; selagi memuat,
+  // fallback ke data terkini supaya tile tidak kosong.
   const stats = useMemo(() => {
+    if (
+      summary &&
+      summary.min !== null &&
+      summary.max !== null &&
+      summary.avg !== null
+    ) {
+      return { min: summary.min, max: summary.max, avg: summary.avg };
+    }
     if (samples.length === 0) return null;
     const values = samples.map((s) => s.value);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const avg = values.reduce((a, b) => a + b, 0) / values.length;
-    return { min, max, avg, n: values.length };
-  }, [samples]);
+    return {
+      min: Math.min(...values),
+      max: Math.max(...values),
+      avg: values.reduce((a, b) => a + b, 0) / values.length,
+    };
+  }, [summary, samples]);
 
   const pageCount = Math.max(1, Math.ceil(samples.length / pageSize));
   const pageItems = samples.slice((page - 1) * pageSize, page * pageSize);
@@ -193,7 +216,7 @@ export function TagDetailRow({
         <div className="mb-3 rounded-[var(--r-lg)] border border-border-soft bg-bg p-2">
           <div className="mb-1 flex items-center gap-2 px-1">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-text-light">
-              24 jam terakhir
+              {RANGE_LABELS[range]} terakhir
             </span>
             {online ? (
               <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-green">
@@ -202,7 +225,7 @@ export function TagDetailRow({
             ) : (
               <span className="text-[10.5px] text-text-light">offline</span>
             )}
-            {(loading || chart24h === null) && (
+            {(loading || chartPts === null) && (
               <Loader2 className="size-3 animate-spin text-text-light" />
             )}
             <div className="flex-1" />
@@ -378,7 +401,7 @@ export function TagDetailRow({
               </button>
             </div>
 
-            {/* Statistik dari data yang tampil */}
+            {/* Statistik atas rentang terpilih (Min/Rata/Maks) */}
             {stats && (
               <div className="mt-1 grid grid-cols-3 gap-2">
                 {(

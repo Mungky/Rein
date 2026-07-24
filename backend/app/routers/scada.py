@@ -1426,7 +1426,7 @@ SPARK_MAX_POINTS = 240
 @limiter.limit(READ_LIMIT)
 async def get_sparklines(
     request: Request,
-    range_h: Annotated[int, Query(ge=1, le=168)] = 12,
+    range_h: Annotated[int, Query(ge=1, le=744)] = 12,
     points: Annotated[int, Query(ge=10, le=SPARK_MAX_POINTS)] = 120,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,

@@ -47,7 +47,7 @@ export const RANGE_LABELS: Record<ChartRange, string> = {
  *  bucket-nya turun ke hitungan detik (1 jam ÷ 600 = 6 detik) — sensor
  *  ber-interval 3 detik jadi tergambar mengalir, bukan tangga per menit.
  *  Rentang panjang tetap hemat: jatahnya kecil, jadi datanya tidak membengkak. */
-const RANGE_POINTS: Record<ChartRange, number> = {
+export const RANGE_POINTS: Record<ChartRange, number> = {
   "1h": 600,
   "6h": 480,
   "24h": 360,

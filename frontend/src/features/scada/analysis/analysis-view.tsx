@@ -31,7 +31,7 @@ import { scadaApi } from "@/lib/api/scada";
 import type { ChartRange, Panel, RecentSample, Sheet, Tag } from "../types";
 import { useScadaStore } from "../store";
 import { samplingIntervalMs } from "../sampling";
-import { RANGE_LABELS } from "../panels/chart-panel";
+import { RANGE_LABELS, RANGE_MS } from "../panels/chart-panel";
 import { usePanelRefresh } from "../panels/use-panel-refresh";
 import { RiwayatView } from "./riwayat-view";
 import { SourceDialog } from "./source-dialog";
@@ -125,6 +125,9 @@ export function AnalysisView({
   const [sparkMap, setSparkMap] = useState<Record<string, RecentSample[]>>({});
   const [recentLoading, setRecentLoading] = useState(false);
   const tagIdsKey = useMemo(() => tags.map((t) => t.id).join(","), [tags]);
+  // Rentang -> jam untuk endpoint sparkline (dibulatkan ke atas, minimal 1 jam)
+  // supaya sparkline mini mengikuti selektor Rentang, sama seperti grafik.
+  const sparkRangeH = Math.max(1, Math.ceil(RANGE_MS[range] / 3_600_000));
 
   const loadRecent = useCallback(async () => {
     if (tagIdsKey === "") return;
@@ -140,7 +143,7 @@ export function AnalysisView({
               .catch(() => [id, []] as const)
           )
         ),
-        scadaApi.getSparklines(12).catch(() => ({ items: [] })),
+        scadaApi.getSparklines(sparkRangeH).catch(() => ({ items: [] })),
       ]);
       setRecent(Object.fromEntries(results));
       setSparkMap(
@@ -154,7 +157,7 @@ export function AnalysisView({
     } finally {
       setRecentLoading(false);
     }
-  }, [tagIdsKey]);
+  }, [tagIdsKey, sparkRangeH]);
 
   usePanelRefresh(loadRecent);
 
@@ -518,13 +521,13 @@ export function AnalysisView({
             ))}
           </select>
           <span className="hidden text-[12px] text-text-muted sm:inline">
-            Rentang panel:
+            Rentang:
           </span>
           <select
             className="field-select h-7 w-auto cursor-pointer text-[12px]"
             value={range}
             onChange={(e) => setRange(e.target.value as ChartRange)}
-            title="Rentang waktu untuk panel Grafik/Bar yang dibuat dari seleksi"
+            title="Rentang waktu untuk grafik, sparkline, statistik Min/Rata/Maks, dan panel yang dibuat dari seleksi"
           >
             {(Object.keys(RANGE_LABELS) as ChartRange[]).map((r) => (
               <option key={r} value={r}>
@@ -784,6 +787,7 @@ export function AnalysisView({
                   {expandedTagId === tag.id && (
                     <TagDetailRow
                       tag={tag}
+                      range={range}
                       samples={[...series].reverse()}
                       sparkStatus={sparkStatus}
                       online={online}
