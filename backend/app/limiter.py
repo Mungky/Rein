@@ -6,8 +6,13 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 # Batas bersama untuk endpoint data (dipakai router lewat @limiter.limit).
-READ_LIMIT = "60/minute"
-WRITE_LIMIT = "20/minute"
+# Angka besar karena limiter ini untuk mencegah ABUSE, bukan mencekik pemakaian
+# normal: halaman Data mem-fan-out SATU request per tag (14 tag = 14 panggilan
+# baca sekali muat) + sparkline + history/summary per baris + polling Monitor,
+# lalu Export menambah beberapa lagi. 60/menit membuat semuanya 429. Kunci
+# per-user (bukan per-IP), jadi ini plafon per orang.
+READ_LIMIT = "600/minute"
+WRITE_LIMIT = "120/minute"
 
 
 def user_or_ip(request: Request) -> str:

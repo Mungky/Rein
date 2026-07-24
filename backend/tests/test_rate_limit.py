@@ -46,8 +46,8 @@ def test_token_tanpa_sub_fallback_ip():
 
 
 def test_batas_baca_tulis():
-    assert READ_LIMIT == "60/minute"
-    assert WRITE_LIMIT == "20/minute"
+    assert READ_LIMIT == "600/minute"
+    assert WRITE_LIMIT == "120/minute"
 
 
 def _count(path: str, pattern: str) -> int:
