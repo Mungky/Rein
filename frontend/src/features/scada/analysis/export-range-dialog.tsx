@@ -1,20 +1,43 @@
 "use client";
 
-/** "Export Data" — download the selected sensors' history as Excel over a
- *  chosen range. "Semua" covers the current DB window; older cycles have
- *  already been archived to Google Drive (R-Net Arsip) by the reset job. */
+/** "Export Data" — drawer kanan: pilih rentang lewat kalender Dari/Sampai,
+ *  lalu unduh riwayat sensor terpilih sebagai Excel.
+ *
+ *  Ketersediaan data bergantung mode penyimpanan tiap sensor:
+ *   - Tidak "Simpan data" (mode ring) → hanya 24 jam terakhir yang ada.
+ *   - "Simpan data" ON → tersimpan ±1 bulan di database; bulan-bulan lama
+ *     sudah diarsip ke Google Drive (daftar di bawah). */
 
-import { useEffect, useState } from "react";
-import { Download, ExternalLink, Loader2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Download, ExternalLink, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { Drawer } from "@/components/ui/drawer";
 import { scadaApi } from "@/lib/api/scada";
 import type { Archive, Tag } from "../types";
-import {
-  EXPORT_RANGE_LABELS,
-  exportRangeToExcel,
-  type ExportRangeKey,
-} from "./export-excel";
+import { exportRangeToExcel } from "./export-excel";
+
+const DAY_MS = 86_400_000;
+/** Retensi historian di database sebelum arsip+reset (lihat archiver). */
+const STORED_WINDOW_MS = 31 * DAY_MS;
+
+/** Date -> nilai untuk <input type="datetime-local"> (waktu LOKAL, menit). */
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
+function fmtHuman(d: Date): string {
+  return d.toLocaleString("id", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export function ExportRangeDialog({
   tags,
@@ -25,9 +48,25 @@ export function ExportRangeDialog({
   sheetName: string;
   onClose: () => void;
 }) {
-  const [range, setRange] = useState<ExportRangeKey>("today");
   const [busy, setBusy] = useState(false);
   const [archives, setArchives] = useState<Archive[]>([]);
+  // Dipatok sekali saat drawer dibuka supaya batas kalender tidak bergeser.
+  const now = useMemo(() => new Date(), []);
+
+  // Sensor apa pun yang menyimpan riwayat → jendela lebih panjang tersedia.
+  const anyStored = useMemo(
+    () =>
+      tags.some((t) => Boolean((t.config as Record<string, unknown>).store_enabled)),
+    [tags]
+  );
+  const availableStart = useMemo(
+    () => new Date(now.getTime() - (anyStored ? STORED_WINDOW_MS : DAY_MS)),
+    [now, anyStored]
+  );
+
+  // Default: seluruh jendela yang tersedia (ring = 24 jam, tersimpan = ±1 bulan).
+  const [from, setFrom] = useState(() => toLocalInput(availableStart));
+  const [to, setTo] = useState(() => toLocalInput(now));
 
   useEffect(() => {
     scadaApi
@@ -36,10 +75,21 @@ export function ExportRangeDialog({
       .catch(() => undefined);
   }, []);
 
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
+  const invalid =
+    Number.isNaN(fromDate.getTime()) ||
+    Number.isNaN(toDate.getTime()) ||
+    fromDate >= toDate;
+
   async function doExport() {
+    if (invalid) {
+      toast.error("Rentang tidak valid — 'Dari' harus sebelum 'Sampai'.");
+      return;
+    }
     setBusy(true);
     try {
-      await exportRangeToExcel({ tags, sheetName, range });
+      await exportRangeToExcel({ tags, sheetName, start: fromDate, end: toDate });
       toast.success("File Excel diunduh");
       onClose();
     } catch {
@@ -49,63 +99,91 @@ export function ExportRangeDialog({
     }
   }
 
+  const minInput = toLocalInput(availableStart);
+  const maxInput = toLocalInput(now);
+
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div
-        className="modal-panel flex max-w-sm flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex shrink-0 items-start gap-3 border-b border-border-soft px-6 pb-4 pt-6">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-[var(--r-lg)] bg-gradient-to-br from-primary to-primary-hover text-white">
-            <Download className="size-5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-[16px] font-bold leading-tight text-text">
-              Export Data
-            </h2>
-            <p className="mt-0.5 text-[12px] text-text-muted">
-              {tags.length} sensor terpilih → file Excel
-            </p>
-          </div>
+    <Drawer
+      title="Export Data"
+      subtitle={`${tags.length} sensor terpilih → file Excel`}
+      icon={<Download className="size-5" />}
+      width={420}
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
+            Batal
+          </button>
           <button
             type="button"
-            onClick={onClose}
-            className="btn btn-ghost btn-icon btn-sm -mr-1 -mt-1"
+            onClick={doExport}
+            disabled={busy || tags.length === 0 || invalid}
+            className="btn btn-primary btn-sm gap-1.5"
           >
-            <X className="size-4" />
+            {busy ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Download className="size-3.5" />
+            )}
+            Export
           </button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        {/* Ketersediaan data */}
+        <div className="rounded-[var(--r-lg)] border border-border-soft bg-bg-sidebar px-3 py-2.5">
+          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-text-light">
+            Data tersedia
+          </div>
+          <div className="mt-1 text-[12.5px] font-medium tabular-nums text-text">
+            {fmtHuman(availableStart)} — sekarang
+          </div>
+          <p className="mt-1 text-[11px] leading-snug text-text-light">
+            {anyStored
+              ? "Data tersimpan hingga ±1 bulan di database; bulan-bulan sebelumnya ada di arsip Google Drive di bawah."
+              : "Sensor ini mode 24 jam (tidak menyimpan riwayat) — hanya 24 jam terakhir yang tersedia. Centang “Simpan data ke riwayat” agar data lama bisa ditarik."}
+          </p>
         </div>
 
-        <div className="flex flex-col gap-1.5 px-6 py-5">
-          {(Object.keys(EXPORT_RANGE_LABELS) as ExportRangeKey[]).map((key) => (
-            <label
-              key={key}
-              className={cn(
-                "flex cursor-pointer items-center gap-2.5 rounded-[var(--r-lg)] border px-3 py-2.5",
-                range === key
-                  ? "border-primary bg-primary/5"
-                  : "border-border-soft hover:border-border"
-              )}
-            >
-              <input
-                type="radio"
-                name="export-range"
-                checked={range === key}
-                onChange={() => setRange(key)}
-                className="accent-[var(--rein-primary)]"
-              />
-              <span className="text-[13px] font-medium text-text">
-                {EXPORT_RANGE_LABELS[key]}
-              </span>
-            </label>
-          ))}
-          <p className="mt-1 text-[11px] leading-snug text-text-light">
-            Setiap sensor diakumulasi 1 bulan, lalu otomatis diarsip ke Google
-            Drive (folder <span className="font-semibold">R-Net Arsip</span>) dan
-            direset dari 0.
-          </p>
-          {archives.length > 0 && (
-            <div className="mt-1 max-h-28 overflow-y-auto rounded-[var(--r)] border border-border-soft bg-bg-sidebar p-2">
+        {/* Kalender Dari / Sampai */}
+        <div className="flex flex-col gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-semibold text-text-muted">Dari</span>
+            <input
+              type="datetime-local"
+              className="field-input h-9 text-[12.5px]"
+              value={from}
+              min={minInput}
+              max={maxInput}
+              onChange={(e) => setFrom(e.target.value)}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-semibold text-text-muted">Sampai</span>
+            <input
+              type="datetime-local"
+              className="field-input h-9 text-[12.5px]"
+              value={to}
+              min={minInput}
+              max={maxInput}
+              onChange={(e) => setTo(e.target.value)}
+            />
+          </label>
+          {invalid && (
+            <p className="text-[11px] text-red">
+              &lsquo;Dari&rsquo; harus sebelum &lsquo;Sampai&rsquo;.
+            </p>
+          )}
+        </div>
+
+        {/* Arsip bulanan di Google Drive */}
+        {archives.length > 0 && (
+          <div>
+            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-text-light">
+              Arsip Google Drive (bulan lama)
+            </div>
+            <div className="max-h-40 overflow-y-auto rounded-[var(--r)] border border-border-soft bg-bg-sidebar p-2">
               {archives.map((a) => (
                 <a
                   key={`${a.tag_id}-${a.cycle_start}`}
@@ -122,28 +200,9 @@ export function ExportRangeDialog({
                 </a>
               ))}
             </div>
-          )}
-        </div>
-
-        <div className="flex justify-end gap-2 px-6 pb-6">
-          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
-            Batal
-          </button>
-          <button
-            type="button"
-            onClick={doExport}
-            disabled={busy || tags.length === 0}
-            className="btn btn-primary btn-sm gap-1.5"
-          >
-            {busy ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Download className="size-3.5" />
-            )}
-            Export
-          </button>
-        </div>
+          </div>
+        )}
       </div>
-    </div>
+    </Drawer>
   );
 }

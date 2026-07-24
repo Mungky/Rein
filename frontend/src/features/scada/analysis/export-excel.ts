@@ -9,48 +9,19 @@ import type { Tag } from "../types";
 const HISTORY_CHUNK = 4; // /history accepts max 4 tags per call
 const HISTORY_WINDOW_MS = 44 * 24 * 3600_000; // /history caps spans at 45 days
 
-export type ExportRangeKey = "today" | "week" | "month" | "all";
-
-export const EXPORT_RANGE_LABELS: Record<ExportRangeKey, string> = {
-  today: "Hari ini",
-  week: "Minggu ini",
-  month: "Bulan ini",
-  all: "Semua (1 bulan)",
-};
-
-function rangeStart(range: ExportRangeKey, now: Date): Date {
-  const d = new Date(now);
-  if (range === "today") {
-    d.setHours(0, 0, 0, 0);
-    return d;
-  }
-  if (range === "week") {
-    d.setHours(0, 0, 0, 0);
-    const day = (d.getDay() + 6) % 7; // Monday = 0
-    d.setDate(d.getDate() - day);
-    return d;
-  }
-  if (range === "month") {
-    d.setHours(0, 0, 0, 0);
-    d.setDate(1);
-    return d;
-  }
-  // "all" = the DB's 90-day window; older months live in the Drive archive
-  return new Date(now.getTime() - 90 * 24 * 3600_000);
-}
-
-/** Wide time-series export (Waktu | tag1 | tag2 | …) for the chosen range.
- *  Long ranges are fetched in ≤44-day windows (the /history span cap) and
- *  merged; tags are chunked by 4 (the /history tag cap). */
+/** Wide time-series export (Waktu | tag1 | tag2 | …) over an explicit
+ *  [start, end] window chosen with the From/To calendars. Long ranges are
+ *  fetched in ≤44-day windows (the /history span cap) and merged; tags are
+ *  chunked by 4 (the /history tag cap). Rows are written oldest → newest so an
+ *  Excel chart reads left-to-right in time. */
 export async function exportRangeToExcel(opts: {
   tags: Tag[];
   sheetName: string;
-  range: ExportRangeKey;
+  start: Date;
+  end: Date;
 }): Promise<void> {
   const XLSX = await import("xlsx");
-  const { tags, sheetName, range } = opts;
-  const end = new Date();
-  const start = rangeStart(range, end);
+  const { tags, sheetName, start, end } = opts;
   const tagIds = tags.map((t) => t.id);
 
   const windows: [Date, Date][] = [];
@@ -96,17 +67,20 @@ export async function exportRangeToExcel(opts: {
   XLSX.utils.book_append_sheet(wb, ws, "Data");
   XLSX.writeFile(
     wb,
-    `rnet-${sheetName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${range}-${format(end, "yyyyMMdd-HHmm")}.xlsx`
+    `rnet-${sheetName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${format(start, "yyyyMMdd")}-${format(end, "yyyyMMdd")}.xlsx`
   );
 }
 
-/** Single-tag export used by the Riwayat drawer: raw recent samples. */
+/** Single-tag export used by the Riwayat drawer: raw recent samples.
+ *  Ditulis lama → baru (dibalik dari urutan API yang terbaru-dulu) supaya
+ *  grafik Excel terbaca kiri-ke-kanan menurut waktu. */
 export async function exportTagToExcel(tag: Tag): Promise<void> {
   const XLSX = await import("xlsx");
   const res = await scadaApi.getRecentSamples(tag.id, 500);
+  const rows = [...res.items].reverse();
   const ws = XLSX.utils.aoa_to_sheet([
     ["Waktu", `Nilai${tag.unit ? ` (${tag.unit})` : ""}`],
-    ...res.items.map((s) => [format(new Date(s.ts), "yyyy-MM-dd HH:mm"), s.value]),
+    ...rows.map((s) => [format(new Date(s.ts), "yyyy-MM-dd HH:mm"), s.value]),
   ]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Riwayat");
