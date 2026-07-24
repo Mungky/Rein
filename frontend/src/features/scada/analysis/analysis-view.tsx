@@ -113,7 +113,10 @@ export function AnalysisView({
   } | null>(null);
   const [drawerTag, setDrawerTag] = useState<Tag | null>(null);
   const [sourceTag, setSourceTag] = useState<Tag | null>(null);
-  const [showExport, setShowExport] = useState(false);
+  // Drawer Export terbuka untuk kumpulan tag ini (null = tertutup). Dipakai
+  // baik oleh tombol "Export Data" di action-bar seleksi maupun tombol Export
+  // di dropdown detail (satu tag) — keduanya membuka drawer kalender yang sama.
+  const [exportTags, setExportTags] = useState<Tag[] | null>(null);
   const [addingRow, setAddingRow] = useState(false);
   const [showAlarmSettings, setShowAlarmSettings] = useState(false);
 
@@ -594,7 +597,7 @@ export function AnalysisView({
               <BarChart3 className="size-3.5" /> Buat Bar
             </button>
             <button
-              onClick={() => setShowExport(true)}
+              onClick={() => setExportTags(selectedTags)}
               className="btn btn-secondary btn-sm gap-1.5"
               title="Unduh data sensor terpilih sebagai Excel"
             >
@@ -797,6 +800,7 @@ export function AnalysisView({
                       onChanged={store.refreshTags}
                       onOpenSource={canManage ? () => setSourceTag(tag) : undefined}
                       onOpenHistory={() => setDrawerTag(tag)}
+                      onExport={() => setExportTags([tag])}
                     />
                   )}
                 </Fragment>
@@ -853,11 +857,11 @@ export function AnalysisView({
       {showAlarmSettings && (
         <AlarmSettingsDialog onClose={() => setShowAlarmSettings(false)} />
       )}
-      {showExport && activeSheet && (
+      {exportTags && activeSheet && (
         <ExportRangeDialog
-          tags={selectedTags.length > 0 ? selectedTags : tags}
-          sheetName={activeSheet.name}
-          onClose={() => setShowExport(false)}
+          tags={exportTags}
+          sheetName={exportTags.length === 1 ? exportTags[0].label : activeSheet.name}
+          onClose={() => setExportTags(null)}
         />
       )}
     </div>

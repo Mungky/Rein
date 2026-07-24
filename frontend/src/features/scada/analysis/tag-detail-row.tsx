@@ -28,7 +28,6 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
 import type { ChartRange, RecentSample, SamplingLevel, SummaryItem, Tag } from "../types";
-import { exportTagToExcel } from "./export-excel";
 import { TagSparkline, type SparkStatus } from "./tag-sparkline";
 import { RANGE_LABELS, RANGE_MS, RANGE_POINTS } from "../panels/chart-panel";
 import { usePanelRefresh } from "../panels/use-panel-refresh";
@@ -80,6 +79,7 @@ export function TagDetailRow({
   onChanged,
   onOpenSource,
   onOpenHistory,
+  onExport,
 }: {
   tag: Tag;
   /** Jendela waktu bersama (selektor "Rentang" di toolbar) — dipakai grafik
@@ -95,6 +95,8 @@ export function TagDetailRow({
   onChanged: () => Promise<void>;
   onOpenSource?: () => void;
   onOpenHistory: () => void;
+  /** Buka drawer Export (kalender Dari/Sampai) untuk sensor ini. */
+  onExport: () => void;
 }) {
   const cfg = tag.config as Record<string, unknown>;
   const storeEnabled = Boolean(cfg.store_enabled);
@@ -104,7 +106,6 @@ export function TagDetailRow({
   const alarmMax = cfg.alarm_max ?? null;
 
   const [saving, setSaving] = useState(false);
-  const [exporting, setExporting] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -194,18 +195,6 @@ export function TagDetailRow({
       toast.error("Gagal mengubah status tag");
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function exportTag() {
-    setExporting(true);
-    try {
-      await exportTagToExcel(tag);
-      toast.success("File Excel diunduh");
-    } catch {
-      toast.error("Gagal membuat file Excel");
-    } finally {
-      setExporting(false);
     }
   }
 
@@ -387,16 +376,11 @@ export function TagDetailRow({
               </button>
               <button
                 type="button"
-                onClick={() => void exportTag()}
-                disabled={exporting}
+                onClick={onExport}
                 className="btn btn-secondary btn-sm h-7 gap-1 px-2 text-[11px]"
-                title="Unduh 500 data terakhir sensor ini sebagai Excel"
+                title="Export data sensor ini (pilih rentang Dari/Sampai)"
               >
-                {exporting ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <Download className="size-3" />
-                )}
+                <Download className="size-3" />
                 Export
               </button>
             </div>
