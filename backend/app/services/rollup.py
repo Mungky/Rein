@@ -23,11 +23,9 @@ WHY A LOOKBACK WINDOW, NOT JUST "THE LAST MINUTE"
     a premature row permanent.
 
 WHERE IT READS FROM
-    scada_samples_all — during the phase-5 transition that view is
-    scada_raw ∪ scada_ring ∪ scada_samples, so this task keeps working whether
-    a row was written by the new bridge (scada_raw) or an old one still writing
-    scada_ring. No change was needed here when scada_raw arrived, which is the
-    point of reading through the view.
+    scada_samples_all — now scada_raw ∪ scada_samples. This task never named a
+    physical table, which is why it needed no change when scada_raw replaced
+    scada_ring underneath it, nor when scada_ring was dropped.
 
     Note the raw lane only keeps ~24 h, so a backend down longer than that
     loses the summary for those minutes permanently. That is inherent to raw

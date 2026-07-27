@@ -38,9 +38,12 @@ RESOLUTION — TWO LANES
     from scada_settings). MQTT is push (messages arrive any time), but we store
     one row per tag per interval bucket: the latest value received in a bucket
     is written when the bucket boundary passes, stamped at that boundary (PK
-    tag_id+ts, ON CONFLICT DO NOTHING), into scada_ring or scada_samples per the
+    tag_id+ts, ON CONFLICT DO NOTHING), into scada_raw or scada_samples per the
     tag's store flag. A tag that sends nothing in a bucket produces a gap —
     exactly what a real sampled historian should show (the UI flags stale data).
+
+    THIS SCRIPT NEVER DELETES ANYTHING. Retention belongs to the backend, which
+    drops whole day partitions of scada_raw (audit D-1/D-3).
 
 RESILIENCE (never crash the box)
     - Broker down / drops     → paho auto-reconnects; on reconnect we
@@ -120,14 +123,11 @@ DEFAULT_LEVELS = {"fastest": 2, "fast": 5, "slow": 30, "slowest": 60}
 DEFAULT_LEVEL = "fast"
 
 # Ring mode ("simpan data" NOT ticked): like a CCTV SD card kept by TIME — ring
-# rows go to scada_ring and are pruned to the last `ring_window_h` hours (24h
-# default). Store tags go to scada_samples and are archived+reset monthly.
+# rows go to scada_raw, whose day partitions the BACKEND drops once they fall
+# outside `ring_window_h` (24h default). Store tags go to scada_samples and are
+# archived+reset monthly. Kept here only to describe the two lanes; this script
+# no longer reads the window for any purpose.
 DEFAULT_RING_WINDOW_H = 24
-PRUNE_EVERY_S = int(os.getenv("PRUNE_EVERY_S", "60"))
-# Ring retention moved to the backend (audit D-3) — see Bridge.prune_ring.
-# Default OFF here; set PRUNE_ENABLED=1 only to break the glass against a
-# backend that predates backend/app/services/ring_pruner.py.
-PRUNE_ENABLED = os.getenv("PRUNE_ENABLED", "0") not in ("0", "false", "False")
 
 # Which sites (brokers) THIS PC is responsible for — comma-separated site UUIDs
 # (audit D-4). Empty = every enabled site, the old behaviour, which is correct
@@ -214,7 +214,7 @@ def _parse_interval(config: dict | None, levels: dict[str, int]) -> tuple[int, b
 
     Both lanes sample at the tag's chosen `sampling_level` (fastest/fast/slow/
     slowest → seconds from the admin-tunable scada_settings). `store_enabled`
-    only decides WHICH table + retention: off → ring (scada_ring, 24h window),
+    only decides WHICH table + retention: off → ring (scada_raw, 24h window),
     on → historian (scada_samples, monthly archive+reset)."""
     cfg = config or {}
     level = cfg.get("sampling_level") or DEFAULT_LEVEL
@@ -296,7 +296,7 @@ class Bridge:
         self._latest_pending: dict[str, tuple[datetime, float]] = {}
         # tag_id -> storage interval in seconds (resolved from sampling_level)
         self._interval: dict[str, int] = {}
-        # tag_ids in ring mode (store_enabled off) — written to scada_ring
+        # tag_ids in ring mode (store_enabled off) — written to scada_raw
         self._ring: set[str] = set()
         # tag_id -> site_id, so every raw row can carry its plant (audit D-1).
         self._site_of: dict[str, str] = {}
@@ -472,7 +472,7 @@ class Bridge:
     def recover_buffer(self) -> None:
         """On start (after reconcile, so intervals + ring set are known): replay
         every buffered value left by a previous crash/restart into the historian,
-        stamped at its interval bucket and routed to scada_ring / scada_samples
+        stamped at its interval bucket and routed to scada_raw / scada_samples
         like a normal flush. ON CONFLICT DO NOTHING makes replay idempotent.
         Rows that fail (e.g. Supabase still down) stay for the next start."""
         rows = self._buffer_all()
@@ -747,7 +747,7 @@ class Bridge:
         # Route each row to its lane: ring tags → scada_raw (day-partitioned
         # 24h buffer), store tags → scada_samples (historian).
         #
-        # scada_raw replaced scada_ring in phase 5. Rows now also carry their
+        # scada_raw replaced the old ring table in phase 5. Rows now carry their
         # plant (site_id) so "everything for plant X" needs no detour through
         # scada_tags (audit D-1). NOTE: rows must keep arriving in time order —
         # scada_raw's BRIN index on ts depends on it, and out-of-order writes
@@ -793,27 +793,6 @@ class Bridge:
             # last reading — the exact bug D-9 describes.
             for tag_id, _ts, _v in rows:
                 self._buf_ts.pop(tag_id, None)
-
-    def prune_ring(self) -> None:
-        """DEPRECATED — retention now belongs to the backend, not to field PCs.
-
-        Kept only as an explicit break-glass switch (PRUNE_ENABLED=1) for a
-        deployment running against a backend too old to have the ring pruner.
-
-        Why it moved (audit data D-3): this statement is not scoped to a site,
-        so every bridge in the fleet swept the WHOLE table every 60 s — 50
-        plants meant 50 identical full-table deletes per minute, 49 of them
-        finding nothing. Retention is a property of the database and now has
-        exactly one owner: backend/app/services/ring_pruner.py, which also
-        deletes in bounded batches instead of one unbounded statement."""
-        try:
-            with self._db().cursor() as cur:
-                cur.execute(
-                    "DELETE FROM scada_ring WHERE ts < now() - make_interval(hours => %s)",
-                    (self._ring_window_h,),
-                )
-        except Exception:
-            log.exception("Gagal memangkas data ring, akan dicoba lagi")
 
     def flush_latest(self) -> None:
         """Live lane: UPSERT the newest value per tag into scada_tag_latest.
@@ -910,7 +889,7 @@ class Bridge:
         # Recover anything a previous crash/restart left in the disk buffer, now
         # that reconcile() has loaded intervals + ring flags to stamp/route them.
         self.recover_buffer()
-        last_latest = last_refresh = last_prune = time.monotonic()
+        last_latest = last_refresh = time.monotonic()
         last_hb = 0.0  # heartbeat pertama langsung pada tick pertama
 
         while not self._stop.is_set():
@@ -923,9 +902,6 @@ class Bridge:
             if LATEST_ENABLED and now - last_latest >= LATEST_FLUSH_S:
                 self.flush_latest()
                 last_latest = now
-            if PRUNE_ENABLED and now - last_prune >= PRUNE_EVERY_S:
-                self.prune_ring()
-                last_prune = now
             if now - last_hb >= HEARTBEAT_S:
                 self.heartbeat()
                 last_hb = now

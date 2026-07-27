@@ -6,9 +6,9 @@ yang tidak bisa dihindari diberi analogi.
 **Dasarnya:** temuan D-1 sampai D-12 di [AUDIT-DATA.md](AUDIT-DATA.md) dan rancangan
 di [ARSITEKTUR-DATA.md](ARSITEKTUR-DATA.md).
 
-**Status:** semua sudah masuk ke `main` (commit `0ac7640` + lanjutannya) dan
-diterapkan ke database produksi — **kecuali satu langkah** yang sengaja ditahan,
-lihat bagian ⛔ di bawah.
+**Status:** SELESAI SELURUHNYA. Semua sudah masuk ke `main` dan diterapkan ke
+database produksi, termasuk langkah terakhir (menghapus tabel lama `scada_ring`)
+yang dijalankan 27 Juli setelah persetujuan pemilik.
 
 ---
 
@@ -131,27 +131,27 @@ Ini bukan bagian dari audit — semuanya muncul saat pengerjaan atau pengujian.
 
 ---
 
-## 5. ⛔ Yang masih menunggu Anda
+## 5. Langkah terakhir: tabel lama sudah dihapus
 
-### Langkah 7 — menghapus `scada_ring`
+`scada_ring` dihapus 27 Juli, setelah empat prasyarat diverifikasi:
 
-**Ditahan atas permintaan Anda.** Ini satu-satunya langkah yang membuang data.
+1. ✅ Bridge baru aktif di PC lapangan (detak jantung ada, `scada_raw` menerima
+   data, `scada_ring` diam 1,5 jam)
+2. ✅ Penyapuan terakhir selesai — 2.464 baris sisa disalin, 0 tersisa
+3. ✅ Diperiksa baris demi baris **termasuk nilainya**: 0 baris `scada_ring`
+   tanpa padanan persis di `scada_raw`; 77.512 = 77.512 pada rentang yang sama
+4. ✅ Tiga salinan tetap ada sesudahnya: `scada_raw`, ringkasan per menit, dan
+   cuplikan CSV di `db/snapshots/2026-07-26-plant-tanobel/`
 
-Prasyaratnya **sudah terpenuhi semua**:
+Efek sampingnya menyenangkan: **ukuran database turun 65 MB → 36 MB**, karena
+index menggembung 36 MB yang jadi bukti temuan D-2/D-3 ikut lenyap bersama
+tabelnya.
 
-- ✅ Bridge baru aktif di PC lapangan (terbukti dari detak jantung + `scada_raw` menerima data)
-- ✅ Penyapuan terakhir selesai — 2.464 baris sisa disalin, **0 tersisa**
-- ✅ Setiap baris `scada_ring` sudah ada di `scada_raw`
+Kaca pengintip kembali sederhana (`scada_raw ∪ scada_samples`), dan tambalan
+anti-duplikat dari masa transisi ikut dilepas.
 
-Tinggal aba-aba Anda. Setelah itu kaca pengintip kembali sederhana dan
-tambalan anti-duplikat tidak diperlukan lagi.
-
-Verifikasi mandiri kapan saja:
-```
-python backend/scripts/raw_sweep.py --dry-run
-```
-
----
+Kode yang jadi mati sudah dibersihkan: pembersih ring, alat bantu transisi, dan
+`prune_ring` di bridge — **bridge sekarang tidak pernah menghapus apa pun.**
 
 ## 6. Yang perlu Anda perhatikan sebelum plant pertama
 
@@ -221,8 +221,6 @@ Semua aman, semua bisa diulang.
 
 | Perintah | Gunanya |
 |---|---|
-| `python backend/scripts/check_bridge_lane.py --watch 60` | Bridge sudah menulis ke lajur baru? Memberi vonis eksplisit |
-| `python backend/scripts/raw_sweep.py --dry-run` | Masih ada baris yang belum tersalin? |
 | `python backend/scripts/archive_dry_run.py --list` | Plant & sensor mana yang akan diarsipkan |
 | `python backend/scripts/archive_dry_run.py --days 7` | **Rakit berkas arsip sungguhan ke komputer Anda** — tanpa unggah, tanpa email, tanpa hapus |
 | `python backend/scripts/rollup_backfill.py --dry-run` | Ringkasan tertinggal? |
@@ -246,7 +244,6 @@ Semua aman, semua bisa diulang.
 
 | Pekerjaan | Kenapa ditunda |
 |---|---|
-| **Langkah 7** — hapus `scada_ring` | Menunggu aba-aba Anda |
 | **D-5** — cara menulis `COPY` | Belum mendesak: 2% anggaran pada 300 sensor |
 | **Lebur `scada_samples` ke `scada_raw`** | Baru aman setelah arsip berbasis ringkasan terbukti (Fase 6 di produksi) |
 | **Cabut izin berlebih peran `anon`** | Saat ini tidak berbahaya (ditolak lapis lain), tapi menambah lapis kedua. Menyentuh semua tabel, bukan cuma R-Net |

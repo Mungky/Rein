@@ -28,7 +28,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import rnet_settings
-from db.models.scada import ScadaRing, ScadaSample, ScadaTag, ScadaTagLatest
+from db.models.scada import ScadaRaw, ScadaSample, ScadaTag, ScadaTagLatest
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ def _compute_value(tag: ScadaTag, at: datetime) -> float:
 
 async def sample_once(db: AsyncSession) -> int:
     """Write one sample per enabled *in-process* tag whose storage interval
-    lands on the current aligned minute. Ring tags (store off) go to scada_ring,
+    lands on the current aligned minute. Ring tags (store off) go to scada_raw,
     historian tags (store on) to scada_samples. Source "mqtt" tags are skipped
     here — the standalone bridge writes those from broker messages.
 
@@ -130,7 +130,7 @@ async def sample_once(db: AsyncSession) -> int:
             continue
         (ring_rows if rnet_settings.is_ring(tag.config) else hist_rows).append(row)
     if ring_rows:
-        await db.execute(pg_insert(ScadaRing).values(ring_rows).on_conflict_do_nothing())
+        await db.execute(pg_insert(ScadaRaw).values(ring_rows).on_conflict_do_nothing())
     if hist_rows:
         await db.execute(pg_insert(ScadaSample).values(hist_rows).on_conflict_do_nothing())
     if ring_rows or hist_rows:

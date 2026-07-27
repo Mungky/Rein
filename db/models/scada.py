@@ -222,7 +222,7 @@ class ScadaSample(Base):
     __tablename__ = "scada_samples"
     # ix_scada_samples_ts (migration i9j0k1l2m3n4, audit D-2): the PK's leading
     # column is tag_id, so any sweep filtering on TIME alone cannot use it and
-    # falls back to a full table scan. See ScadaRing for the full rationale.
+    # falls back to a full table scan (audit D-2).
     __table_args__ = (Index("ix_scada_samples_ts", "ts"),)
 
     tag_id: Mapped[uuid.UUID] = mapped_column(
@@ -234,33 +234,8 @@ class ScadaSample(Base):
     value: Mapped[float] = mapped_column(Float, nullable=False)
 
 
-class ScadaRing(Base):
-    """One RING-mode data point (store_enabled OFF) — the short-retention lane,
-    like a CCTV SD-card kept by TIME, not count. The bridge writes at the tag's
-    sampling level and prunes rows older than `scada_settings.ring_window_h`
-    (24 h default). Separate table from the historian so its heavy INSERT+DELETE
-    churn never bloats or slows the long-term `scada_samples` queries.
-
-    Same shape + PK semantics as ScadaSample; reads are unified through the
-    `scada_samples_all` view."""
-
-    __tablename__ = "scada_ring"
-    # ix_scada_ring_ts (migration i9j0k1l2m3n4, audit D-2): the retention sweep
-    # filters on ts ALONE, which the composite PK (tag_id, ts) cannot serve —
-    # without this index every pass sequentially scans the entire table.
-    __table_args__ = (Index("ix_scada_ring_ts", "ts"),)
-
-    tag_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("scada_tags.id", ondelete="CASCADE"), primary_key=True
-    )
-    ts: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), primary_key=True
-    )
-    value: Mapped[float] = mapped_column(Float, nullable=False)
-
-
 class ScadaRaw(Base):
-    """RAW sensor values, PARTITIONED BY DAY — the replacement for ScadaRing.
+    """RAW sensor values, PARTITIONED BY DAY — the 24-hour lane.
 
     Retention is DROP PARTITION, not DELETE (audit D-1). Measured at pilot
     scale (300 tags, 3.28 M rows/day): dropping a day takes 109 ms and leaves
@@ -299,14 +274,18 @@ class ScadaRaw(Base):
 
 
 class ScadaSampleAll(Base):
-    """READ-ONLY union view — during the phase-5 transition
-    `scada_raw ∪ scada_ring ∪ scada_samples`.
+    """READ-ONLY union view `scada_samples_all = scada_raw ∪ scada_samples`.
 
-    Every read path (recent/samples/history/summary/sparklines) selects from
-    this view so a tag's data is found whether it is ring or historian, without
-    each endpoint knowing which physical table holds it. Created/maintained by
-    Alembic raw SQL (no ORM DDL). NEVER write through this model — writers use
-    ScadaRing / ScadaSample directly."""
+    Every read path selects from this view so a tag's data is found whether it
+    is in the 24-hour raw lane or the historian lane, without each endpoint
+    knowing which physical table holds it. That indirection is what let
+    scada_ring be replaced by scada_raw and then dropped without touching a
+    single endpoint (migrations k1l2m3n4o5p6, m3n4o5p6q7r8).
+
+    Reads that only need a minute's resolution or coarser should prefer
+    ScadaRollup1m — this view is for raw detail. Created/maintained by Alembic
+    raw SQL (no ORM DDL). NEVER write through this model — writers use ScadaRaw
+    / ScadaSample directly."""
 
     __tablename__ = "scada_samples_all"
 

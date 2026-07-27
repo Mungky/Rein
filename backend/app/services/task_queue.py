@@ -127,7 +127,7 @@ class TaskQueue:
         batch = 10_000
         totals: dict[str, int] = {}
         # scada_tag_latest holds one row per tag, so it needs no batching.
-        for table in ("scada_raw", "scada_ring", "scada_samples"):
+        for table in ("scada_raw", "scada_samples"):
             removed = 0
             while True:
                 async with async_session_factory() as db:
