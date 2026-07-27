@@ -153,6 +153,11 @@ HEARTBEAT_S = int(os.getenv("HEARTBEAT_S", "15"))
 # diputar ulang saat start (recovery). Murni lapisan persistensi — tidak
 # mengubah cara/skema penyimpanan ke Supabase.
 BUFFER_ENABLED = os.getenv("BRIDGE_BUFFER_ENABLED", "1") not in ("0", "false", "False")
+# Ceiling on the disk queue (audit D-9). At 300 tags x 30 buckets/minute this is
+# roughly a day of total database outage before the OLDEST readings start being
+# dropped — with a loud error each time. A queue with no ceiling is its own
+# outage: an unattended field PC would fill its disk.
+BUFFER_MAX_ROWS = int(os.getenv("BRIDGE_BUFFER_MAX_ROWS", "500000"))
 BUFFER_DB_PATH = os.getenv(
     "BRIDGE_BUFFER_DB",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge_buffer.db"),
@@ -337,36 +342,102 @@ class Bridge:
 
     def _buffer_db(self) -> sqlite3.Connection:
         """Lazily open the local SQLite buffer. WAL + synchronous=NORMAL: cheap
-        writes that survive a process kill (the crash the buffer defends against);
-        the one row per tag holds that tag's newest not-yet-persisted value."""
+        writes that survive a process kill (the crash the buffer defends against).
+
+        Audit D-9 — the buffer is now a QUEUE. The primary key used to be
+        tag_id alone with INSERT OR REPLACE, so a tag could only ever hold ONE
+        unsent value: if Supabase was unreachable for an hour, each new reading
+        overwrote the previous unsent one and 59 minutes of history were gone,
+        despite the file header promising otherwise. The key is now
+        (tag_id, ts), so every bucket that failed to store survives until it is
+        confirmed stored.
+
+        Old buffer files are migrated in place — a field PC restarting after an
+        update must not lose whatever it was already holding."""
         if self._buf is None:
             conn = sqlite3.connect(self._buf_path, check_same_thread=False, timeout=5)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS pending_samples ("
-                "tag_id TEXT PRIMARY KEY, ts TEXT NOT NULL, value REAL NOT NULL)"
+                "tag_id TEXT NOT NULL, ts TEXT NOT NULL, value REAL NOT NULL, "
+                "PRIMARY KEY (tag_id, ts))"
             )
+            # Migrate a pre-D-9 file (PK on tag_id alone) by copying its rows
+            # into the new shape. Detected via the declared PK column count.
+            try:
+                cols = conn.execute("PRAGMA table_info(pending_samples)").fetchall()
+                pk_cols = [c for c in cols if c[5]]  # c[5] = pk position, 0 = not pk
+                if len(pk_cols) == 1:
+                    conn.execute("ALTER TABLE pending_samples RENAME TO pending_old")
+                    conn.execute(
+                        "CREATE TABLE pending_samples ("
+                        "tag_id TEXT NOT NULL, ts TEXT NOT NULL, value REAL NOT NULL, "
+                        "PRIMARY KEY (tag_id, ts))"
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO pending_samples (tag_id, ts, value) "
+                        "SELECT tag_id, ts, value FROM pending_old"
+                    )
+                    conn.execute("DROP TABLE pending_old")
+                    log.info("Buffer disk dimigrasikan ke bentuk antrian (D-9)")
+            except Exception:
+                log.exception("Migrasi buffer disk gagal — memakai apa adanya")
             conn.commit()
             self._buf = conn
         return self._buf
 
     def _buffer_put(self, tag_id: str, ts: datetime, value: float) -> None:
         """Persist a tag's newest history value to disk BEFORE it lands in
-        memory. Never raises — a buffer hiccup must not stop ingest."""
+        memory. Never raises — a buffer hiccup must not stop ingest.
+
+        Only the IN-FLIGHT value is replaced: the previous row for this tag is
+        dropped first, but only while it is still in flight. Once a bucket has
+        been stamped and failed to store, flush() 'seals' it (clears _buf_ts) so
+        this method leaves it alone and it stays queued. That is the difference
+        between remembering one value per tag and remembering an outage."""
         if not BUFFER_ENABLED:
             return
         try:
             with self._buf_lock:
                 db = self._buffer_db()
+                prev = self._buf_ts.get(tag_id)
+                if prev is not None:
+                    db.execute(
+                        "DELETE FROM pending_samples WHERE tag_id = ? AND ts = ?",
+                        (tag_id, prev.isoformat()),
+                    )
                 db.execute(
                     "INSERT OR REPLACE INTO pending_samples (tag_id, ts, value) "
                     "VALUES (?, ?, ?)",
                     (tag_id, ts.isoformat(), value),
                 )
                 db.commit()
+                self._buffer_trim(db)
         except Exception:
             log.exception("Gagal menulis buffer disk (lanjut dari memori)")
+
+    def _buffer_trim(self, db: sqlite3.Connection) -> None:
+        """Hard ceiling on the queue. A queue that grows without bound is its own
+        outage: an unattended PC would fill its disk. Past the cap the OLDEST
+        rows go first — recent history is the more useful half — and it is
+        logged loudly, because silently dropping readings is exactly the bug
+        D-9 was about."""
+        row = db.execute("SELECT count(*) FROM pending_samples").fetchone()
+        n = row[0] if row else 0
+        if n <= BUFFER_MAX_ROWS:
+            return
+        db.execute(
+            "DELETE FROM pending_samples WHERE rowid IN ("
+            "  SELECT rowid FROM pending_samples ORDER BY ts LIMIT ?)",
+            (n - BUFFER_MAX_ROWS,),
+        )
+        db.commit()
+        log.error(
+            "Buffer disk penuh (%d > %d) — %d nilai TERTUA dibuang. "
+            "Database kemungkinan sudah lama tak terjangkau.",
+            n, BUFFER_MAX_ROWS, n - BUFFER_MAX_ROWS,
+        )
 
     def _buffer_delete_many(self, items: list[tuple[str, str]]) -> None:
         """Drop rows (by (tag_id, ts_iso)) that were confirmed stored in Supabase.
@@ -706,14 +777,22 @@ class Bridge:
             )
             # Durably stored in Supabase now → drop the disk copies.
             self._buffer_delete_many(buf_deletes)
+            for tag_id, _ts, _v in rows:
+                self._buf_ts.pop(tag_id, None)
         except Exception:
             # Keep going — put the values back so the next pass retries them.
-            # The buffer rows are intentionally NOT deleted here, so a crash
-            # during a Supabase outage still recovers on restart.
             log.exception("Gagal menyimpan ke database, akan dicoba lagi")
             with self._lock:
                 for tag_id, _ts, value in rows:
                     self._pending.setdefault(tag_id, value)
+            # SEAL the buffered rows (audit D-9). Forgetting the in-flight ts
+            # means the next incoming message will NOT delete them, so this
+            # bucket stays queued on disk instead of being overwritten by the
+            # next reading. Without this the queue would still collapse to one
+            # value per tag and a long outage would lose everything but the
+            # last reading — the exact bug D-9 describes.
+            for tag_id, _ts, _v in rows:
+                self._buf_ts.pop(tag_id, None)
 
     def prune_ring(self) -> None:
         """DEPRECATED — retention now belongs to the backend, not to field PCs.

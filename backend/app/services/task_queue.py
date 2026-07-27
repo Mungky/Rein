@@ -19,6 +19,7 @@ class TaskType(str, Enum):
     REVOKE_EXPIRED_ACCESS = "revoke_expired_access"
     AUDIT_FILE = "audit_file"
     CLEANUP_EXPIRED_VIEW_REQUESTS = "cleanup_expired_view_requests"
+    PURGE_TAG_HISTORY = "purge_tag_history"
 
 
 @dataclass
@@ -91,8 +92,69 @@ class TaskQueue:
             await self._audit_file(task.payload)
         elif task.task_type == TaskType.CLEANUP_EXPIRED_VIEW_REQUESTS:
             await self._cleanup_expired_view_requests()
+        elif task.task_type == TaskType.PURGE_TAG_HISTORY:
+            await self._purge_tag_history(task.payload)
         else:
             logger.warning("Unknown task type: %s", task.task_type)
+
+    async def _purge_tag_history(self, payload: dict[str, Any]) -> None:
+        """Delete one tag's history after its source or store mode changed.
+
+        Audit D-10 — this used to run INSIDE the PATCH request, so a click on
+        "Simpan data" could sit there deleting millions of rows while the
+        operator stared at a spinner, and time out. It is a clean break by
+        design (the tag's old lane no longer describes it), but it is not
+        something the user should have to wait for.
+
+        Deleted in bounded batches so one purge cannot hold locks on the raw
+        tables for minutes at a time; each batch commits on its own, so an
+        interrupted purge simply resumes on the next enqueue.
+        """
+        import uuid as _uuid
+
+        from sqlalchemy import text
+
+        from db.session import async_session_factory
+
+        raw_tag_id = payload.get("tag_id")
+        label = payload.get("label", raw_tag_id)
+        try:
+            tag_id = _uuid.UUID(str(raw_tag_id))
+        except (TypeError, ValueError):
+            logger.error("Purge riwayat dilewati: tag_id tidak valid (%r)", raw_tag_id)
+            return
+
+        batch = 10_000
+        totals: dict[str, int] = {}
+        # scada_tag_latest holds one row per tag, so it needs no batching.
+        for table in ("scada_raw", "scada_ring", "scada_samples"):
+            removed = 0
+            while True:
+                async with async_session_factory() as db:
+                    res = await db.execute(
+                        text(
+                            f"DELETE FROM {table} WHERE ctid IN ("
+                            f"  SELECT ctid FROM {table} WHERE tag_id = :tid LIMIT :n)"
+                        ),
+                        {"tid": str(tag_id), "n": batch},
+                    )
+                    await db.commit()
+                n = res.rowcount or 0
+                removed += n
+                if n < batch:
+                    break
+                await asyncio.sleep(0)  # let other work through between batches
+            totals[table] = removed
+
+        async with async_session_factory() as db:
+            res = await db.execute(
+                text("DELETE FROM scada_tag_latest WHERE tag_id = :tid"),
+                {"tid": str(tag_id)},
+            )
+            await db.commit()
+            totals["scada_tag_latest"] = res.rowcount or 0
+
+        logger.info("Purge riwayat %s: %s", label, totals)
 
     async def _index_to_sheets(self, payload: dict[str, Any]) -> None:
         """Index document metadata to Google Sheets."""

@@ -92,9 +92,7 @@ from db.models.scada_data_access_log import (
 from db.models.scada import (
     ScadaChannel,
     ScadaPerspective,
-    ScadaRing,
     ScadaRollup1m,
-    ScadaSample,
     ScadaSampleAll,
     ScadaSettings,
     ScadaSheet,
@@ -104,6 +102,7 @@ from db.models.scada import (
     ScadaTagLatest,
     ScadaWorkbenchColumn,
 )
+from app.services.task_queue import TaskType, task_queue
 from db.session import get_db
 
 router = APIRouter()
@@ -1110,10 +1109,16 @@ async def update_tag(
         tag.config = cfg
 
     if source_changed or store_changed:
-        await db.execute(delete(ScadaSample).where(ScadaSample.tag_id == tag.id))
-        await db.execute(delete(ScadaRing).where(ScadaRing.tag_id == tag.id))
-        await db.execute(
-            delete(ScadaTagLatest).where(ScadaTagLatest.tag_id == tag.id)
+        # Audit D-10: hand the purge to the background worker instead of
+        # deleting here. The old code ran three unbounded DELETEs inside this
+        # request — on a tag with millions of rows the operator watched a
+        # spinner until the request timed out, and the tag was left half
+        # migrated. The tag's new configuration is saved immediately either
+        # way; only the disposal of its now-meaningless old history is
+        # deferred, and the worker does it in bounded batches.
+        task_queue.enqueue(
+            TaskType.PURGE_TAG_HISTORY,
+            {"tag_id": str(tag.id), "label": tag.label},
         )
 
     await db.flush()

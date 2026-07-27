@@ -14,7 +14,7 @@ INSERTs, so nothing touches a real database.
 import importlib.util
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 BRIDGE_PATH = Path(__file__).resolve().parents[2] / "deploy" / "data" / "bridge.py"
@@ -235,3 +235,119 @@ def test_newer_message_not_deleted_by_stale_flush(tmp_path):
     br._buffer_delete_many([(tag, old_ts.isoformat())])
     remaining = br._buffer_all()
     assert len(remaining) == 1 and remaining[0][2] == 88.0
+
+
+# --- D-9: the buffer is a QUEUE, not one slot per sensor -------------------
+
+
+def test_outage_keeps_every_bucket_not_just_the_last(tmp_path):
+    """THE D-9 SCENARIO. Supabase unreachable across several buckets: every
+    stamped bucket must survive on disk, not just the most recent reading.
+
+    Before the fix the buffer's primary key was tag_id alone, so each new
+    reading overwrote the previous unsent one — an hour of outage left exactly
+    one value per sensor, while the file header promised store-and-forward."""
+    buf = str(tmp_path / "buf.db")
+    tag = str(uuid.uuid4())
+    br = Bridge("", buffer_path=buf)
+    br._interval = {tag: 1}
+    br._ring = set()
+    br._db = lambda: FakeConn([], fail=True)  # Supabase down for the whole test
+
+    base = datetime(2026, 7, 27, 10, 0, tzinfo=timezone.utc)
+    for i in range(5):
+        ts = base + timedelta(seconds=i)
+        br._buffer_put(tag, ts, float(i))
+        br._buf_ts[tag] = ts
+        br._pending[tag] = float(i)
+        br._bucket[tag] = 0  # boundary already crossed → flush stamps a row
+        br.flush()           # fails; must SEAL this bucket on disk
+
+    rows = br._buffer_all()
+    assert len(rows) == 5, f"expected 5 queued buckets, got {len(rows)}"
+    assert {r[2] for r in rows} == {0.0, 1.0, 2.0, 3.0, 4.0}
+
+
+def test_in_flight_value_is_still_replaced_while_healthy(tmp_path):
+    """The queue must not grow on every message when nothing is wrong: readings
+    inside the SAME unflushed bucket still collapse to the newest one."""
+    buf = str(tmp_path / "buf.db")
+    tag = str(uuid.uuid4())
+    br = Bridge("", buffer_path=buf)
+
+    base = datetime(2026, 7, 27, 10, 0, tzinfo=timezone.utc)
+    for i in range(10):
+        ts = base + timedelta(seconds=i)
+        br._buffer_put(tag, ts, float(i))
+        br._buf_ts[tag] = ts  # still in flight — nothing sealed it
+
+    rows = br._buffer_all()
+    assert len(rows) == 1
+    assert rows[0][2] == 9.0  # the newest
+
+
+def test_queue_survives_restart_and_replays_all_of_it(tmp_path):
+    """A sealed queue must still be there after the process dies, and recovery
+    must replay every entry — not just one."""
+    buf = str(tmp_path / "buf.db")
+    tag = str(uuid.uuid4())
+    a = Bridge("", buffer_path=buf)
+    base = datetime(2026, 7, 27, 10, 0, tzinfo=timezone.utc)
+    for i in range(4):
+        a._buffer_put(tag, base + timedelta(seconds=i), float(i))
+        # no _buf_ts bookkeeping → each write is a distinct queued entry
+    a._buf.close()
+
+    b = Bridge("", buffer_path=buf)
+    b._interval = {tag: 1}
+    b._ring = set()
+    sink = []
+    b._db = lambda: FakeConn(sink)
+    b.recover_buffer()
+
+    assert len(_inserts(sink, "scada_samples")) == 4
+    assert b._buffer_all() == []  # cleared only after confirmed storage
+
+
+def test_queue_has_a_hard_ceiling(tmp_path, monkeypatch):
+    """An unbounded queue is its own outage — it would fill the field PC's
+    disk. Past the cap the OLDEST entries are dropped."""
+    monkeypatch.setattr(bridge_mod, "BUFFER_MAX_ROWS", 10)
+    buf = str(tmp_path / "buf.db")
+    tag = str(uuid.uuid4())
+    br = Bridge("", buffer_path=buf)
+
+    base = datetime(2026, 7, 27, 10, 0, tzinfo=timezone.utc)
+    for i in range(25):
+        br._buffer_put(tag, base + timedelta(seconds=i), float(i))
+
+    rows = br._buffer_all()
+    assert len(rows) == 10
+    assert min(r[2] for r in rows) == 15.0  # oldest dropped, newest kept
+
+
+def test_old_buffer_file_is_migrated_not_discarded(tmp_path):
+    """A field PC updating mid-outage must not lose what it was holding."""
+    import sqlite3
+
+    path = str(tmp_path / "buf.db")
+    old = sqlite3.connect(path)
+    old.execute(
+        "CREATE TABLE pending_samples ("
+        "tag_id TEXT PRIMARY KEY, ts TEXT NOT NULL, value REAL NOT NULL)"
+    )
+    tag = str(uuid.uuid4())
+    old.execute(
+        "INSERT INTO pending_samples VALUES (?, ?, ?)",
+        (tag, datetime(2026, 7, 27, 9, 0, tzinfo=timezone.utc).isoformat(), 42.0),
+    )
+    old.commit()
+    old.close()
+
+    br = Bridge("", buffer_path=path)
+    rows = br._buffer_all()
+    assert len(rows) == 1 and rows[0][2] == 42.0
+
+    # ...and the migrated table now accepts MULTIPLE rows per tag.
+    br._buffer_put(tag, datetime(2026, 7, 27, 9, 1, tzinfo=timezone.utc), 43.0)
+    assert len(br._buffer_all()) == 2
