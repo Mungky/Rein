@@ -132,9 +132,18 @@ export function AnalysisView({
   // supaya sparkline mini mengikuti selektor Rentang, sama seperti grafik.
   const sparkRangeH = Math.max(1, Math.ceil(RANGE_MS[range] / 3_600_000));
 
+  // Jendela mana yang SEDANG ada di sparkMap. Selama belum cocok dengan yang
+  // diminta (buka halaman pertama kali, ganti sheet, ganti Rentang), sparkline
+  // menggambar placeholder — bukan ekor live beberapa detik terakhir yang
+  // diregangkan penuh sehingga tampak seperti grafik liar (lihat pending di
+  // TagSparkline). Refresh 60 detik TIDAK mengosongkan ini, jadi tidak berkedip.
+  const sparkWindow = `${tagIdsKey}|${sparkRangeH}`;
+  const [sparkLoadedFor, setSparkLoadedFor] = useState<string | null>(null);
+
   const loadRecent = useCallback(async () => {
     if (tagIdsKey === "") return;
     setRecentLoading(true);
+    const window = `${tagIdsKey}|${sparkRangeH}`;
     try {
       const ids = tagIdsKey.split(",");
       const [results, spark] = await Promise.all([
@@ -146,17 +155,22 @@ export function AnalysisView({
               .catch(() => [id, []] as const)
           )
         ),
-        scadaApi.getSparklines(sparkRangeH).catch(() => ({ items: [] })),
+        scadaApi.getSparklines(sparkRangeH).catch(() => null),
       ]);
       setRecent(Object.fromEntries(results));
-      setSparkMap(
-        Object.fromEntries(
-          spark.items.map((s) => [
-            s.tag_id,
-            s.points.map((p) => ({ ts: p.t, value: p.v })),
-          ])
-        )
-      );
+      // Gagal ambil sparkline → biarkan gambar lama & status "memuat" apa
+      // adanya; usePanelRefresh mencoba lagi 60 detik kemudian.
+      if (spark) {
+        setSparkMap(
+          Object.fromEntries(
+            spark.items.map((s) => [
+              s.tag_id,
+              s.points.map((p) => ({ ts: p.t, value: p.v })),
+            ])
+          )
+        );
+        setSparkLoadedFor(window);
+      }
     } finally {
       setRecentLoading(false);
     }
@@ -748,10 +762,12 @@ export function AnalysisView({
                       )}
                     </td>
                     <td className="px-2 py-1">
-                      {/* Tabel = 12 jam terakhir (bucketed) + ekor live sesi ini
-                          supaya ujungnya bergerak. Sensor baru (< 2 bucket) →
-                          pakai data live saja (bukan "menunggu data"). */}
+                      {/* Tabel = jendela Rentang (bucketed) + ekor live sesi
+                          ini supaya ujungnya bergerak. Selama jendela itu belum
+                          tiba → placeholder diam. Sesudah tiba tapi sensornya
+                          memang baru (< 2 bucket) → pakai data live saja. */}
                       <TagSparkline
+                        pending={sparkLoadedFor !== sparkWindow}
                         samples={
                           (sparkMap[tag.id]?.length ?? 0) >= 2
                             ? withLiveTail(sparkMap[tag.id], series)

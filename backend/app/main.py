@@ -39,7 +39,15 @@ from app.routers import (
     scada_alarms,
 )
 from app.services.task_queue import task_queue, TaskType
-from app.services import alarm_engine, archiver, health_monitor, historian
+from app.services import (
+    alarm_engine,
+    archiver,
+    health_monitor,
+    historian,
+    partitions,
+    ring_pruner,
+    rollup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +160,26 @@ async def lifespan(app: FastAPI):
         if health_monitor.ENABLED
         else None
     )
+    # Partition housekeeping (phase 5): creates day/month drawers ahead of time
+    # and drops expired ones. Creating ahead is the critical half — a day with
+    # no partition means REJECTED inserts. Single owner, same rule as the alarm
+    # engine: laptops set PARTITION_MANAGER_ENABLED=0.
+    partition_task = (
+        asyncio.create_task(partitions.maintain_loop()) if partitions.ENABLED else None
+    )
+    # Ring retention (audit D-3). SUPERSEDED by the partition manager above and
+    # off by default now — scada_raw drops whole drawers instead of deleting
+    # rows. Kept switchable (RING_PRUNER_ENABLED=1) only while scada_ring still
+    # exists, i.e. until the field PCs run the bridge that writes scada_raw.
+    ring_prune_task = (
+        asyncio.create_task(ring_pruner.prune_loop()) if ring_pruner.ENABLED else None
+    )
+    # Per-minute summary (ARSITEKTUR-DATA §2.5): pre-computes what the charts
+    # otherwise re-aggregate on every request. Nothing READS it until phase 4,
+    # so running it now only fills the table.
+    rollup_task = (
+        asyncio.create_task(rollup.rollup_loop()) if rollup.ENABLED else None
+    )
     logger.info("REIN API started — task queue active, cleanup every %ds", CLEANUP_INTERVAL)
     if historian_task is None:
         logger.warning("Historian sampler DISABLED via HISTORIAN_ENABLED")
@@ -159,6 +187,15 @@ async def lifespan(app: FastAPI):
         logger.warning("Alarm engine DISABLED via ALARM_ENGINE_ENABLED")
     if health_task is None:
         logger.warning("Health monitor DISABLED via HEALTH_MONITOR_ENABLED")
+    if partition_task is None:
+        logger.warning("Partition manager DISABLED via PARTITION_MANAGER_ENABLED")
+    if ring_prune_task is not None:
+        logger.warning(
+            "Ring pruner ENABLED — superseded by the partition manager; "
+            "only needed while scada_ring still receives writes"
+        )
+    if rollup_task is None:
+        logger.warning("Rollup per-menit DISABLED via ROLLUP_ENABLED")
     yield
     cleanup_task.cancel()
     if historian_task:
@@ -171,6 +208,12 @@ async def lifespan(app: FastAPI):
         archiver_task.cancel()
     if health_task:
         health_task.cancel()
+    if partition_task:
+        partition_task.cancel()
+    if ring_prune_task:
+        ring_prune_task.cancel()
+    if rollup_task:
+        rollup_task.cancel()
     await task_queue.stop()
     logger.info("REIN API shutting down")
 

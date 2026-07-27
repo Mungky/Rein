@@ -59,3 +59,7 @@ deploy/config.env
 
 # Arsip Mosquitto lokal - berisi file passwd (hash akun broker) + log runtime
 deploy/_arsip/mosquitto-lokal/
+
+# Cuplikan data sensor (db/snapshots/) — bahan uji lokal, bisa besar dan berisi
+# data operasional plant. Simpan di PC/backup, jangan di Git.
+db/snapshots/

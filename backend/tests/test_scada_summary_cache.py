@@ -7,6 +7,20 @@ deduping a simultaneous burst.
 
 Uses asyncio.run (no pytest-asyncio dependency) and a stub DB that counts the
 aggregation queries actually issued.
+
+QUERIES PER COMPUTATION = 4 in the WORST case, and the point of these tests is
+that the number does not depend on how many tags or how many concurrent callers
+there are:
+  1. min/max/avg over the window from scada_rollup_1m, batched for every tag,
+  2. the scada_samples_all fallback, only when step 1 returned nothing at all
+     (a summary that has not been backfilled yet),
+  3. current value from scada_tag_latest, batched (audit D-11 — this replaced a
+     DISTINCT ON over the scada_samples_all UNION),
+  4. the scada_samples_all fallback for tags with no row in scada_tag_latest.
+
+The stub DB returns empty rows for EVERY query, so both fallbacks always fire.
+That is deliberately the worst case: on a populated database steps 2 and 4 do
+not run at all and a computation costs 2 queries.
 """
 
 import asyncio
@@ -72,8 +86,8 @@ def test_concurrent_burst_computes_each_tag_once():
         return results
 
     results = asyncio.run(go())
-    # 50 simultaneous requests → one agg + one latest query total (6 tags, one batch).
-    assert counter[0] == 2
+    # 50 simultaneous requests over 6 tags → still one batched computation.
+    assert counter[0] == 4
     # Every caller still gets a full page of items.
     assert all(len(r) == 6 for r in results)
 
@@ -92,8 +106,8 @@ def test_second_request_within_ttl_hits_cache():
         return first, counter[0]
 
     first, second = asyncio.run(go())
-    assert first == 2  # first request computed
-    assert second == 2  # second served entirely from cache — no new queries
+    assert first == 4  # first request computed
+    assert second == 4  # second served entirely from cache — no new queries
 
 
 def test_ttl_zero_disables_cache_but_still_dedups_burst():
@@ -114,8 +128,8 @@ def test_ttl_zero_disables_cache_but_still_dedups_burst():
         return after_burst, counter[0]
 
     after_burst, after_second = asyncio.run(go())
-    assert after_burst == 2  # burst coalesced
-    assert after_second == 4  # second call recomputed (cache disabled)
+    assert after_burst == 4  # burst coalesced
+    assert after_second == 8  # second call recomputed (cache disabled)
 
 
 def test_inflight_registry_empties_after_completion():

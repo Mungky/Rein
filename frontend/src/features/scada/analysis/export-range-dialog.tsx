@@ -4,8 +4,10 @@
  *  lalu unduh riwayat sensor terpilih sebagai Excel.
  *
  *  Ketersediaan data bergantung mode penyimpanan tiap sensor:
- *   - Tidak "Simpan data" (mode ring) → hanya 24 jam terakhir yang ada.
- *   - "Simpan data" ON → tersimpan ±1 bulan di database; bulan-bulan lama
+ *   - Mode ring (toggle OFF) → hanya 24 jam MENTAH terakhir yang ada. Ringkasan
+ *     per menitnya tetap ada di scada_rollup_1m, tapi export ini menarik nilai
+ *     mentah, bukan ringkasan.
+ *   - Toggle ON → mentah tersimpan ±1 bulan di database; bulan-bulan lama
  *     sudah diarsip ke Google Drive (daftar di bawah). */
 
 import { useEffect, useMemo, useState } from "react";
@@ -148,8 +150,8 @@ export function ExportRangeDialog({
           </div>
           <p className="mt-1 text-[11px] leading-snug text-text-light">
             {anyStored
-              ? "Data tersimpan hingga ±1 bulan di database; bulan-bulan sebelumnya ada di arsip Google Drive di bawah."
-              : "Sensor ini mode 24 jam (tidak menyimpan riwayat) — hanya 24 jam terakhir yang tersedia. Centang “Simpan data ke riwayat” agar data lama bisa ditarik."}
+              ? "Data mentah tersimpan hingga ±1 bulan di database; bulan-bulan sebelumnya ada di arsip Google Drive di bawah."
+              : "Export menarik nilai MENTAH, dan sensor ini hanya menyimpan mentah 24 jam terakhir. Ringkasan per menitnya tetap ada (grafik jangka panjang tetap jalan), tapi tidak ikut terekspor. Centang “Simpan detail mentah & arsipkan ke Drive” kalau butuh mentah yang lebih lama."}
           </p>
         </div>
 

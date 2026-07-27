@@ -32,14 +32,13 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import notifier, rnet_settings
 from db.models.scada import (
     ScadaAlarmEvent,
-    ScadaSampleAll,
     ScadaTag,
     ScadaTagLatest,
 )
@@ -142,20 +141,46 @@ async def _clear_event(
     await notifier.notify_alarm(db, event, tag, "cleared")
 
 
-async def _last_seen(
-    db: AsyncSession, tag: ScadaTag, latest: ScadaTagLatest | None
-) -> datetime | None:
-    """When did this tag last produce data? Falls back to scada_samples for
-    deployments where the bridge doesn't write scada_tag_latest yet."""
-    if latest is not None:
-        return latest.ts
-    result = await db.execute(
-        select(ScadaSampleAll.ts)
-        .where(ScadaSampleAll.tag_id == tag.id)
-        .order_by(ScadaSampleAll.ts.desc())
-        .limit(1)
-    )
-    return result.scalar_one_or_none()
+# Audit D-12, brought forward from phase 7 after the 300-tag benchmark.
+#
+# THE COST WAS ROUND-TRIPS, NOT THE QUERY. The per-tag lookup below is already
+# the optimal shape (index scan, one row, ~0.03 ms). The problem was issuing it
+# ONCE PER TAG, every 5 seconds: 300 tags × one network round-trip each against
+# Supabase is seconds of latency inside a 5-second cycle, so the engine could
+# fall behind and alarms would fire late.
+#
+# One LATERAL join gives the same answer in ONE round-trip while keeping the
+# same fast per-tag plan. The naive batched alternative — DISTINCT ON (tag_id)
+# ORDER BY tag_id, ts DESC — measured 942× SLOWER at this scale: Postgres cannot
+# optimise that shape and scans + sorts millions of index entries to return a
+# handful of rows. Do not "simplify" this back into DISTINCT ON.
+_LAST_SEEN_SQL = text(
+    """
+    SELECT x.tag_id, l.ts
+      FROM unnest(CAST(:ids AS uuid[])) AS x(tag_id)
+      CROSS JOIN LATERAL (
+            SELECT s.ts FROM scada_samples_all s
+             WHERE s.tag_id = x.tag_id
+             ORDER BY s.ts DESC
+             LIMIT 1
+      ) AS l
+    """
+)
+
+
+async def _last_seen_batch(
+    db: AsyncSession, tag_ids: list
+) -> dict:
+    """When did each of these tags last produce data? One query for all of them.
+
+    Only called for tags with no scada_tag_latest row — deployments where the
+    bridge predates that table, or tags that have never reported. CROSS JOIN
+    LATERAL naturally omits tags with no data at all, so a missing key means
+    "never seen", which is exactly what the caller needs."""
+    if not tag_ids:
+        return {}
+    rows = await db.execute(_LAST_SEEN_SQL, {"ids": [str(t) for t in tag_ids]})
+    return {row.tag_id: row.ts for row in rows.all()}
 
 
 async def evaluate_once(db: AsyncSession) -> None:
@@ -183,6 +208,14 @@ async def evaluate_once(db: AsyncSession) -> None:
         .all()
     }
 
+    # Resolve every "when was this tag last seen?" up front, in one query, for
+    # exactly the tags that need it (silence-alarm tags with no live row).
+    # See _last_seen_batch — this replaced one query per tag per cycle (D-12).
+    fallback_last_seen = await _last_seen_batch(
+        db,
+        [t.id for t in tags if _wants_silent(t) and t.id not in latest_by_tag],
+    )
+
     for tag in tags:
         try:
             alarm_min, alarm_max = _bounds(tag.config)
@@ -208,7 +241,10 @@ async def evaluate_once(db: AsyncSession) -> None:
 
             # --- silence alarm -------------------------------------------- #
             if _wants_silent(tag):
-                last_seen = await _last_seen(db, tag, latest)
+                last_seen = (
+                    latest.ts if latest is not None
+                    else fallback_last_seen.get(tag.id)
+                )
                 cutoff = now - timedelta(seconds=_silent_after_s(settings, tag.config))
                 is_silent = last_seen is not None and last_seen < cutoff
                 open_silent = open_events.get((tag.id, "silent"))

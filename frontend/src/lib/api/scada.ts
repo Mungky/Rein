@@ -198,6 +198,17 @@ export const scadaApi = {
 
   /** Riwayat mentah berhalaman (keyset, terbaru dulu) — feed scroll tanpa
    *  batas halaman Riwayat. `before` = ts baris tertua yang sudah dimuat. */
+  /** Excel export dirakit di SERVER (audit D-7) — satu permintaan, satu file,
+   *  satu sheet per sensor. Menggantikan perakitan di browser yang bisa
+   *  menembak ribuan permintaan dan menyimpan jutaan baris di memori tab. */
+  exportXlsx: (tagIds: string[], start: Date, end: Date) => {
+    const q = new URLSearchParams();
+    for (const id of tagIds) q.append("tag_ids", id);
+    q.set("start", start.toISOString());
+    q.set("end", end.toISOString());
+    return apiClient.getBlob("/api/scada/export.xlsx", q.toString());
+  },
+
   getSamplesPage: (id: string, opts: { before?: string; limit?: number } = {}) => {
     const params = new URLSearchParams();
     if (opts.before) params.set("before", opts.before);

@@ -32,6 +32,28 @@ class ApiClient {
     return res.json();
   }
 
+  /** Download a file the server generated (e.g. the R-Net Excel export).
+   *  `rawQuery` is appended verbatim so repeated keys (tag_ids=a&tag_ids=b)
+   *  survive — URLSearchParams-in-an-object would collapse them. Returns the
+   *  blob plus the filename the server chose in Content-Disposition. */
+  async getBlob(
+    path: string,
+    rawQuery?: string
+  ): Promise<{ blob: Blob; filename: string | null }> {
+    const headers = await this.getAuthHeaders();
+    const res = await fetch(
+      `${this.baseUrl}${path}${rawQuery ? `?${rawQuery}` : ""}`,
+      { headers }
+    );
+    if (!res.ok) throw new ApiError(res.status, await res.text());
+    const disp = res.headers.get("content-disposition") ?? "";
+    const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disp);
+    return {
+      blob: await res.blob(),
+      filename: match ? decodeURIComponent(match[1]) : null,
+    };
+  }
+
   async post<T>(path: string, body?: unknown): Promise<T> {
     const headers = await this.getAuthHeaders();
     const res = await fetch(`${this.baseUrl}${path}`, {

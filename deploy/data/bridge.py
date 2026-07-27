@@ -6,7 +6,9 @@ WHAT IT DOES
     bridge subscribes to the topics configured in the R-Net UI, keeps the
     latest value per tag, and writes rows into the two historian lanes the
     R-Net dashboards read through the `scada_samples_all` view:
-      - ring tags ("Simpan data" OFF) → `scada_ring` (24h buffer, pruned here)
+      - ring tags ("Simpan data" OFF) → `scada_raw` (24h buffer, partitioned
+        by day; retention is the BACKEND's job — it drops whole day partitions,
+        this script never deletes anything)
       - store tags ("Simpan data" ON)  → `scada_samples` (monthly archive+reset)
     Both sample at the tag's chosen sampling level (fastest/fast/slow/slowest,
     seconds set by admin in scada_settings). No second database — the
@@ -14,10 +16,17 @@ WHAT IT DOES
 
 CONFIG LIVES IN THE DATABASE, NOT HERE
     Sites (brokers) and tags (topics) are managed entirely from the R-Net
-    frontend ("Kelola Site" + the Sumber cell in Analisis). This script only
-    needs DATABASE_URL. It re-reads the config every CONFIG_REFRESH_S, so
-    adding a topic in the UI makes the bridge subscribe within ~30s — no
-    restart.
+    frontend ("Kelola Site" + the Sumber cell in Analisis). This script needs
+    DATABASE_URL, plus SITE_ID once there is more than one plant. It re-reads
+    the config every CONFIG_REFRESH_S, so adding a topic in the UI makes the
+    bridge subscribe within ~30s — no restart.
+
+WHICH PLANT AM I? (SITE_ID)
+    SITE_ID is a comma-separated list of scada_sites UUIDs this PC owns. Leave
+    it empty and the bridge handles EVERY enabled site — fine for one plant,
+    actively harmful for a fleet: each PC would open every plant's broker
+    connection, write every plant's rows, and hold every plant's broker
+    credentials. Set it per field PC (audit D-4).
 
 RESOLUTION — TWO LANES
     Live lane: every LATEST_FLUSH_S (~1 s) the newest value per tag is UPSERTed
@@ -115,6 +124,21 @@ DEFAULT_LEVEL = "fast"
 # default). Store tags go to scada_samples and are archived+reset monthly.
 DEFAULT_RING_WINDOW_H = 24
 PRUNE_EVERY_S = int(os.getenv("PRUNE_EVERY_S", "60"))
+# Ring retention moved to the backend (audit D-3) — see Bridge.prune_ring.
+# Default OFF here; set PRUNE_ENABLED=1 only to break the glass against a
+# backend that predates backend/app/services/ring_pruner.py.
+PRUNE_ENABLED = os.getenv("PRUNE_ENABLED", "0") not in ("0", "false", "False")
+
+# Which sites (brokers) THIS PC is responsible for — comma-separated site UUIDs
+# (audit D-4). Empty = every enabled site, the old behaviour, which is correct
+# for a single-plant install and wrong for a fleet: without it each field PC
+# connects to EVERY plant's broker and writes EVERY plant's rows, so both broker
+# connections and DB writes multiply by the number of plants — and each plant's
+# PC holds every other plant's broker credentials. Set SITE_ID in config.env on
+# every multi-plant install.
+SITE_IDS = tuple(
+    s.strip() for s in os.getenv("SITE_ID", "").split(",") if s.strip()
+)
 
 # Health lane: seberapa sering status koneksi tiap site di-UPSERT ke
 # scada_bridge_status (detak jantung). Health monitor backend menganggap
@@ -269,6 +293,8 @@ class Bridge:
         self._interval: dict[str, int] = {}
         # tag_ids in ring mode (store_enabled off) — written to scada_ring
         self._ring: set[str] = set()
+        # tag_id -> site_id, so every raw row can carry its plant (audit D-1).
+        self._site_of: dict[str, str] = {}
         # sampling-level durations + ring window, read from scada_settings
         self._levels: dict[str, int] = dict(DEFAULT_LEVELS)
         self._ring_window_h: int = DEFAULT_RING_WINDOW_H
@@ -392,14 +418,21 @@ class Bridge:
             interval = self._interval.get(tag_id, FLUSH_INTERVAL_S)
             boundary = int(dt.timestamp() // interval) * interval
             bts = datetime.fromtimestamp(boundary, tz=timezone.utc)
-            table = "scada_ring" if tag_id in self._ring else "scada_samples"
+            is_ring = tag_id in self._ring
             try:
                 with self._db().cursor() as cur:
-                    cur.execute(
-                        f"INSERT INTO {table} (tag_id, ts, value) "
-                        "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                        (tag_id, bts, value),
-                    )
+                    if is_ring:
+                        cur.execute(
+                            "INSERT INTO scada_raw (tag_id, ts, site_id, value) "
+                            "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                            (tag_id, bts, self._site_of.get(tag_id), value),
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO scada_samples (tag_id, ts, value) "
+                            "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                            (tag_id, bts, value),
+                        )
                 recovered += 1
                 done.append((tag_id, ts_iso))
             except Exception:
@@ -411,17 +444,22 @@ class Bridge:
 
     def load_config(
         self,
-    ) -> tuple[dict[str, SiteCfg], dict[str, Transform], dict[str, int], set[str]]:
+    ) -> tuple[
+        dict[str, SiteCfg], dict[str, Transform], dict[str, int], set[str],
+        dict[str, str],
+    ]:
         """Read enabled sites + their enabled MQTT tags from the DB.
 
         Returns the sites (with their topic→tag_id subscriptions), a
         tag_id→transform map used to scale each raw value before storing, a
-        tag_id→storage-interval map (seconds), and the set of ring-mode tags.
+        tag_id→storage-interval map (seconds), the set of ring-mode tags, and a
+        tag_id→site_id map (stamped onto every scada_raw row).
         """
         sites: dict[str, SiteCfg] = {}
         xform: dict[str, Transform] = {}
         interval: dict[str, int] = {}
         ring: set[str] = set()
+        site_of: dict[str, str] = {}
         with self._db().cursor() as cur:
             # Admin-tunable sampling-level durations + ring window (single row).
             try:
@@ -442,13 +480,25 @@ class Bridge:
                 # Table missing (pre-migration DB) → keep defaults, don't crash.
                 log.warning("scada_settings tidak terbaca, memakai default level")
 
-            cur.execute(
-                "SELECT id, mqtt_host, mqtt_port, mqtt_username, mqtt_password "
-                "FROM scada_sites WHERE enabled = true"
-            )
+            # SITE_ID scopes this PC to its own broker(s) (audit D-4). The
+            # filter is applied in SQL, so an unscoped plant's credentials are
+            # never even fetched to this machine.
+            if SITE_IDS:
+                cur.execute(
+                    "SELECT id, mqtt_host, mqtt_port, mqtt_username, mqtt_password "
+                    "FROM scada_sites WHERE enabled = true AND id = ANY(%s::uuid[])",
+                    (list(SITE_IDS),),
+                )
+            else:
+                cur.execute(
+                    "SELECT id, mqtt_host, mqtt_port, mqtt_username, mqtt_password "
+                    "FROM scada_sites WHERE enabled = true"
+                )
             for sid, host, port, user, pw in cur.fetchall():
                 sites[str(sid)] = SiteCfg(str(sid), host, int(port), user, pw)
 
+            # Tags of other sites are dropped by the `sites.get(...) is None`
+            # guard below, so this query needs no extra filter.
             cur.execute(
                 "SELECT id, site_id, config FROM scada_tags "
                 "WHERE source = 'mqtt' AND enabled = true AND site_id IS NOT NULL"
@@ -460,11 +510,12 @@ class Bridge:
                 topic = (config or {}).get("mqtt_topic")
                 if isinstance(topic, str) and topic.strip():
                     site.topics[topic.strip()] = str(tag_id)
+                    site_of[str(tag_id)] = str(site_id)
                     xform[str(tag_id)] = _parse_transform(config)
                     interval[str(tag_id)], is_ring = _parse_interval(config, self._levels)
                     if is_ring:
                         ring.add(str(tag_id))
-        return sites, xform, interval, ring
+        return sites, xform, interval, ring, site_of
 
     # -- mqtt callbacks (paho v2 signatures) ------------------------------- #
 
@@ -531,7 +582,8 @@ class Bridge:
     def reconcile(self) -> None:
         """Re-read config and align live MQTT clients + subscriptions to it."""
         try:
-            sites, self._xform, self._interval, self._ring = self.load_config()
+            (sites, self._xform, self._interval, self._ring,
+             self._site_of) = self.load_config()
         except Exception:
             log.exception("Gagal membaca konfigurasi dari database")
             return
@@ -621,16 +673,25 @@ class Bridge:
 
         if not rows:
             return
-        # Route each row to its lane: ring tags → scada_ring (24h buffer),
-        # store tags → scada_samples (historian).
-        ring_rows = [r for r in rows if r[0] in self._ring]
+        # Route each row to its lane: ring tags → scada_raw (day-partitioned
+        # 24h buffer), store tags → scada_samples (historian).
+        #
+        # scada_raw replaced scada_ring in phase 5. Rows now also carry their
+        # plant (site_id) so "everything for plant X" needs no detour through
+        # scada_tags (audit D-1). NOTE: rows must keep arriving in time order —
+        # scada_raw's BRIN index on ts depends on it, and out-of-order writes
+        # would quietly make that index useless.
+        ring_rows = [
+            (r[0], r[1], self._site_of.get(r[0]), r[2])
+            for r in rows if r[0] in self._ring
+        ]
         hist_rows = [r for r in rows if r[0] not in self._ring]
         try:
             with self._db().cursor() as cur:
                 if ring_rows:
                     cur.executemany(
-                        "INSERT INTO scada_ring (tag_id, ts, value) "
-                        "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                        "INSERT INTO scada_raw (tag_id, ts, site_id, value) "
+                        "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
                         ring_rows,
                     )
                 if hist_rows:
@@ -655,9 +716,17 @@ class Bridge:
                     self._pending.setdefault(tag_id, value)
 
     def prune_ring(self) -> None:
-        """Ring lane keeps only the last `ring_window_h` hours (CCTV-by-time
-        model): rows older than the window are deleted. One statement across all
-        of scada_ring — runs every PRUNE_EVERY_S."""
+        """DEPRECATED — retention now belongs to the backend, not to field PCs.
+
+        Kept only as an explicit break-glass switch (PRUNE_ENABLED=1) for a
+        deployment running against a backend too old to have the ring pruner.
+
+        Why it moved (audit data D-3): this statement is not scoped to a site,
+        so every bridge in the fleet swept the WHOLE table every 60 s — 50
+        plants meant 50 identical full-table deletes per minute, 49 of them
+        finding nothing. Retention is a property of the database and now has
+        exactly one owner: backend/app/services/ring_pruner.py, which also
+        deletes in bounded batches instead of one unbounded statement."""
         try:
             with self._db().cursor() as cur:
                 cur.execute(
@@ -752,6 +821,12 @@ class Bridge:
             "" if LATEST_ENABLED else " (NONAKTIF)",
             CONFIG_REFRESH_S,
         )
+        if SITE_IDS:
+            log.info("SITE_ID aktif — PC ini hanya menangani %d site: %s",
+                     len(SITE_IDS), ", ".join(SITE_IDS))
+        else:
+            log.info("SITE_ID kosong — PC ini menangani SEMUA site aktif. "
+                     "Isi SITE_ID di config.env begitu ada lebih dari satu plant.")
         self.reconcile()
         # Recover anything a previous crash/restart left in the disk buffer, now
         # that reconcile() has loaded intervals + ring flags to stamp/route them.
@@ -769,7 +844,7 @@ class Bridge:
             if LATEST_ENABLED and now - last_latest >= LATEST_FLUSH_S:
                 self.flush_latest()
                 last_latest = now
-            if now - last_prune >= PRUNE_EVERY_S:
+            if PRUNE_ENABLED and now - last_prune >= PRUNE_EVERY_S:
                 self.prune_ring()
                 last_prune = now
             if now - last_hb >= HEARTBEAT_S:

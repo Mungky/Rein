@@ -21,7 +21,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import TypeAdapter
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import _load_permissions, require_permission
@@ -84,6 +84,7 @@ from db.models.scada_audit_log import (
     TARGET_TAG,
 )
 from db.models.scada_data_access_log import (
+    ACCESS_EXPORT,
     ACCESS_HISTORY,
     ACCESS_RECENT,
     ACCESS_SAMPLES,
@@ -92,6 +93,7 @@ from db.models.scada import (
     ScadaChannel,
     ScadaPerspective,
     ScadaRing,
+    ScadaRollup1m,
     ScadaSample,
     ScadaSampleAll,
     ScadaSettings,
@@ -1222,6 +1224,47 @@ MAX_HISTORY_TAGS = 4
 MAX_HISTORY_POINTS = 720
 MAX_HISTORY_SPAN = timedelta(days=45)
 
+# --- Raw vs summary: which lane answers a bucketed read? -------------------
+#
+# ARSITEKTUR-DATA §2.7. scada_rollup_1m stores ONE row per minute, so it can
+# only answer a question whose resolution is a minute or coarser. The rule is
+# therefore about the BUCKET, not about the window:
+#
+#   bucket < 60 s  → the caller wants sub-minute detail → raw.
+#                    (Only short ranges ask for this, and short ranges are
+#                    inside raw's 24 h retention anyway.)
+#   bucket >= 60 s → the summary already holds the answer, pre-aggregated.
+#
+# Buckets served from the summary are rounded UP to a whole number of minutes.
+# That is what makes the two lanes agree exactly: bucket edges then land on
+# minute boundaries, so every summary row belongs to exactly one bucket and no
+# minute is ever split between two.
+ROLLUP_MIN_BUCKET_S = 60
+
+
+def _bucket_seconds(span_s: float, points: int) -> int:
+    """Bucket width for a point budget — ceil division, floor 1 s."""
+    return max(1, int(-(-span_s // points)))
+
+
+def _snap_bucket_to_minute(bucket_s: int) -> int:
+    """Round up to a whole number of minutes (the summary's atom)."""
+    return -(-bucket_s // 60) * 60
+
+
+def _rollup_avg():
+    """Weighted mean of per-minute means — NOT avg(avg).
+
+    Each summary row is a mean over `n` raw values, and `n` varies minute to
+    minute (a sensor that stutters logs fewer). Averaging the means unweighted
+    would silently give a quiet minute the same influence as a busy one and the
+    number would no longer match what raw says. Weighting by n reconstructs
+    sum(values)/count(values) exactly:
+
+        sum(avg_i * n_i) / sum(n_i)  ==  sum(all values) / count(all values)
+    """
+    return func.sum(ScadaRollup1m.avg * ScadaRollup1m.n) / func.sum(ScadaRollup1m.n)
+
 
 @router.get("/history", response_model=HistoryOut)
 @limiter.limit(READ_LIMIT)
@@ -1258,30 +1301,65 @@ async def get_history(
     # the line looked stepped instead of live. The point budget still bounds
     # how many rows come back.
     span_s = (end - start).total_seconds()
-    bucket_s = max(1, int(-(-span_s // points)))
-    bucket = func.to_timestamp(
-        func.floor(func.extract("epoch", ScadaSampleAll.ts) / bucket_s) * bucket_s
-    ).label("bucket")
+    bucket_s = _bucket_seconds(span_s, points)
+    tag_id_list = list(tags.keys())
 
-    result = await db.execute(
-        select(
-            ScadaSampleAll.tag_id,
-            bucket,
-            func.avg(ScadaSampleAll.value).label("avg"),
-            func.min(ScadaSampleAll.value).label("min"),
-            func.max(ScadaSampleAll.value).label("max"),
+    def _raw_query(width_s: int):
+        b = func.to_timestamp(
+            func.floor(func.extract("epoch", ScadaSampleAll.ts) / width_s) * width_s
+        ).label("bucket")
+        return (
+            select(
+                ScadaSampleAll.tag_id,
+                b,
+                func.avg(ScadaSampleAll.value).label("avg"),
+                func.min(ScadaSampleAll.value).label("min"),
+                func.max(ScadaSampleAll.value).label("max"),
+            )
+            .where(
+                ScadaSampleAll.tag_id.in_(tag_id_list),
+                ScadaSampleAll.ts >= start,
+                ScadaSampleAll.ts < end,
+            )
+            .group_by(ScadaSampleAll.tag_id, b)
+            .order_by(b)
         )
-        .where(
-            ScadaSampleAll.tag_id.in_(list(tags.keys())),
-            ScadaSampleAll.ts >= start,
-            ScadaSampleAll.ts < end,
+
+    def _rollup_query(width_s: int):
+        b = func.to_timestamp(
+            func.floor(func.extract("epoch", ScadaRollup1m.ts) / width_s) * width_s
+        ).label("bucket")
+        return (
+            select(
+                ScadaRollup1m.tag_id,
+                b,
+                _rollup_avg().label("avg"),
+                func.min(ScadaRollup1m.min).label("min"),
+                func.max(ScadaRollup1m.max).label("max"),
+            )
+            .where(
+                ScadaRollup1m.tag_id.in_(tag_id_list),
+                ScadaRollup1m.ts >= start,
+                ScadaRollup1m.ts < end,
+            )
+            .group_by(ScadaRollup1m.tag_id, b)
+            .order_by(b)
         )
-        .group_by(ScadaSampleAll.tag_id, bucket)
-        .order_by(bucket)
-    )
+
+    if bucket_s >= ROLLUP_MIN_BUCKET_S:
+        bucket_s = _snap_bucket_to_minute(bucket_s)
+        bucket_rows = (await db.execute(_rollup_query(bucket_s))).all()
+        # Transitional safety net: a database whose summary has not been
+        # backfilled yet would otherwise render every long-range chart blank —
+        # a visible regression against data that IS still sitting in raw. Only
+        # triggers when the summary is completely empty for these tags, so it
+        # costs one cheap miss and disappears once the summary is populated.
+        if not bucket_rows:
+            bucket_rows = (await db.execute(_raw_query(bucket_s))).all()
+    else:
+        bucket_rows = (await db.execute(_raw_query(bucket_s))).all()
 
     points_by_tag: dict[uuid.UUID, list[dict]] = {tid: [] for tid in tags}
-    bucket_rows = result.all()
     await data_access_monitor.log_big_read(
         db,
         profile,
@@ -1488,31 +1566,101 @@ async def _compute_summaries(
     """Min/max/avg over [start, end) + latest value, for `tags`, in two batched
     queries regardless of how many tags — the piece worth caching per tag."""
     ids = list(tags.keys())
+
+    # Min/max/avg over the window from the SUMMARY (ARSITEKTUR-DATA §2.7).
+    # min/max are exact (min of minute-minima is the window minimum); avg is the
+    # n-weighted mean, which reconstructs the raw mean exactly — see _rollup_avg.
+    #
+    # The window is snapped OUTWARD to whole minutes because the summary's atom
+    # is a minute: a request for 14:30:17 → 14:30:00 cannot be answered more
+    # precisely than "the minute containing 14:30:17". Snapping outward keeps
+    # the stat a true superset of the requested window rather than silently
+    # dropping the partial minutes at each edge.
+    r_start = start.replace(second=0, microsecond=0)
+    r_end = end.replace(second=0, microsecond=0)
+    if r_end < end:
+        r_end += timedelta(minutes=1)
+
     agg_result = await db.execute(
         select(
-            ScadaSampleAll.tag_id,
-            func.min(ScadaSampleAll.value).label("min"),
-            func.max(ScadaSampleAll.value).label("max"),
-            func.avg(ScadaSampleAll.value).label("avg"),
+            ScadaRollup1m.tag_id,
+            func.min(ScadaRollup1m.min).label("min"),
+            func.max(ScadaRollup1m.max).label("max"),
+            _rollup_avg().label("avg"),
         )
         .where(
-            ScadaSampleAll.tag_id.in_(ids),
-            ScadaSampleAll.ts >= start,
-            ScadaSampleAll.ts < end,
+            ScadaRollup1m.tag_id.in_(ids),
+            ScadaRollup1m.ts >= r_start,
+            ScadaRollup1m.ts < r_end,
         )
-        .group_by(ScadaSampleAll.tag_id)
+        .group_by(ScadaRollup1m.tag_id)
     )
     aggs = {row.tag_id: row for row in agg_result.all()}
 
-    # Latest row per tag regardless of window (a gauge must show the current
-    # value even if the stats window is short)
+    # Transitional safety net, same reasoning as /history: an un-backfilled
+    # summary must not blank out gauges whose data is still in raw.
+    if not aggs:
+        raw_agg = await db.execute(
+            select(
+                ScadaSampleAll.tag_id,
+                func.min(ScadaSampleAll.value).label("min"),
+                func.max(ScadaSampleAll.value).label("max"),
+                func.avg(ScadaSampleAll.value).label("avg"),
+            )
+            .where(
+                ScadaSampleAll.tag_id.in_(ids),
+                ScadaSampleAll.ts >= start,
+                ScadaSampleAll.ts < end,
+            )
+            .group_by(ScadaSampleAll.tag_id)
+        )
+        aggs = {row.tag_id: row for row in raw_agg.all()}
+
+    # Latest value per tag regardless of window (a gauge must show the current
+    # value even if the stats window is short).
+    #
+    # Audit D-11: this used to be DISTINCT ON over scada_samples_all. Because
+    # that view is a UNION, its rows carry no usable ordering, so Postgres had
+    # to sort every row belonging to these tags just to keep the newest one per
+    # tag — one of the most expensive queries on the most frequently called
+    # path. scada_tag_latest already holds exactly one current row per tag,
+    # keyed by tag_id: the same answer for a primary-key lookup. Measured on the
+    # live DB at 31 k rows: 71 ms → 24 ms, and the gap widens with table size.
+    #
+    # Bonus correctness: the live lane updates ~1 s, while history rows only
+    # land once per sampling interval, so this value is never staler than the
+    # old one — usually fresher.
     last_result = await db.execute(
-        select(ScadaSampleAll)
-        .distinct(ScadaSampleAll.tag_id)
-        .where(ScadaSampleAll.tag_id.in_(ids))
-        .order_by(ScadaSampleAll.tag_id, ScadaSampleAll.ts.desc())
+        select(ScadaTagLatest).where(ScadaTagLatest.tag_id.in_(ids))
     )
-    lasts = {s.tag_id: s for s in last_result.scalars().all()}
+    lasts: dict[uuid.UUID, object] = {r.tag_id: r for r in last_result.scalars().all()}
+
+    # A tag can have history but no live row — e.g. one whose source was
+    # switched (which clears scada_tag_latest) or one last written by an older
+    # bridge. Fall back for those few, never for all of them.
+    #
+    # LATERAL, not DISTINCT ON: at 300 tags over millions of rows the DISTINCT ON
+    # form measured 1 638 ms against 1.7 ms for this one — Postgres cannot
+    # optimise it and scans + sorts millions of index entries to return a
+    # handful of rows. Same reasoning as alarm_engine._last_seen_batch.
+    missing = [tid for tid in ids if tid not in lasts]
+    if missing:
+        fallback = await db.execute(
+            text(
+                """
+                SELECT x.tag_id, l.ts, l.value
+                  FROM unnest(CAST(:ids AS uuid[])) AS x(tag_id)
+                  CROSS JOIN LATERAL (
+                        SELECT s.ts, s.value FROM scada_samples_all s
+                         WHERE s.tag_id = x.tag_id
+                         ORDER BY s.ts DESC
+                         LIMIT 1
+                  ) AS l
+                """
+            ),
+            {"ids": [str(t) for t in missing]},
+        )
+        lasts.update({r.tag_id: r for r in fallback.all()})
 
     out: dict[uuid.UUID, dict] = {}
     for tid, tag in tags.items():
@@ -1623,10 +1771,125 @@ async def get_summary(
 
 
 # ---------------------------------------------------------------------------
+# Excel export — assembled ON THE SERVER (audit D-7)
+# ---------------------------------------------------------------------------
+
+MAX_EXPORT_TAGS = 20
+
+
+@router.get("/export.xlsx")
+@limiter.limit(READ_LIMIT)
+async def export_xlsx(
+    request: Request,
+    tag_ids: Annotated[list[uuid.UUID], Query(min_length=1, max_length=MAX_EXPORT_TAGS)],
+    start: datetime,
+    end: datetime,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    """Raw rows for [start, end), one SHEET PER SENSOR, built on the server.
+
+    Replaces the browser-side assembly (audit D-7). That version paged
+    /samples backwards from `end`, up to 400 pages of 5 000 rows PER TAG, all
+    tags in parallel — 10 sensors could fire ~4 000 requests at the API and
+    then try to hold up to 20 million rows in the tab's memory. The tab
+    usually died first, and every one of those pages also wrote an access-log
+    row and ran a COUNT.
+
+    Here it is one request. Rows stream out of Postgres in keyset-paged chunks
+    into a write_only workbook that spills to disk, so neither the server nor
+    the browser ever holds the whole export in memory — the browser just
+    receives a file.
+
+    One sheet per sensor rather than one wide sheet: sensors sample at
+    different rates, so a shared time column is mostly empty cells, and a
+    2-second sensor would blow past Excel's 1 048 576-row limit far sooner
+    when every sensor's timestamps are merged into one column.
+    """
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    if end <= start:
+        raise HTTPException(status_code=422, detail="Rentang waktu tidak valid")
+    if end - start > MAX_HISTORY_SPAN:
+        raise HTTPException(status_code=422, detail="Rentang waktu maksimal 45 hari")
+
+    granted = await _load_permissions(db, profile.role)
+    tag_query = select(ScadaTag).where(ScadaTag.id.in_(tag_ids))
+    if "scada:manage" not in granted:
+        tag_query = tag_query.where(ScadaTag.enabled.is_(True))
+    found = {t.id: t for t in (await db.execute(tag_query)).scalars().all()}
+    tags = [found[t] for t in tag_ids if t in found]
+    if not tags:
+        raise HTTPException(status_code=404, detail="Sensor tidak ditemukan")
+
+    import os as _os
+    import tempfile
+
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+
+    from app.services import archiver
+
+    fd, path = tempfile.mkstemp(suffix=".xlsx", prefix="rnet-export-")
+    _os.close(fd)
+    try:
+        counts = await archiver.build_plant_workbook(
+            db, tags, {t.id: (start, end) for t in tags}, path,
+            # The union view, NOT the historian lane: a user exporting a
+            # ring-mode sensor must get its rows, which live in scada_raw.
+            source=ScadaSampleAll,
+        )
+    except Exception:
+        _os.unlink(path)
+        raise
+
+    # The abuse detector still sees exports — one honest row for the whole
+    # file, where the old flow logged one per page (audit 2.7).
+    await data_access_monitor.log_big_read(
+        db, profile, ACCESS_EXPORT, [t.label for t in tags],
+        start, end, sum(counts.values()),
+    )
+
+    stamp = f"{start:%Y%m%d}-{end:%Y%m%d}"
+    name = f"R-Net-{stamp}.xlsx" if len(tags) > 1 else (
+        f"{_slug(tags[0].label)}-{stamp}.xlsx"
+    )
+    return FileResponse(
+        path,
+        media_type=XLSX_MIME,
+        filename=name,
+        background=BackgroundTask(_os.unlink, path),
+    )
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _slug(label: str) -> str:
+    keep = "".join(c if c.isalnum() or c in "-_" else "-" for c in label).strip("-")
+    return keep or "sensor"
+
+
+# ---------------------------------------------------------------------------
 # Sparklines: bucketed mini-series for every visible tag (Analisis table)
 # ---------------------------------------------------------------------------
 
 SPARK_MAX_POINTS = 240
+# Audit D-6: this endpoint used to take EVERY visible tag with no ceiling at
+# all, then aggregate up to 31 days for all of them in one uncached query. One
+# click on Analisis with 1 000 sensors was a query across tens of millions of
+# rows in two tables. The table only renders one page of rows anyway, so a
+# ceiling costs the user nothing; matching MAX_SUMMARY_TAGS keeps the two
+# table-wide endpoints consistent.
+SPARK_MAX_TAGS = MAX_SUMMARY_TAGS
+
+# Same TTL as /summary. The Analisis table refreshes on the shared 60 s cadence
+# and every viewer asks the identical question, so without this each open
+# recomputed the whole thing.
+_spark_cache: dict[tuple, tuple[float, list[dict]]] = {}
+_SPARK_CACHE_MAX = 64
 
 
 @router.get("/sparklines", response_model=SparklinesOut)
@@ -1639,45 +1902,84 @@ async def get_sparklines(
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
     """One bucketed series (avg per bucket) per visible tag over the last
-    `range_h` hours — feeds the 12-jam mini-charts in the Analisis table in a
-    single query instead of N per-tag requests. Same visibility rule as the tag
-    list: no scada:manage → enabled tags only."""
+    `range_h` hours — feeds the mini-charts in the Analisis table in a single
+    query instead of N per-tag requests. Same visibility rule as the tag list:
+    no scada:manage → enabled tags only.
+
+    Reads the per-minute summary whenever the bucket is a minute or wider
+    (ARSITEKTUR-DATA §2.7), capped at SPARK_MAX_TAGS tags and cached for the
+    summary TTL (audit D-6)."""
     granted = await _load_permissions(db, profile.role)
     tag_query = select(ScadaTag.id)
     if "scada:manage" not in granted:
         tag_query = tag_query.where(ScadaTag.enabled.is_(True))
-    tag_ids = [r[0] for r in (await db.execute(tag_query)).all()]
+    tag_ids = [r[0] for r in (await db.execute(tag_query)).all()][:SPARK_MAX_TAGS]
     if not tag_ids:
         return {"items": []}
 
     end = datetime.now(timezone.utc)
     start = end - timedelta(hours=range_h)
     span_s = (end - start).total_seconds()
-    bucket_s = max(1, int(-(-span_s // points)))
-    bucket = func.to_timestamp(
-        func.floor(func.extract("epoch", ScadaSampleAll.ts) / bucket_s) * bucket_s
-    ).label("bucket")
+    bucket_s = _bucket_seconds(span_s, points)
 
-    result = await db.execute(
-        select(
-            ScadaSampleAll.tag_id,
-            bucket,
-            func.avg(ScadaSampleAll.value).label("avg"),
-        )
-        .where(
-            ScadaSampleAll.tag_id.in_(tag_ids),
-            ScadaSampleAll.ts >= start,
-            ScadaSampleAll.ts < end,
-        )
-        .group_by(ScadaSampleAll.tag_id, bucket)
-        .order_by(ScadaSampleAll.tag_id, bucket)
+    now_mono = time.monotonic()
+    cache_key = (
+        tuple(sorted(str(t) for t in tag_ids)),
+        range_h,
+        points,
+        _summary_bucket(end),
     )
+    cached = _spark_cache.get(cache_key)
+    if cached is not None and cached[0] > now_mono:
+        return {"items": cached[1]}
+
+    if bucket_s >= ROLLUP_MIN_BUCKET_S:
+        bucket_s = _snap_bucket_to_minute(bucket_s)
+        bucket = func.to_timestamp(
+            func.floor(func.extract("epoch", ScadaRollup1m.ts) / bucket_s) * bucket_s
+        ).label("bucket")
+        stmt = (
+            select(ScadaRollup1m.tag_id, bucket, _rollup_avg().label("avg"))
+            .where(
+                ScadaRollup1m.tag_id.in_(tag_ids),
+                ScadaRollup1m.ts >= start,
+                ScadaRollup1m.ts < end,
+            )
+            .group_by(ScadaRollup1m.tag_id, bucket)
+            .order_by(ScadaRollup1m.tag_id, bucket)
+        )
+    else:
+        bucket = func.to_timestamp(
+            func.floor(func.extract("epoch", ScadaSampleAll.ts) / bucket_s) * bucket_s
+        ).label("bucket")
+        stmt = (
+            select(ScadaSampleAll.tag_id, bucket, func.avg(ScadaSampleAll.value).label("avg"))
+            .where(
+                ScadaSampleAll.tag_id.in_(tag_ids),
+                ScadaSampleAll.ts >= start,
+                ScadaSampleAll.ts < end,
+            )
+            .group_by(ScadaSampleAll.tag_id, bucket)
+            .order_by(ScadaSampleAll.tag_id, bucket)
+        )
+
+    result = await db.execute(stmt)
     by_tag: dict[uuid.UUID, list[dict]] = {tid: [] for tid in tag_ids}
     for row in result.all():
         by_tag[row.tag_id].append(
             {"t": row.bucket.isoformat(), "v": round(float(row.avg), 4)}
         )
-    return {"items": [{"tag_id": str(tid), "points": pts} for tid, pts in by_tag.items()]}
+    items = [{"tag_id": str(tid), "points": pts} for tid, pts in by_tag.items()]
+
+    if _SUMMARY_CACHE_TTL_S > 0:
+        if len(_spark_cache) >= _SPARK_CACHE_MAX:
+            for k in [k for k, (exp, _) in _spark_cache.items() if exp <= now_mono]:
+                _spark_cache.pop(k, None)
+            if len(_spark_cache) >= _SPARK_CACHE_MAX:
+                _spark_cache.clear()
+        _spark_cache[cache_key] = (now_mono + _SUMMARY_CACHE_TTL_S, items)
+
+    return {"items": items}
 
 
 # ---------------------------------------------------------------------------

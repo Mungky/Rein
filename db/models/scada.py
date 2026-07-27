@@ -220,6 +220,10 @@ class ScadaSample(Base):
     writers/pruners target the physical tables."""
 
     __tablename__ = "scada_samples"
+    # ix_scada_samples_ts (migration i9j0k1l2m3n4, audit D-2): the PK's leading
+    # column is tag_id, so any sweep filtering on TIME alone cannot use it and
+    # falls back to a full table scan. See ScadaRing for the full rationale.
+    __table_args__ = (Index("ix_scada_samples_ts", "ts"),)
 
     tag_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("scada_tags.id", ondelete="CASCADE"), primary_key=True
@@ -241,6 +245,10 @@ class ScadaRing(Base):
     `scada_samples_all` view."""
 
     __tablename__ = "scada_ring"
+    # ix_scada_ring_ts (migration i9j0k1l2m3n4, audit D-2): the retention sweep
+    # filters on ts ALONE, which the composite PK (tag_id, ts) cannot serve —
+    # without this index every pass sequentially scans the entire table.
+    __table_args__ = (Index("ix_scada_ring_ts", "ts"),)
 
     tag_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("scada_tags.id", ondelete="CASCADE"), primary_key=True
@@ -251,8 +259,48 @@ class ScadaRing(Base):
     value: Mapped[float] = mapped_column(Float, nullable=False)
 
 
+class ScadaRaw(Base):
+    """RAW sensor values, PARTITIONED BY DAY — the replacement for ScadaRing.
+
+    Retention is DROP PARTITION, not DELETE (audit D-1). Measured at pilot
+    scale (300 tags, 3.28 M rows/day): dropping a day takes 109 ms and leaves
+    zero dead tuples, where the equivalent DELETE took 2 632 ms and left 3.28 M
+    of them. That dead-tuple debt is what bloated scada_ring_pkey to ~50× its
+    natural size on the live database.
+
+    Consequence of daily drawers: a row lives 24–48 h rather than exactly 24 h,
+    because a day can only be dropped once ALL of it has aged out. Accepted
+    deliberately — `scada_settings.ring_window_h` now means "at least this
+    long". Hourly partitions would tighten it to 24–25 h at the cost of ~25
+    live partitions.
+
+    INDEXES — note this differs from ScadaRollup1m on purpose. PK (tag_id, ts)
+    plus a BRIN on ts, rather than a second btree. A partitioned table only
+    needs the partition key to be PART OF the unique constraint, not its first
+    column, so this is legal — and it measured 416 MB/day against 623 MB for
+    the two-btree layout at identical query speed (the BRIN is 40 kB where the
+    btree was 157 MB). BRIN depends on rows arriving in time order, which the
+    bridge does; a writer that inserted out of order would make it useless.
+
+    DDL lives in migration k1l2m3n4o5p6. Never create_all() it."""
+
+    __tablename__ = "scada_raw"
+
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scada_tags.id", ondelete="CASCADE"), primary_key=True
+    )
+    ts: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("scada_sites.id", ondelete="SET NULL"), nullable=True
+    )
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+
+
 class ScadaSampleAll(Base):
-    """READ-ONLY union view `scada_samples_all = scada_ring ∪ scada_samples`.
+    """READ-ONLY union view — during the phase-5 transition
+    `scada_raw ∪ scada_ring ∪ scada_samples`.
 
     Every read path (recent/samples/history/summary/sparklines) selects from
     this view so a tag's data is found whether it is ring or historian, without
@@ -267,6 +315,56 @@ class ScadaSampleAll(Base):
         DateTime(timezone=True), primary_key=True
     )
     value: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ScadaRollup1m(Base):
+    """PER-MINUTE SUMMARY of the raw lanes — one row per (minute, tag).
+
+    Layer 3 of docs/ARSITEKTUR-DATA.md §2.3: raw rows answer "what exactly
+    happened in the last 24 h", these answer everything older. Written once a
+    minute by app/services/rollup.py from the minute that just closed; read by
+    the chart/gauge/sparkline endpoints instead of them re-aggregating raw rows
+    on every request.
+
+    `n` is the number of raw values that fell in the minute. A silent minute
+    produces NO row (gaps stay gaps — never invent a value), and a stuttering
+    sensor produces a row with a small `n`, so "quiet" stays distinguishable
+    from "broken" without storing the gaps.
+
+    `site_id` is denormalised from the tag on purpose: raw rows carry only
+    (tag, time, value), which is why "everything for plant X" needs a detour
+    through scada_tags (audit D-1). Summary rows are written once and read for
+    a month, so the plant is stamped in at write time.
+
+    PARTITIONED BY RANGE (ts), one partition per month — retention is
+    DROP PARTITION, not DELETE (§2.4). Partitions are created on demand by the
+    rollup task. Postgres requires the partition key in every unique
+    constraint, hence PK (ts, tag_id) rather than (tag_id, ts); the separate
+    (tag_id, ts) index covers per-tag lookups.
+
+    DDL lives in migration j0k1l2m3n4o5 (partitioning and per-partition DDL are
+    beyond ORM metadata) — this model exists so queries can be written in
+    SQLAlchemy. Never create_all() it."""
+
+    __tablename__ = "scada_rollup_1m"
+    __table_args__ = (
+        Index("ix_scada_rollup_1m_tag_ts", "tag_id", "ts"),
+        Index("ix_scada_rollup_1m_site_ts", "site_id", "ts"),
+    )
+
+    ts: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scada_tags.id", ondelete="CASCADE"), primary_key=True
+    )
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("scada_sites.id", ondelete="SET NULL"), nullable=True
+    )
+    avg: Mapped[float] = mapped_column(Float, nullable=False)
+    min: Mapped[float] = mapped_column(Float, nullable=False)
+    max: Mapped[float] = mapped_column(Float, nullable=False)
+    n: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class ScadaTagLatest(Base):

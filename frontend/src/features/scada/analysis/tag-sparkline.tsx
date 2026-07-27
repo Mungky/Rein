@@ -27,6 +27,7 @@ const COLOR: Record<SparkStatus, string> = {
 export function TagSparkline({
   samples,
   status,
+  pending = false,
   width = 120,
   height = 28,
   className,
@@ -34,6 +35,12 @@ export function TagSparkline({
   /** Ascending by time; at most ~100 points. */
   samples: RecentSample[];
   status: SparkStatus;
+  /** Jendela waktu yang diminta belum tiba dari server. Selama true, kotak ini
+   *  menggambar garis datar diam — BUKAN data live beberapa detik terakhir.
+   *  Alasannya: sparkline selalu diregangkan ke min/maks isinya, jadi 2–4 titik
+   *  live yang cuma berjarak beberapa detik tampil sebagai pegunungan liar,
+   *  lalu berganti drastis begitu data rentang penuh tiba. */
+  pending?: boolean;
   width?: number;
   height?: number;
   className?: string;
@@ -65,11 +72,43 @@ export function TagSparkline({
     };
   }, [samples, width, height]);
 
-  if (!geom) {
+  // Placeholder ukurannya IDENTIK dengan grafik jadinya, supaya tinggi baris
+  // tidak melompat saat data tiba.
+  if (pending || !geom) {
+    const label = pending
+      ? "memuat…"
+      : samples.length === 0
+        ? "—"
+        : "menunggu data…";
     return (
-      <span className="text-[10.5px] text-text-light">
-        {samples.length === 0 ? "—" : "menunggu data…"}
-      </span>
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={pending ? "Memuat grafik" : label}
+        className={cn("block", pending && "animate-pulse", className)}
+      >
+        <line
+          x1={3}
+          y1={height / 2}
+          x2={width - 3}
+          y2={height / 2}
+          stroke="var(--rein-border)"
+          strokeWidth={1}
+          strokeDasharray="3 3"
+          vectorEffect="non-scaling-stroke"
+        />
+        <text
+          x={width / 2}
+          y={height / 2 - 3}
+          textAnchor="middle"
+          fontSize={10.5}
+          fill="var(--rein-text-light, #9ca3af)"
+        >
+          {label}
+        </text>
+      </svg>
     );
   }
 

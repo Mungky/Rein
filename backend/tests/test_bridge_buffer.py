@@ -113,22 +113,51 @@ def test_crash_recovery_replays_unflushed_value(tmp_path):
     assert b._buffer_all() == []  # buffer cleared after confirmed store
 
 
-def test_recovery_routes_ring_tag_to_scada_ring(tmp_path):
+def test_recovery_routes_ring_tag_to_scada_raw(tmp_path):
+    """Recovered ring values land in scada_raw (phase 5), not scada_samples,
+    and carry the tag's plant so the row is complete — a recovered row must be
+    indistinguishable from one written live."""
     buf = str(tmp_path / "buf.db")
     tag = str(uuid.uuid4())
+    site = str(uuid.uuid4())
     a = Bridge("", buffer_path=buf)
     a._buffer_put(tag, datetime.now(timezone.utc), 3.0)
     a._buf.close()
 
     b = Bridge("", buffer_path=buf)
     b._interval = {tag: 5}
-    b._ring = {tag}  # ring tag → scada_ring, not scada_samples
+    b._ring = {tag}  # ring tag → scada_raw, not scada_samples
+    b._site_of = {tag: site}
     sink = []
     b._db = lambda: FakeConn(sink)
     b.recover_buffer()
 
-    assert len(_inserts(sink, "scada_ring")) == 1
+    raw = _inserts(sink, "scada_raw")
+    assert len(raw) == 1
+    assert raw[0][2] == site  # site_id stamped onto the recovered row
     assert _inserts(sink, "scada_samples") == []
+    assert _inserts(sink, "scada_ring") == []  # the old lane is no longer written
+
+
+def test_recovery_without_site_mapping_still_stores(tmp_path):
+    """A tag whose site is unknown (config not loaded yet) must still be
+    recovered — site_id is metadata, losing a reading would be worse."""
+    buf = str(tmp_path / "buf.db")
+    tag = str(uuid.uuid4())
+    a = Bridge("", buffer_path=buf)
+    a._buffer_put(tag, datetime.now(timezone.utc), 4.0)
+    a._buf.close()
+
+    b = Bridge("", buffer_path=buf)
+    b._interval = {tag: 5}
+    b._ring = {tag}
+    sink = []
+    b._db = lambda: FakeConn(sink)
+    b.recover_buffer()
+
+    raw = _inserts(sink, "scada_raw")
+    assert len(raw) == 1
+    assert raw[0][2] is None
 
 
 def test_recovery_keeps_rows_when_db_still_down(tmp_path):

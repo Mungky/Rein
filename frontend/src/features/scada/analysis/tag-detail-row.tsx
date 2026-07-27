@@ -9,11 +9,17 @@
  *   3. Data — Min/Rata²/Maks stat tiles + the paginated raw list
  *      (5/10/20/50/100 per page, newest first).
  *
- *  Storage model (user's CCTV analogy):
- *   - "Simpan data" OFF → ring mode: the DB keeps only the last 24 hours.
- *   - ON → historian: accumulates a fixed 1 month, then auto-archives to Google
- *     Drive and resets from 0. Fast levels are blocked while storing.
- *  Both lanes sample at the tag's chosen level (admin sets the seconds). */
+ *  Storage model. Since scada_rollup_1m (ARSITEKTUR-DATA §2.5) every tag gets a
+ *  per-minute summary regardless of this toggle, so the toggle no longer decides
+ *  "history or no history" — it decides how much RAW detail is kept and whether
+ *  the tag is archived to Drive:
+ *   - OFF → ring mode: raw values kept 24 h. Summary still kept, so long-range
+ *     charts work. Any sampling level allowed.
+ *   - ON  → historian: raw values accumulate ~1 month, then auto-archive to
+ *     Google Drive and reset from 0. Fast levels are blocked while storing.
+ *  Both lanes sample at the tag's chosen level (admin sets the seconds).
+ *  The label must keep saying this honestly: before the summary existed, OFF
+ *  really did mean "old data is deleted", and that wording is now false. */
 
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -121,9 +127,18 @@ export function TagDetailRow({
   // (60 dtk); di antara fetch, ekor live ditempel supaya ujung kurva bergerak.
   const [chartPts, setChartPts] = useState<RecentSample[] | null>(null);
   const [summary, setSummary] = useState<SummaryItem | null>(null);
+  // Jendela mana yang sedang ada di chartPts. Selama belum cocok dengan yang
+  // diminta (baru dibuka, atau Rentang baru saja diganti), grafik menggambar
+  // placeholder diam — bukan ~100 titik mentah terakhir yang jendelanya jauh
+  // lebih sempit dan tampil sebagai kurva liar sebelum data asli tiba.
+  const chartWindow = `${tag.id}|${range}`;
+  const [chartLoadedFor, setChartLoadedFor] = useState<string | null>(null);
+  const chartPending = chartLoadedFor !== chartWindow;
+
   const loadRange = useCallback(async () => {
     const end = new Date();
     const start = new Date(end.getTime() - RANGE_MS[range]);
+    const window = `${tag.id}|${range}`;
     try {
       const [hist, sum] = await Promise.all([
         scadaApi.getHistory([tag.id], start, end, RANGE_POINTS[range]),
@@ -132,6 +147,7 @@ export function TagDetailRow({
       const pts = hist.series[0]?.points ?? [];
       setChartPts(pts.map((p) => ({ ts: p.t, value: p.avg })));
       setSummary(sum.items[0] ?? null);
+      setChartLoadedFor(window);
     } catch {
       /* biarkan tampilan lama; usePanelRefresh coba lagi */
     }
@@ -216,11 +232,13 @@ export function TagDetailRow({
             ) : (
               <span className="text-[10.5px] text-text-light">offline</span>
             )}
-            {(loading || chartPts === null) && (
+            {(loading || chartPending) && (
               <Loader2 className="size-3 animate-spin text-text-light" />
             )}
             <div className="flex-1" />
-            {chartSamples.length > 0 && (
+            {/* Rentang waktu hanya ditampilkan kalau yang tergambar memang
+                jendela yang diminta — kalau tidak, angkanya menyesatkan. */}
+            {!chartPending && chartSamples.length > 0 && (
               <span className="text-[10.5px] tabular-nums text-text-light">
                 {fmtTs(chartSamples[0].ts)} —{" "}
                 {fmtTs(chartSamples[chartSamples.length - 1].ts)}
@@ -228,6 +246,7 @@ export function TagDetailRow({
             )}
           </div>
           <TagSparkline
+            pending={chartPending}
             samples={chartSamples}
             status={sparkStatus}
             width={720}
@@ -266,11 +285,11 @@ export function TagDetailRow({
                 }}
               />
               <span className="text-[12.5px] text-text">
-                <span className="font-semibold">Simpan data ke riwayat</span>
+                <span className="font-semibold">Simpan detail mentah &amp; arsipkan ke Drive</span>
                 <span className="block text-[11px] leading-snug text-text-light">
                   {storeEnabled
-                    ? "Diakumulasi 1 bulan, lalu otomatis diarsip ke Google Drive dan direset dari 0."
-                    : "Hanya 24 jam terakhir yang disimpan (seperti SD card CCTV) — data lama otomatis terhapus."}
+                    ? "Tiap nilai mentah disimpan ±1 bulan, lalu diekspor ke Google Drive dan direset dari 0. Kecepatan sampling terbatas Slow/Slowest."
+                    : "Nilai mentah disimpan 24 jam terakhir saja. Ringkasan per menit (rata-rata, min, maks) tetap disimpan untuk semua sensor — jadi grafik jangka panjang tetap ada."}
                 </span>
               </span>
             </label>
