@@ -23,11 +23,19 @@ TWO JOBS, AND THE FIRST IS THE DANGEROUS ONE
          says — a clock or timezone bug must not be able to empty the table,
       3. for the summary, don't drop at all unless explicitly configured.
 
-WHY THE SUMMARY DEFAULTS TO NEVER DROPPING
+THE SUMMARY IS GUARDED BY AN ARCHIVE, NOT BY A NUMBER
     A month of scada_rollup_1m is the ONLY copy of that period once the raw
-    day-drawers are gone. It may only be dropped after the month is safely in
-    Google Drive, and the per-plant archiver that does that is phase 6. So
-    ROLLUP_KEEP_MONTHS defaults to 0 = keep forever. Phase 6 turns it on.
+    day-drawers are gone. It used to be protected by refusing to drop anything
+    at all (ROLLUP_KEEP_MONTHS = 0), because the archiver that would make it
+    safe did not exist for this lane — so in practice the summary had no
+    retention and grew without bound.
+
+    app/services/rollup_archiver.py is that archiver. The knob is now 1 (a month
+    is dropped once it is a full month behind, i.e. 30-61 days of summary), but
+    the number is NOT what makes it safe: every candidate month is checked
+    against the archive ledger first, and a month with any plant not yet
+    verifiably on Drive is left alone no matter how old it is. Raising the knob
+    keeps data longer; it cannot be lowered into deleting an unarchived month.
 
 RETENTION IS NOW APPROXIMATE, ON PURPOSE
     A day can only be dropped once all of it has expired, so a row lives
@@ -58,9 +66,15 @@ MIN_KEEP_RAW = 2
 # Warn loudly before the runway actually runs out.
 AHEAD_WARN_DAYS = 2
 
-# 0 = never drop summary months. Phase 6 raises this once per-plant archiving
-# to Drive confirms a month is safe.
-ROLLUP_KEEP_MONTHS = int(os.getenv("ROLLUP_KEEP_MONTHS", "0"))
+# How many whole months of summary stay in the database. 1 = "the current month
+# plus all of the previous one", so a summary row lives 30-61 days — the
+# "1 menit selama 30 hari" the design promises, with the same
+# expires-at-a-boundary slack the raw lane has. 0 disables dropping entirely
+# (and with it the archiving, which then has nothing to make safe).
+#
+# This is a comfort knob, not the safety mechanism. The safety mechanism is
+# drop_expired_rollup refusing any month that is not fully archived.
+ROLLUP_KEEP_MONTHS = int(os.getenv("ROLLUP_KEEP_MONTHS", "1"))
 MIN_KEEP_ROLLUP = 2
 
 _RAW_RE = re.compile(r"^scada_raw_(\d{4})_(\d{2})_(\d{2})$")
@@ -173,11 +187,40 @@ async def drop_expired_raw(db, now: datetime, window_h: int) -> list[str]:
     return dropped
 
 
+async def _is_empty(db, name: str) -> bool:
+    """True if a partition holds no rows at all.
+
+    Needed because the archive gate below is keyed on ledger rows, and a month
+    that was created ahead and never written to has none — without this it would
+    be un-droppable forever and empty drawers would pile up. LIMIT 1 stops at
+    the first row, so this costs nothing on a month that is full."""
+    row = await db.execute(text(f"SELECT 1 FROM public.{name} LIMIT 1"))
+    return row.first() is None
+
+
 async def drop_expired_rollup(db, now: datetime) -> list[str]:
-    """Drop summary months older than ROLLUP_KEEP_MONTHS. Disabled by default —
-    see the module docstring; this data may be the only surviving copy."""
+    """Drop summary months older than ROLLUP_KEEP_MONTHS **that are on Drive**.
+
+    Three independent things must all agree before a month is deleted:
+
+      1. it is entirely older than the retention window (the arithmetic below),
+      2. it is not one of the newest MIN_KEEP_ROLLUP months (the floor guard —
+         a clock jump must not be able to empty the table),
+      3. every plant's copy of it is verifiably on Google Drive, or the month
+         is empty.
+
+    Point 3 is the one that matters. This lane is the only surviving record of
+    anything older than ~48 h, so "old enough" is not a good enough reason on
+    its own; the ledger written by rollup_archiver.py is the evidence, and
+    without it nothing here deletes anything.
+    """
     if ROLLUP_KEEP_MONTHS <= 0:
         return []
+    # Imported here, not at module level: rollup_archiver imports this module
+    # for the retention knob, so a top-level import would be a cycle.
+    from app.services import rollup_archiver
+
+    archived = await rollup_archiver.fully_archived_months(db)
     keep_from = _month(now)
     for _ in range(ROLLUP_KEEP_MONTHS):
         keep_from = (
@@ -196,6 +239,14 @@ async def drop_expired_rollup(db, now: datetime) -> list[str]:
         m = _ROLLUP_RE.match(name)
         month = datetime(int(m[1]), int(m[2]), 1, tzinfo=timezone.utc)
         if month >= keep_from:
+            continue
+        # Guard 3: no verified archive → no deletion, however old it is.
+        if month.date() not in archived and not await _is_empty(db, name):
+            logger.warning(
+                "Ringkasan %s sudah kedaluwarsa tapi BELUM lengkap di Drive — "
+                "tidak dihapus. Cek log arsip ringkasan / kredensial Drive.",
+                name,
+            )
             continue
         await db.execute(
             text(f"ALTER TABLE public.scada_rollup_1m DETACH PARTITION public.{name}")

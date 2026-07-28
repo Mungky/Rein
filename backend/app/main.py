@@ -46,6 +46,7 @@ from app.services import (
     historian,
     partitions,
     rollup,
+    rollup_archiver,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,16 @@ async def lifespan(app: FastAPI):
     rollup_task = (
         asyncio.create_task(rollup.rollup_loop()) if rollup.ENABLED else None
     )
+    # Summary retention: exports each expired plant-month to Drive so the
+    # partition manager is allowed to drop it. Without this loop running
+    # somewhere, drop_expired_rollup finds no evidence and keeps every month —
+    # the summary lane simply grows. Safe to run alongside another backend (the
+    # per-(plant, month) claim index decides the winner).
+    rollup_archiver_task = (
+        asyncio.create_task(rollup_archiver.archiver_loop())
+        if rollup_archiver.ENABLED
+        else None
+    )
     logger.info("REIN API started — task queue active, cleanup every %ds", CLEANUP_INTERVAL)
     if historian_task is None:
         logger.warning("Historian sampler DISABLED via HISTORIAN_ENABLED")
@@ -183,6 +194,12 @@ async def lifespan(app: FastAPI):
         logger.warning("Partition manager DISABLED via PARTITION_MANAGER_ENABLED")
     if rollup_task is None:
         logger.warning("Rollup per-menit DISABLED via ROLLUP_ENABLED")
+    if rollup_archiver_task is None:
+        logger.warning(
+            "Arsip ringkasan DISABLED via ROLLUP_ARCHIVER_ENABLED — bulan "
+            "ringkasan yang kedaluwarsa TIDAK akan dihapus (tidak ada bukti "
+            "salinan di Drive)"
+        )
     yield
     cleanup_task.cancel()
     if historian_task:
@@ -199,6 +216,8 @@ async def lifespan(app: FastAPI):
         partition_task.cancel()
     if rollup_task:
         rollup_task.cancel()
+    if rollup_archiver_task:
+        rollup_archiver_task.cancel()
     await task_queue.stop()
     logger.info("REIN API shutting down")
 

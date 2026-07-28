@@ -14,7 +14,7 @@ import asyncio
 import sys
 import types
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -31,18 +31,28 @@ class _Result:
     def all(self):
         return self._rows
 
+    def first(self):
+        return self._rows[0] if self._rows else None
+
 
 class _Session:
-    """Records SQL; answers partition-listing queries from `existing`."""
+    """Records SQL; answers partition-listing queries from `existing`.
 
-    def __init__(self, log, existing):
+    `nonempty` lists partitions that should look like they hold rows, so the
+    "an empty drawer needs no archive" shortcut can be steered per test."""
+
+    def __init__(self, log, existing, nonempty=()):
         self._log = log
         self._existing = list(existing)
+        self._nonempty = set(nonempty)
         self.commits = 0
 
     async def execute(self, stmt, params=None):
         sql = " ".join(str(stmt).split())
         self._log.append(sql)
+        if sql.startswith("SELECT 1 FROM public.") and sql.endswith("LIMIT 1"):
+            name = sql.split("SELECT 1 FROM public.")[1].split()[0]
+            return _Result([(1,)] if name in self._nonempty else [])
         if "FROM pg_class" in sql:
             pat = (params or {}).get("pat", "").replace("\\", "").replace("%", "")
             return _Result([(n,) for n in sorted(self._existing) if n.startswith(pat)])
@@ -60,10 +70,16 @@ class _Session:
         self.commits += 1
 
 
-def _install(monkeypatch, log, existing, ring_window_h=24):
+def _install(monkeypatch, log, existing, ring_window_h=24, nonempty=(), archived=None):
+    """Stub the session, the settings row, and the summary archive ledger.
+
+    `archived` = the set of months rollup_archiver reports as verifiably on
+    Drive. Default None means "assume everything is archived", so the tests that
+    are about DATE ARITHMETIC are not also testing the archive gate; the tests
+    that are about the gate pass it explicitly."""
     @asynccontextmanager
     async def factory():
-        yield _Session(log, existing)
+        yield _Session(log, existing, nonempty)
 
     module = types.ModuleType("db.session")
     module.async_session_factory = factory
@@ -73,6 +89,19 @@ def _install(monkeypatch, log, existing, ring_window_h=24):
         return SimpleNamespace(ring_window_h=ring_window_h)
 
     monkeypatch.setattr(partitions.rnet_settings, "get_settings", fake_settings)
+
+    from app.services import rollup_archiver
+
+    async def fake_archived(_db):
+        if archived is not None:
+            return set(archived)
+        return {
+            date(int(m[1]), int(m[2]), 1)
+            for n in existing
+            if (m := partitions._ROLLUP_RE.match(n))
+        }
+
+    monkeypatch.setattr(rollup_archiver, "fully_archived_months", fake_archived)
 
 
 def _created(log):
@@ -226,40 +255,43 @@ def test_floor_protects_the_newest_not_an_arbitrary_pair(monkeypatch):
     assert dropped == ["scada_raw_2026_07_20"]
 
 
-def test_unrelated_tables_are_never_touched(monkeypatch):
-    """Name matching must not catch scada_rollup_1m_* or anything else."""
+def test_the_raw_sweep_never_catches_a_summary_partition(monkeypatch):
+    """`scada_raw\\_%` and `scada_rollup_1m_%` are different sweeps with
+    different rules — the raw one runs on a 24 h window and answers to nobody,
+    so it must not be able to reach a summary month. Both lanes are given
+    droppable partitions here so a leak would show up as the wrong name in the
+    wrong bucket."""
     log = []
     _install(monkeypatch, log, existing=[
         "scada_raw_2020_01_01", "scada_raw_2020_01_02", "scada_raw_2020_01_03",
-        "scada_rollup_1m_2020_01", "scada_rollup_1m_2026_07",
-    ])
-
-    asyncio.run(partitions.maintain_once(now=datetime(2026, 7, 26, 12, 0, tzinfo=UTC)))
-
-    for name in _dropped(log):
-        assert name.startswith("scada_raw_")
-
-
-# --- the summary table: off by default ------------------------------------
-
-
-def test_summary_months_are_never_dropped_by_default(monkeypatch):
-    """Until phase 6 confirms a month reached Drive, the summary may be the
-    only surviving copy of that period."""
-    assert partitions.ROLLUP_KEEP_MONTHS == 0
-    log = []
-    _install(monkeypatch, log, existing=[
-        "scada_rollup_1m_2019_01", "scada_rollup_1m_2019_02",
+        "scada_rollup_1m_2020_01", "scada_rollup_1m_2026_06",
         "scada_rollup_1m_2026_07",
     ])
 
     res = asyncio.run(partitions.maintain_once(now=datetime(2026, 7, 26, 12, 0, tzinfo=UTC)))
 
-    assert res["dropped_rollup"] == []
-    assert not any(n.startswith("scada_rollup_1m") for n in _dropped(log))
+    assert res["dropped_raw"] and all(
+        n.startswith("scada_raw_") for n in res["dropped_raw"]
+    )
+    assert all(n.startswith("scada_rollup_1m_") for n in res["dropped_rollup"])
+    # The current month is never a candidate either way.
+    assert "scada_rollup_1m_2026_07" not in _dropped(log)
 
 
-def test_summary_drop_respects_keep_months_when_enabled(monkeypatch):
+# --- the summary table: retention is gated on a verified archive -----------
+#
+# This lane is the only surviving record of anything older than ~48 h, so being
+# old enough is NOT sufficient grounds to delete it. Every test below is about
+# the second condition.
+
+
+def test_default_keeps_at_least_thirty_days_of_summary(monkeypatch):
+    """1 month behind = a summary row lives 30-61 days. Dropping to 0 here
+    would silently switch retention off for the whole lane."""
+    assert partitions.ROLLUP_KEEP_MONTHS >= 1
+
+
+def test_summary_drop_respects_keep_months(monkeypatch):
     log = []
     monkeypatch.setattr(partitions, "ROLLUP_KEEP_MONTHS", 2)
     _install(monkeypatch, log, existing=[
@@ -275,6 +307,101 @@ def test_summary_drop_respects_keep_months_when_enabled(monkeypatch):
     assert "scada_rollup_1m_2026_04" in dropped
     assert "scada_rollup_1m_2026_05" not in dropped  # within keep window
     assert "scada_rollup_1m_2026_06" not in dropped
+
+
+def test_an_expired_month_is_kept_while_it_is_not_on_drive(monkeypatch):
+    """THE test for this module. Drive down, credentials wrong, archiver
+    switched off — whatever the reason, an unarchived month must survive being
+    old. The failure this prevents is permanent and silent."""
+    log = []
+    monkeypatch.setattr(partitions, "ROLLUP_KEEP_MONTHS", 1)
+    have = [
+        "scada_rollup_1m_2026_04", "scada_rollup_1m_2026_05",
+        "scada_rollup_1m_2026_06", "scada_rollup_1m_2026_07",
+    ]
+    _install(monkeypatch, log, existing=have, nonempty=have, archived=set())
+
+    res = asyncio.run(partitions.maintain_once(now=datetime(2026, 7, 26, 12, 0, tzinfo=UTC)))
+
+    assert res["dropped_rollup"] == []
+    assert not any(n.startswith("scada_rollup_1m") for n in _dropped(log))
+
+
+def test_only_the_months_confirmed_on_drive_are_dropped(monkeypatch):
+    """A partial backlog is the normal state: the archiver caps how many months
+    it handles per pass. The ones it finished may go; the rest wait."""
+    log = []
+    monkeypatch.setattr(partitions, "ROLLUP_KEEP_MONTHS", 1)
+    have = [
+        "scada_rollup_1m_2026_03", "scada_rollup_1m_2026_04",
+        "scada_rollup_1m_2026_05", "scada_rollup_1m_2026_06",
+        "scada_rollup_1m_2026_07",
+    ]
+    _install(
+        monkeypatch, log, existing=have, nonempty=have,
+        archived={date(2026, 3, 1), date(2026, 5, 1)},
+    )
+
+    asyncio.run(partitions.maintain_once(now=datetime(2026, 7, 26, 12, 0, tzinfo=UTC)))
+
+    dropped = [n for n in _dropped(log) if n.startswith("scada_rollup_1m")]
+    assert dropped == ["scada_rollup_1m_2026_03", "scada_rollup_1m_2026_05"]
+    assert "scada_rollup_1m_2026_04" not in dropped  # expired but not archived
+
+
+def test_an_empty_month_needs_no_archive(monkeypatch):
+    """Drawers are created a month ahead. One that was never written to has no
+    ledger row and never will — without this exemption empty partitions would
+    accumulate forever."""
+    log = []
+    monkeypatch.setattr(partitions, "ROLLUP_KEEP_MONTHS", 1)
+    have = [
+        "scada_rollup_1m_2026_04", "scada_rollup_1m_2026_05",
+        "scada_rollup_1m_2026_06", "scada_rollup_1m_2026_07",
+    ]
+    # 2026_04 holds rows, 2026_05 is an empty leftover. Neither is archived.
+    _install(
+        monkeypatch, log, existing=have,
+        nonempty=["scada_rollup_1m_2026_04"], archived=set(),
+    )
+
+    asyncio.run(partitions.maintain_once(now=datetime(2026, 7, 26, 12, 0, tzinfo=UTC)))
+
+    dropped = [n for n in _dropped(log) if n.startswith("scada_rollup_1m")]
+    assert dropped == ["scada_rollup_1m_2026_05"]
+
+
+def test_summary_floor_survives_a_clock_jump(monkeypatch):
+    """Same guarantee as the raw lane: even with every month archived and a
+    cutoff far in the future, the newest MIN_KEEP_ROLLUP must not be dropped."""
+    log = []
+    monkeypatch.setattr(partitions, "ROLLUP_KEEP_MONTHS", 1)
+    have = [f"scada_rollup_1m_2020_{m:02d}" for m in range(1, 6)]
+    _install(monkeypatch, log, existing=have, nonempty=have)
+    session = _Session(log, have, nonempty=have)
+
+    dropped = asyncio.run(
+        partitions.drop_expired_rollup(session, datetime(2030, 1, 1, tzinfo=UTC))
+    )
+
+    assert len(dropped) == len(have) - partitions.MIN_KEEP_ROLLUP
+    assert set(have) - set(dropped) == {
+        "scada_rollup_1m_2020_04", "scada_rollup_1m_2020_05",
+    }
+
+
+def test_summary_drop_is_off_when_keep_months_is_zero(monkeypatch):
+    """The escape hatch: ROLLUP_KEEP_MONTHS=0 still means keep forever, and it
+    must short-circuit before the ledger is even consulted."""
+    log = []
+    monkeypatch.setattr(partitions, "ROLLUP_KEEP_MONTHS", 0)
+    have = ["scada_rollup_1m_2019_01", "scada_rollup_1m_2019_02",
+            "scada_rollup_1m_2026_07"]
+    _install(monkeypatch, log, existing=have, nonempty=have)
+
+    res = asyncio.run(partitions.maintain_once(now=datetime(2026, 7, 26, 12, 0, tzinfo=UTC)))
+
+    assert res["dropped_rollup"] == []
 
 
 # --- reporting -------------------------------------------------------------

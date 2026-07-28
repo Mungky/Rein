@@ -13,6 +13,7 @@ import datetime
 import uuid
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -563,6 +564,62 @@ class ScadaTagArchive(Base):
             "cycle_start",
             unique=True,
         ),
+    )
+
+
+class ScadaRollupArchive(Base):
+    """Ledger of archived SUMMARY months — one row per (plant, month).
+
+    The scada_samples lane has ScadaTagArchive; this is the same idea for
+    scada_rollup_1m, and it exists for the same single reason:
+
+        NO SUCCESSFUL ARCHIVE -> NO DELETION.
+
+    Once the 24-hour raw drawers are gone, the summary IS the history. So
+    app/services/rollup_archiver.py INSERTs the (plant, month) row first as an
+    atomic claim, streams that plant's month into one .zip of per-sensor CSVs,
+    uploads it to Drive, and only then fills drive_file_id. A month PARTITION is
+    droppable only once every plant's row for it has drive_file_id set — that
+    gate lives in app/services/partitions.py.
+
+    `site_id` carries no foreign key and `plant` is a snapshot, deliberately:
+    this is history and must survive the plant being renamed or deleted (same
+    rule as ScadaAlarmEvent.ack_name). Uniqueness is an EXPRESSION index over
+    COALESCE(site_id, zero-uuid) because Postgres treats NULLs as distinct, and
+    a NULL bucket that could be claimed twice is not a claim at all.
+
+    DDL lives in migration n4o5p6q7r8s9. Never create_all() it."""
+
+    __tablename__ = "scada_rollup_archives"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    # Plant this bucket belongs to; NULL = sensors with no plant (simulator, or
+    # a plant deleted after its rows were written).
+    site_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    plant: Mapped[str] = mapped_column(String(120), nullable=False)
+    # First day of the archived month, UTC.
+    month: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    file_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # NULL while the upload is in flight; set = verifiably on Drive.
+    drive_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    web_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # BigInteger: one plant-month at 300 sensors is ~13 M summary rows.
+    row_count: Mapped[int] = mapped_column(
+        BigInteger, server_default="0", nullable=False
+    )
+    tag_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_scada_rollup_archives_site_month",
+            text("COALESCE(site_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
+            "month",
+            unique=True,
+        ),
+        Index("ix_scada_rollup_archives_month", "month"),
     )
 
 
