@@ -105,6 +105,11 @@ _TAG_CONFIG_KEYS = (
     "alarm_min",
     "alarm_max",
     "mqtt_topic",
+    # Which value inside a bundled payload this tag reads. Changing it silently
+    # repoints a sensor at a different physical measurement while every label,
+    # chart and alarm keeps the old name — exactly the kind of edit that has to
+    # be traceable to a person.
+    "mqtt_field",
 )
 
 

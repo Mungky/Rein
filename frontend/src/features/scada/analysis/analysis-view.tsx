@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  FileUp,
   Gauge as GaugeIcon,
   Loader2,
   Pencil,
@@ -38,6 +39,7 @@ import { SourceDialog } from "./source-dialog";
 import { ManageSitesDialog } from "../manage-sites-dialog";
 import { AlarmSettingsDialog } from "./alarm-settings-dialog";
 import { ExportRangeDialog } from "./export-range-dialog";
+import { ImportTagsDialog } from "./import-tags-dialog";
 import { TagDetailRow } from "./tag-detail-row";
 import { TagSparkline, type SparkStatus } from "./tag-sparkline";
 
@@ -119,71 +121,32 @@ export function AnalysisView({
   const [exportTags, setExportTags] = useState<Tag[] | null>(null);
   const [addingRow, setAddingRow] = useState(false);
   const [showAlarmSettings, setShowAlarmSettings] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  // Paginasi. Bukan hiasan: SEMUA yang di bawah ini dibatasi oleh halaman —
+  // sparkline (server memotong di 60 tag) dan pengambilan data mentah. Tanpa
+  // paginasi, plant 300 sensor berarti 300 permintaan HTTP tiap 60 detik dan
+  // 240 baris tanpa sparkline.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
-  // 100 data terakhir per tag — feeds the detail dropdown's raw list + stats +
-  // the live status. Refreshed on the shared cadence + manual refresh (nonce).
+  // 100 data mentah terakhir — HANYA untuk baris yang sedang dibuka.
+  //
+  // Dulu ini diambil untuk SETIAP tag: `tags.map(id => getRecentSamples(id))`,
+  // satu permintaan HTTP per sensor, tiap 60 detik. Di 14 sensor tidak terasa;
+  // di 300 sensor itu 300 permintaan serentak tiap menit — cukup untuk
+  // menabrak pembatas laju sebelum sempat menggambar apa pun. Padahal isinya
+  // cuma dipakai dua hal: daftar mentah di dropdown detail (satu baris saja
+  // yang terbuka) dan nilai/status live per baris — dan yang kedua itu memang
+  // tugasnya scada_tag_latest, yang sudah mengalir lewat Realtime ke
+  // store.liveValues. Jadi sekarang: satu permintaan, untuk baris yang dibuka.
   const [recent, setRecent] = useState<Record<string, RecentSample[]>>({});
-  // 12 jam terakhir (bucketed, satu request untuk semua tag) — feeds the mini
-  // sparkline in each table row.
+  // 12 jam terakhir (bucketed, satu request untuk SEMUA baris di halaman ini)
   const [sparkMap, setSparkMap] = useState<Record<string, RecentSample[]>>({});
   const [recentLoading, setRecentLoading] = useState(false);
-  const tagIdsKey = useMemo(() => tags.map((t) => t.id).join(","), [tags]);
   // Rentang -> jam untuk endpoint sparkline (dibulatkan ke atas, minimal 1 jam)
   // supaya sparkline mini mengikuti selektor Rentang, sama seperti grafik.
   const sparkRangeH = Math.max(1, Math.ceil(RANGE_MS[range] / 3_600_000));
-
-  // Jendela mana yang SEDANG ada di sparkMap. Selama belum cocok dengan yang
-  // diminta (buka halaman pertama kali, ganti sheet, ganti Rentang), sparkline
-  // menggambar placeholder — bukan ekor live beberapa detik terakhir yang
-  // diregangkan penuh sehingga tampak seperti grafik liar (lihat pending di
-  // TagSparkline). Refresh 60 detik TIDAK mengosongkan ini, jadi tidak berkedip.
-  const sparkWindow = `${tagIdsKey}|${sparkRangeH}`;
   const [sparkLoadedFor, setSparkLoadedFor] = useState<string | null>(null);
-
-  const loadRecent = useCallback(async () => {
-    if (tagIdsKey === "") return;
-    setRecentLoading(true);
-    const window = `${tagIdsKey}|${sparkRangeH}`;
-    try {
-      const ids = tagIdsKey.split(",");
-      const [results, spark] = await Promise.all([
-        Promise.all(
-          ids.map((id) =>
-            scadaApi
-              .getRecentSamples(id, 100)
-              .then((res) => [id, res.items] as const)
-              .catch(() => [id, []] as const)
-          )
-        ),
-        scadaApi.getSparklines(sparkRangeH).catch(() => null),
-      ]);
-      setRecent(Object.fromEntries(results));
-      // Gagal ambil sparkline → biarkan gambar lama & status "memuat" apa
-      // adanya; usePanelRefresh mencoba lagi 60 detik kemudian.
-      if (spark) {
-        setSparkMap(
-          Object.fromEntries(
-            spark.items.map((s) => [
-              s.tag_id,
-              s.points.map((p) => ({ ts: p.t, value: p.v })),
-            ])
-          )
-        );
-        setSparkLoadedFor(window);
-      }
-    } finally {
-      setRecentLoading(false);
-    }
-  }, [tagIdsKey, sparkRangeH]);
-
-  usePanelRefresh(loadRecent);
-
-  // Manual refresh (tombol di samping lonceng) re-pulls the raw lists too
-  useEffect(() => {
-    if (store.dataRefreshNonce === 0) return;
-    const t = setTimeout(() => void loadRecent(), 0);
-    return () => clearTimeout(t);
-  }, [store.dataRefreshNonce, loadRecent]);
 
   // Wall-clock for Online/last-online aging: held in STATE (never Date.now()
   // in render — purity rule) and refreshed every 10 s.
@@ -260,6 +223,77 @@ export function AnalysisView({
       return (Number(va) - Number(vb)) * dir;
     });
   }, [tags, store.liveValues, store.liveBuffers, recent, sortKey, sortDir, nowMs]);
+
+  /* ── Halaman ── */
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  // Dijepit, bukan di-set: menghapus sensor sampai halaman 5 lenyap tidak boleh
+  // membuat tabel kosong tanpa penjelasan.
+  const curPage = Math.min(page, totalPages);
+  const pageRows = useMemo(
+    () => rows.slice((curPage - 1) * pageSize, curPage * pageSize),
+    [rows, curPage, pageSize]
+  );
+  // Kunci ID halaman ini, DIURUTKAN. Diurutkan supaya mengganti kolom/arah
+  // pengurutan tabel tidak dianggap "halaman lain" dan memicu ambil ulang
+  // sparkline — isinya tetap sensor yang sama.
+  const visibleIdsKey = useMemo(
+    () => pageRows.map((r) => r.tag.id).sort().join(","),
+    [pageRows]
+  );
+  // Jendela mana yang SEDANG ada di sparkMap. Selama belum cocok dengan yang
+  // diminta (buka halaman pertama kali, ganti halaman/tabel/Rentang), sparkline
+  // menggambar placeholder — bukan ekor live beberapa detik terakhir yang
+  // diregangkan penuh sehingga tampak seperti grafik liar (lihat pending di
+  // TagSparkline). Refresh 60 detik TIDAK mengosongkan ini, jadi tidak berkedip.
+  const sparkWindow = `${visibleIdsKey}|${sparkRangeH}`;
+
+  const loadPage = useCallback(async () => {
+    if (visibleIdsKey === "") return;
+    setRecentLoading(true);
+    try {
+      const ids = visibleIdsKey.split(",");
+      const [spark, detail] = await Promise.all([
+        // Satu permintaan untuk seluruh halaman. Server memotong di 60 tag,
+        // jadi ukuran halaman sengaja tidak melebihi itu.
+        scadaApi.getSparklines(sparkRangeH, 120, ids).catch(() => null),
+        // Data mentah hanya untuk baris yang benar-benar dibuka.
+        expandedTagId
+          ? scadaApi
+              .getRecentSamples(expandedTagId, 100)
+              .then((res) => [expandedTagId, res.items] as [string, RecentSample[]])
+              .catch(() => [expandedTagId, []] as [string, RecentSample[]])
+          : Promise.resolve(null),
+      ]);
+      // Gagal ambil sparkline → biarkan gambar lama & status "memuat" apa
+      // adanya; usePanelRefresh mencoba lagi 60 detik kemudian.
+      if (spark) {
+        setSparkMap(
+          Object.fromEntries(
+            spark.items.map((s) => [
+              s.tag_id,
+              s.points.map((p) => ({ ts: p.t, value: p.v })),
+            ])
+          )
+        );
+        setSparkLoadedFor(`${visibleIdsKey}|${sparkRangeH}`);
+      }
+      // Hanya baris yang dibuka yang disimpan: menahan 300 daftar mentah di
+      // memori tidak ada gunanya kalau 299 di antaranya tidak terlihat.
+      setRecent(detail ? { [detail[0]]: detail[1] } : {});
+    } finally {
+      setRecentLoading(false);
+    }
+  }, [visibleIdsKey, sparkRangeH, expandedTagId]);
+
+  usePanelRefresh(loadPage);
+
+  // Manual refresh (tombol di samping lonceng) re-pulls the raw lists too
+  useEffect(() => {
+    if (store.dataRefreshNonce === 0) return;
+    const t = setTimeout(() => void loadPage(), 0);
+    return () => clearTimeout(t);
+  }, [store.dataRefreshNonce, loadPage]);
 
   /* ── Sheet actions ── */
 
@@ -346,8 +380,13 @@ export function AnalysisView({
   function sourceLabel(tag: Tag): string {
     if (tag.source === "mqtt") {
       const site = store.sites.find((s) => s.id === tag.site_id);
-      const topic = String((tag.config as Record<string, unknown>).mqtt_topic ?? "");
-      const short = topic.split("/").pop() || topic;
+      const cfg = tag.config as Record<string, unknown>;
+      const topic = String(cfg.mqtt_topic ?? "");
+      const field = String(cfg.mqtt_field ?? "");
+      // Kalau satu topik dipakai bersama (paket gabungan), ujung topiknya sama
+      // untuk semua sensor ("…/bulk") — yang membedakan justru fieldnya, jadi
+      // itu yang ditampilkan.
+      const short = field || topic.split("/").pop() || topic;
       return `Node-RED · ${site?.name ?? "?"}${short ? ` / ${short}` : ""}`;
     }
     return "Belum diatur";
@@ -556,6 +595,15 @@ export function AnalysisView({
           {canManage && (
             <>
               <button
+                onClick={() => setShowImport(true)}
+                disabled={!activeSheet}
+                className="btn btn-ghost btn-sm gap-1.5"
+                title="Buat banyak sensor sekaligus dari daftar CSV"
+              >
+                <FileUp className="size-3.5" />
+                <span className="hidden sm:inline">Impor Sensor</span>
+              </button>
+              <button
                 onClick={() => store.setShowManageSites(true)}
                 className="btn btn-ghost btn-sm gap-1.5"
                 title="Kelola broker MQTT (site)"
@@ -660,7 +708,7 @@ export function AnalysisView({
               </tr>
             </thead>
             <tbody>
-              {rows.map(({ tag, last, lastSeenMs, online, sparkStatus, series }) => (
+              {pageRows.map(({ tag, last, lastSeenMs, online, sparkStatus, series }) => (
                 <Fragment key={tag.id}>
                   <tr
                     className={cn(
@@ -852,6 +900,52 @@ export function AnalysisView({
             </tbody>
           </table>
         </div>
+
+        {/* Pager. Sengaja menghilang saat semuanya muat dalam satu halaman,
+            supaya tabel 14 sensor terlihat persis seperti sebelumnya. */}
+        {rows.length > pageSize && (
+          <div className="flex h-10 min-h-10 items-center gap-2 border-t border-border-soft bg-bg px-3 text-[12px]">
+            <span className="text-text-muted">
+              {(curPage - 1) * pageSize + 1}–
+              {Math.min(curPage * pageSize, rows.length)} dari {rows.length} sensor
+            </span>
+            <div className="flex-1" />
+            <select
+              className="field-select h-7 w-auto cursor-pointer text-[12px]"
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setPage(1);
+              }}
+              title="Sensor per halaman"
+            >
+              {/* Tidak ada opsi di atas 50: server memberi sparkline maksimal
+                  60 tag per permintaan, dan satu halaman harus selalu muat. */}
+              {[25, 50].map((n) => (
+                <option key={n} value={n}>
+                  {n} / halaman
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => setPage(Math.max(1, curPage - 1))}
+              disabled={curPage <= 1}
+              className="btn btn-ghost btn-sm"
+            >
+              Sebelumnya
+            </button>
+            <span className="tabular-nums text-text-muted">
+              {curPage} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage(Math.min(totalPages, curPage + 1))}
+              disabled={curPage >= totalPages}
+              className="btn btn-ghost btn-sm"
+            >
+              Berikutnya
+            </button>
+          </div>
+        )}
       </div>
 
       {drawerTag && <RiwayatView tag={drawerTag} onClose={() => setDrawerTag(null)} />}
@@ -872,6 +966,14 @@ export function AnalysisView({
       )}
       {showAlarmSettings && (
         <AlarmSettingsDialog onClose={() => setShowAlarmSettings(false)} />
+      )}
+      {showImport && activeSheet && (
+        <ImportTagsDialog
+          sheetId={activeSheet.id}
+          sites={store.sites}
+          onImported={store.refreshTags}
+          onClose={() => setShowImport(false)}
+        />
       )}
       {exportTags && activeSheet && (
         <ExportRangeDialog

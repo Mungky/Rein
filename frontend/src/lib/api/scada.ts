@@ -230,12 +230,36 @@ export const scadaApi = {
     );
   },
 
-  /** Bucketed mini-series (default 12 jam) for EVERY visible tag in one call —
-   *  feeds the sparklines in the Analisis table. */
-  getSparklines: (rangeH = 12, points = 120) =>
-    apiClient.get<{ items: SparklineSeries[] }>(
-      `/api/scada/sparklines?range_h=${rangeH}&points=${points}`
-    ),
+  /** Bucketed mini-series (default 12 jam) for the tags ON SCREEN, in one call
+   *  — feeds the sparklines in the Analisis table.
+   *
+   *  Pass the ids of the rows actually being rendered (one page's worth, max
+   *  60). Omitting them makes the server pick, and it picks by database order:
+   *  on a 300-sensor plant that meant an arbitrary 60 rows had a sparkline and
+   *  240 had none. */
+  getSparklines: (rangeH = 12, points = 120, tagIds?: string[]) => {
+    const params = new URLSearchParams({
+      range_h: String(rangeH),
+      points: String(points),
+    });
+    for (const id of tagIds ?? []) params.append("tag_ids", id);
+    return apiClient.get<{ items: SparklineSeries[] }>(
+      `/api/scada/sparklines?${params.toString()}`
+    );
+  },
+
+  /** Buat banyak sensor sekaligus dari satu daftar (CSV yang sudah diurai).
+   *  Semua-atau-tidak sama sekali: kalau ada satu baris bermasalah, TIDAK ADA
+   *  yang dibuat dan `errors` berisi nomor barisnya. */
+  importTags: (body: {
+    sheet_id: string;
+    site_id: string;
+    rows: Record<string, unknown>[];
+  }) =>
+    apiClient.post<{
+      created: number;
+      errors: { row: number; label: string; message: string }[];
+    }>("/api/scada/tags/import", body),
 
   /* ── Historian: latest value + min/avg/max snapshot (table/gauge panels) ── */
   getSummary: (tagIds: string[], start: Date, end: Date) => {

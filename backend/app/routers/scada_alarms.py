@@ -29,14 +29,22 @@ from app.schemas.scada import (
     AlarmSettingsOut,
     AlarmSettingsUpdateRequest,
     LatestOut,
+    RollupArchiveListOut,
     TagArchiveListOut,
 )
-from app.services import archiver, email_notifier, notifier, scada_audit
+from app.services import (
+    archiver,
+    email_notifier,
+    notifier,
+    rollup_archiver,
+    scada_audit,
+)
 from db.models.profile import Profile
 from db.models.scada_audit_log import LOG_UPDATE, TARGET_ALARM_SETTINGS
 from db.models.scada import (
     ScadaAlarmEvent,
     ScadaAlarmSettings,
+    ScadaRollupArchive,
     ScadaTag,
     ScadaTagArchive,
     ScadaTagLatest,
@@ -237,6 +245,57 @@ async def run_archiver_now(
     """Run the archive+reset pass immediately (normally it runs itself). Only
     tags whose 1-month cycle has fully elapsed are archived and reset."""
     results = await archiver.archive_once(db)
+    return {"archived": results}
+
+
+@router.get("/rollup-archives", response_model=RollupArchiveListOut)
+@limiter.limit(READ_LIMIT)
+async def list_rollup_archives(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    """Completed SUMMARY-month archives on Drive (newest first).
+
+    This is the receipt for the 1-minute lane: a month only leaves the database
+    after every plant appears here for it. If this list is empty while months
+    are ageing out, retention is not running — check the archiver logs and the
+    Drive credentials rather than assuming the data was tidied away."""
+    result = await db.execute(
+        select(ScadaRollupArchive)
+        .where(ScadaRollupArchive.drive_file_id.is_not(None))
+        .order_by(ScadaRollupArchive.month.desc(), ScadaRollupArchive.plant)
+    )
+    return {
+        "items": [
+            {
+                "site_id": str(a.site_id) if a.site_id else None,
+                "plant": a.plant,
+                "month": a.month.isoformat(),
+                "file_name": a.file_name,
+                "web_link": a.web_link,
+                "row_count": a.row_count,
+                "tag_count": a.tag_count,
+                "created_at": str(a.created_at) if a.created_at else None,
+            }
+            for a in result.scalars().all()
+        ]
+    }
+
+
+@router.post("/rollup-archives/run")
+@limiter.limit(WRITE_LIMIT)
+async def run_rollup_archiver_now(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    """Archive expired summary months right now instead of waiting for the loop.
+
+    Deletes nothing: it uploads and records. The month partition is dropped
+    later by the partition manager, and only once every plant is recorded here.
+    Use this to prove the Drive path works BEFORE trusting retention with it."""
+    results = await rollup_archiver.archive_once(db)
     return {"archived": results}
 
 

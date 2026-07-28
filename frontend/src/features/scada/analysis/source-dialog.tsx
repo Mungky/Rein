@@ -32,6 +32,9 @@ export function SourceDialog({
 
   const [siteId, setSiteId] = useState(tag.site_id ?? enabledSites[0]?.id ?? "");
   const [topic, setTopic] = useState(String(cfg.mqtt_topic ?? ""));
+  // Kosong = topik ini cuma membawa satu angka (satu topik per sensor).
+  // Diisi   = topik membawa banyak angka sekaligus dan ini nama angkanya.
+  const [field, setField] = useState(String(cfg.mqtt_field ?? ""));
   const [alarmMin, setAlarmMin] = useState(
     cfg.alarm_min === undefined || cfg.alarm_min === null ? "" : String(cfg.alarm_min)
   );
@@ -81,6 +84,12 @@ export function SourceDialog({
       // sampling_level, store_cycle_start) — this dialog only owns
       // topic/alarm/scaling. Spreading ...cfg keeps them intact.
       const config: Record<string, unknown> = { ...cfg, mqtt_topic: topic.trim() };
+      // Dihapus dulu lalu diisi ulang hanya kalau ada isinya — supaya
+      // mengosongkan kotak Field benar-benar mengembalikan sensor ini ke mode
+      // "satu topik = satu nilai", bukan menyisakan field kosong yang tidak
+      // pernah cocok dengan apa pun.
+      delete config.mqtt_field;
+      if (field.trim() !== "") config.mqtt_field = field.trim();
       delete config.alarm_min;
       delete config.alarm_max;
       delete config.warn_min;
@@ -175,7 +184,7 @@ export function SourceDialog({
                 </label>
                 <input
                   className="field-input font-mono"
-                  placeholder="rnet/pabrik1/boiler1/temperature"
+                  placeholder="rnet/lombok/gw/lombok1"
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
                   maxLength={300}
@@ -183,6 +192,58 @@ export function SourceDialog({
                 <p className="mt-1.5 text-[11px] text-text-light">
                   Samakan persis dengan topik di node <span className="font-mono">mqtt out</span> Node-RED.
                 </p>
+              </div>
+              {/* Satu topik boleh membawa SATU angka (kosongkan Field) atau
+                  BANYAK angka sekaligus (isi Field dengan nama angkanya).
+                  Yang kedua itu yang bikin satu plant cukup satu topik, bukan
+                  satu topik per sensor. */}
+              <div>
+                <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
+                  Field <span className="font-normal text-text-light">(opsional)</span>
+                </label>
+                <input
+                  className="field-input font-mono"
+                  placeholder="waterlevel1"
+                  value={field}
+                  onChange={(e) => setField(e.target.value)}
+                  maxLength={200}
+                />
+                <p className="mt-1.5 text-[11px] text-text-light">
+                  {field.trim() === "" ? (
+                    <>
+                      <span className="font-semibold text-text-muted">Kosong</span> =
+                      topik di atas hanya berisi satu angka, dan angka itu milik
+                      sensor ini.
+                    </>
+                  ) : (
+                    <>
+                      Topik di atas berisi banyak angka sekaligus; sensor ini
+                      mengambil yang bernama{" "}
+                      <span className="font-mono font-semibold text-text">
+                        {field.trim()}
+                      </span>
+                      .
+                    </>
+                  )}{" "}
+                  Isi kalau satu gateway dikirim lewat satu topik gabungan.
+                  Tulis <span className="font-mono">apa adanya dari gateway</span>{" "}
+                  — tanpa awalan nama gateway, karena gateway sudah ditentukan
+                  oleh topik di atas.
+                </p>
+                {/* Jembatan (bridge) sudah bisa membaca paket gabungan, tapi
+                    versinya harus disalin dulu ke PC lapangan — di sana masih
+                    berjalan yang lama. Peringatan ini tetap tampil selama Field
+                    diisi; hapus kalau semua PC sudah diperbarui. */}
+                {field.trim() !== "" && (
+                  <p className="mt-2 rounded-[var(--r)] border border-amber/40 bg-amber/10 px-2.5 py-2 text-[11px] text-text-muted">
+                    <span className="font-semibold text-amber">Butuh jembatan
+                    versi baru.</span>{" "}
+                    Pastikan <span className="font-mono">bridge.py</span> terbaru
+                    sudah disalin ke PC lapangan. Yang lama hanya mengerti{" "}
+                    <em>satu topik = satu angka</em>: sensor ini akan kosong —
+                    bukan salah nilai, memang tidak menerima apa-apa.
+                  </p>
+                )}
               </div>
               {/* Ambang status — dipakai SEMUA panel gauge/level sensor ini
                   (satu sumber). Urut nilai: Alarm bawah < Waspada bawah <

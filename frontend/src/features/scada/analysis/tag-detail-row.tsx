@@ -108,6 +108,8 @@ export function TagDetailRow({
   const storeEnabled = Boolean(cfg.store_enabled);
   const level = (cfg.sampling_level as SamplingLevel) || "fast";
   const topic = String(cfg.mqtt_topic ?? "");
+  // Diisi hanya saat topik di atas membawa banyak nilai sekaligus.
+  const field = String(cfg.mqtt_field ?? "");
   const alarmMin = cfg.alarm_min ?? null;
   const alarmMax = cfg.alarm_max ?? null;
   const warnMin = cfg.warn_min ?? null;
@@ -364,6 +366,20 @@ export function TagDetailRow({
                   {topic || "—"}
                 </dd>
               </div>
+              {/* Hanya muncul kalau topiknya membawa banyak nilai. Kalau
+                  disembunyikan, tidak ada yang bisa membedakan dua sensor yang
+                  topiknya sama persis. */}
+              {field && (
+                <div className="flex gap-2">
+                  <dt className="w-20 shrink-0 text-text-light">Field</dt>
+                  <dd
+                    className="min-w-0 truncate font-mono text-[10.5px] text-text-muted"
+                    title={field}
+                  >
+                    {field}
+                  </dd>
+                </div>
+              )}
               <div className="flex gap-2">
                 <dt className="w-20 shrink-0 text-text-light">Batas alarm</dt>
                 <dd className="tabular-nums text-text-muted">

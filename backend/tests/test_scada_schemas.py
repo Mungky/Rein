@@ -15,7 +15,10 @@ from app.schemas.scada import (
     SheetCreateRequest,
     SiteCreateRequest,
     StreamCreateRequest,
+    IMPORT_MAX_ROWS,
     TagCreateRequest,
+    TagImportRequest,
+    TagImportRow,
     WorkbenchColumnCreateRequest,
 )
 
@@ -698,6 +701,128 @@ def test_valid_mqtt_tag_passes():
     tag = TagCreateRequest.model_validate(_mqtt_tag())
     assert tag.source == "mqtt"
     assert tag.config["mqtt_topic"].startswith("rnet/")
+
+
+# --- mqtt_field: addressing one value inside a bundled payload -------------
+#
+# A topic can carry one number (no field) or a whole plant's worth (one field
+# per sensor). The failure this validation guards against is the second shape
+# silently degrading into the first.
+
+
+def test_a_tag_without_a_field_is_the_normal_case():
+    """One topic, one number. Nothing about this may become mandatory — every
+    existing sensor in the live database is shaped this way."""
+    tag = TagCreateRequest.model_validate(_mqtt_tag())
+    assert "mqtt_field" not in tag.config
+
+
+def test_a_field_selects_one_value_out_of_a_bundle():
+    tag = TagCreateRequest.model_validate(
+        _mqtt_tag(config={
+            "mqtt_topic": "rnet/lombok/bulk",
+            "mqtt_field": "lombok1.waterlevel1",
+        })
+    )
+    assert tag.config["mqtt_field"] == "lombok1.waterlevel1"
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "\t"])
+def test_a_blank_field_is_rejected_rather_than_ignored(bad):
+    """Present-but-blank and absent behave identically at runtime but look
+    different in the UI. An operator who typed a space would get a sensor
+    reading the whole payload while the form says it reads one field."""
+    with pytest.raises(ValidationError):
+        TagCreateRequest.model_validate(
+            _mqtt_tag(config={"mqtt_topic": "rnet/lombok/bulk", "mqtt_field": bad})
+        )
+
+
+@pytest.mark.parametrize("bad", [123, 4.5, True, None, ["a"], {"a": 1}])
+def test_a_field_that_is_not_text_is_rejected(bad):
+    with pytest.raises(ValidationError):
+        TagCreateRequest.model_validate(
+            _mqtt_tag(config={"mqtt_topic": "rnet/lombok/bulk", "mqtt_field": bad})
+        )
+
+
+def test_a_field_has_an_upper_length():
+    with pytest.raises(ValidationError):
+        TagCreateRequest.model_validate(
+            _mqtt_tag(config={"mqtt_topic": "rnet/lombok/bulk", "mqtt_field": "x" * 201})
+        )
+
+
+# --- bulk import: the shape an operator pastes ----------------------------
+
+
+def _import_row(**overrides) -> dict:
+    body = {"label": "Level Tangki 1", "mqtt_topic": "rnet/lombok/gw/lombok1"}
+    body.update(overrides)
+    return body
+
+
+def test_an_import_row_needs_only_a_name_and_a_topic():
+    """Everything else is optional so a two-column paste works — an operator
+    with just names and topics must not be blocked on filling in units."""
+    row = TagImportRow.model_validate(_import_row())
+    assert row.unit == "" and row.mqtt_field == "" and row.store_enabled is False
+
+
+def test_an_import_row_carries_the_optional_settings():
+    row = TagImportRow.model_validate(
+        _import_row(
+            mqtt_field="waterlevel1", unit="cm", sampling_level="slow",
+            store_enabled=True, alarm_min=0, alarm_max=200, scale=6.25, offset=-25,
+        )
+    )
+    assert row.mqtt_field == "waterlevel1"
+    assert row.sampling_level == "slow"
+    assert (row.scale, row.offset) == (6.25, -25.0)
+
+
+@pytest.mark.parametrize("bad", [{"label": ""}, {"mqtt_topic": ""}])
+def test_an_import_row_rejects_a_blank_required_field(bad):
+    with pytest.raises(ValidationError):
+        TagImportRow.model_validate(_import_row(**bad))
+
+
+def test_an_import_row_rejects_an_unknown_sampling_level():
+    with pytest.raises(ValidationError):
+        TagImportRow.model_validate(_import_row(sampling_level="turbo"))
+
+
+def test_an_import_needs_at_least_one_row():
+    """An empty paste is a mistake, not a no-op — silently succeeding would
+    look like the import worked."""
+    with pytest.raises(ValidationError):
+        TagImportRequest.model_validate(
+            {"sheet_id": str(uuid.uuid4()), "site_id": str(uuid.uuid4()), "rows": []}
+        )
+
+
+def test_an_import_is_capped_well_above_one_plant():
+    """A plant is ~300 sensors, so the cap must not get in the way of a normal
+    paste — but it must exist, because the whole thing is one transaction."""
+    assert IMPORT_MAX_ROWS >= 300
+    body = {
+        "sheet_id": str(uuid.uuid4()),
+        "site_id": str(uuid.uuid4()),
+        "rows": [_import_row(label=f"S{i}") for i in range(IMPORT_MAX_ROWS + 1)],
+    }
+    with pytest.raises(ValidationError):
+        TagImportRequest.model_validate(body)
+
+
+def test_three_hundred_rows_validate():
+    body = {
+        "sheet_id": str(uuid.uuid4()),
+        "site_id": str(uuid.uuid4()),
+        "rows": [
+            _import_row(label=f"Sensor {i}", mqtt_field=f"tag{i}") for i in range(300)
+        ],
+    }
+    assert len(TagImportRequest.model_validate(body).rows) == 300
 
 
 def test_simulator_tag_needs_no_site_or_topic():

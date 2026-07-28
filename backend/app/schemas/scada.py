@@ -714,7 +714,20 @@ class TagCreateRequest(BaseModel):
     unit: str = Field(default="", max_length=30)
     enabled: bool = True
     # Simulator: {preset, base, amplitude, period_s, noise, decimals, min?, max?}
-    # MQTT: {mqtt_topic, alarm_min?, alarm_max?} — mqtt_topic is required.
+    # MQTT: {mqtt_topic, mqtt_field?, alarm_min?, alarm_max?} — mqtt_topic is
+    # required.
+    #
+    # `mqtt_field` is what makes one topic able to carry a whole plant. Without
+    # it a topic delivers exactly one number and the tag takes it. With it, the
+    # topic delivers a bundle and this tag takes ONE named value out of it:
+    #
+    #     topic  rnet/lombok/bulk
+    #     field  lombok1.waterlevel1
+    #
+    # That is the difference between one MQTT topic per sensor (300 topics and
+    # 300 messages a second at 300 sensors) and one per plant. Which shape a
+    # topic uses is decided by whoever publishes it; the field is simply how
+    # R-Net addresses a value inside a bundle.
     config: dict = Field(default_factory=dict)
     # Manual metadata cell values, keyed by workbench column id
     meta: dict = Field(default_factory=dict)
@@ -727,6 +740,7 @@ class TagCreateRequest(BaseModel):
             if not str(self.config.get("mqtt_topic", "")).strip():
                 raise ValueError("Tag MQTT harus punya topic")
         validate_sampling_level(self.config)
+        validate_mqtt_field(self.config)
         return self
 
 
@@ -1065,6 +1079,27 @@ class TagArchiveListOut(BaseModel):
     items: list[TagArchiveOut]
 
 
+class RollupArchiveOut(BaseModel):
+    """One archived SUMMARY month for one plant.
+
+    Distinct from TagArchiveOut because the units differ: this covers a whole
+    plant for a whole calendar month (every sensor, one CSV each inside the
+    zip), where the other covers one sensor for one cycle."""
+
+    site_id: str | None
+    plant: str
+    month: str
+    file_name: str
+    web_link: str | None
+    row_count: int
+    tag_count: int
+    created_at: str | None
+
+
+class RollupArchiveListOut(BaseModel):
+    items: list[RollupArchiveOut]
+
+
 class LatestItemOut(BaseModel):
     tag_id: str
     ts: str
@@ -1099,6 +1134,86 @@ def validate_sampling_level(config: dict | None) -> None:
         raise ValueError(
             "Saat simpan data aktif, level hanya boleh Slow atau Slowest"
         )
+
+
+# Longest accepted config["mqtt_field"]. A field name is "<gateway>.<sensor>"
+# from the gateway's own payload, so this is generous by design — the limit is
+# there to stop a paste accident, not to constrain naming.
+MQTT_FIELD_MAX = 200
+
+
+def validate_mqtt_field(config: dict | None) -> None:
+    """Optional bulk-payload selector — see TagCreateRequest for what it means.
+
+    Absent is the normal case and always valid: one topic carrying one value.
+    Present-but-blank is NOT the same thing and is rejected, because the two
+    would behave identically at runtime while looking different in the UI, and
+    an operator who typed a space would be left staring at a sensor that reads
+    the whole payload instead of one field out of it."""
+    cfg = config or {}
+    if "mqtt_field" not in cfg:
+        return
+    raw = cfg["mqtt_field"]
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(
+            "Field tidak boleh kosong — hapus isinya kalau topik ini hanya "
+            "membawa satu nilai"
+        )
+    if len(raw) > MQTT_FIELD_MAX:
+        raise ValueError(f"Field maksimal {MQTT_FIELD_MAX} karakter")
+
+
+# One import call caps here. A plant is ~300 sensors, so this covers a whole
+# plant in one paste with room to spare; past it the request body and the
+# all-or-nothing transaction both stop being reasonable.
+IMPORT_MAX_ROWS = 500
+
+
+class TagImportRow(BaseModel):
+    """One line of a sensor list, as typed/pasted by an operator.
+
+    Deliberately FLAT, not a nested `config`: the person filling this in is
+    reading a PLC tag list, not writing JSON. The router folds these into the
+    same config shape create_tag produces, so an imported tag is
+    indistinguishable from a hand-made one."""
+
+    label: str = Field(min_length=1, max_length=120)
+    unit: str = Field(default="", max_length=30)
+    mqtt_topic: str = Field(min_length=1, max_length=300)
+    # Empty = this topic carries one bare number (see TagCreateRequest.config).
+    mqtt_field: str = Field(default="", max_length=MQTT_FIELD_MAX)
+    # Free-form grouping key; the router defaults it to the gateway part of the
+    # topic when left out, which is what an operator would have typed anyway.
+    device_key: str = Field(default="", max_length=120)
+    sampling_level: SamplingLevel | None = None
+    store_enabled: bool = False
+    alarm_min: float | None = None
+    alarm_max: float | None = None
+    warn_min: float | None = None
+    warn_max: float | None = None
+    scale: float | None = None
+    offset: float | None = None
+    decimals: int | None = Field(default=None, ge=0, le=6)
+
+
+class TagImportRequest(BaseModel):
+    sheet_id: uuid.UUID
+    site_id: uuid.UUID
+    rows: list[TagImportRow] = Field(min_length=1, max_length=IMPORT_MAX_ROWS)
+
+
+class TagImportErrorOut(BaseModel):
+    """`row` is 1-based and counts the rows the user sees, so it lines up with
+    the line number in their spreadsheet."""
+
+    row: int
+    label: str
+    message: str
+
+
+class TagImportResultOut(BaseModel):
+    created: int
+    errors: list[TagImportErrorOut]
 
 
 class RnetSettingsOut(BaseModel):

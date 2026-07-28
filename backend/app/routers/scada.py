@@ -63,6 +63,9 @@ from app.schemas.scada import (
     TagListOut,
     TagOut,
     TagUpdateRequest,
+    TagImportRequest,
+    TagImportResultOut,
+    validate_mqtt_field,
     validate_sampling_level,
     WorkbenchColumnCreateRequest,
     WorkbenchColumnListOut,
@@ -1049,6 +1052,142 @@ async def create_tag(
     return _tag_dict(tag)
 
 
+@router.post("/tags/import", response_model=TagImportResultOut)
+@limiter.limit(WRITE_LIMIT)
+async def import_tags(
+    request: Request,
+    body: TagImportRequest,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
+):
+    """Create many MQTT sensors from one pasted list.
+
+    WHY THIS EXISTS
+        Sensors were creatable one at a time only. That is fine for the 14-tag
+        pilot and absurd for the 300-tag plant this design was built for: the
+        PLC tag list already exists as a spreadsheet, and retyping it into 300
+        forms is the single biggest cost of onboarding a client — bigger than
+        anything about MQTT or storage.
+
+    ALL-OR-NOTHING, ON PURPOSE
+        Every row is validated first and NOTHING is created unless all of them
+        pass. A half-imported list is worse than a rejected one: the operator
+        cannot tell which of 300 sensors landed, and re-pasting the file would
+        duplicate the ones that did. Errors come back per row with the row
+        number the operator sees in their spreadsheet.
+
+    THE CHECK THAT MATTERS IS THE DUPLICATE ONE
+        Two sensors sharing a (topic, field) is silently broken: the bridge maps
+        one route to one tag, so the loser simply never receives a value —
+        forever, with no error anywhere. It is caught here against both the
+        pasted rows and the sensors already on that site, because a typo
+        repeated down a spreadsheet column is exactly how it happens.
+    """
+    await _get_sheet_or_404(db, body.sheet_id)
+    await _get_site_or_404(db, body.site_id)
+
+    # (topic, field) already in use on THIS site. Other sites may reuse a topic
+    # freely — they are different brokers.
+    existing = (
+        await db.execute(
+            select(ScadaTag.config).where(
+                ScadaTag.site_id == body.site_id, ScadaTag.source == "mqtt"
+            )
+        )
+    ).all()
+    taken: set[tuple[str, str]] = set()
+    for (cfg,) in existing:
+        cfg = cfg or {}
+        topic = str(cfg.get("mqtt_topic") or "").strip()
+        if topic:
+            taken.add((topic, str(cfg.get("mqtt_field") or "").strip()))
+
+    errors: list[dict] = []
+    prepared: list[tuple[dict, object]] = []
+    seen: dict[tuple[str, str], int] = {}
+
+    for i, row in enumerate(body.rows, start=1):
+        topic = row.mqtt_topic.strip()
+        fld = row.mqtt_field.strip()
+        key = (topic, fld)
+        where = f"topik {topic}" + (f" field '{fld}'" if fld else "")
+
+        if key in seen:
+            errors.append({
+                "row": i, "label": row.label,
+                "message": f"{where} sudah dipakai baris {seen[key]} di daftar ini",
+            })
+            continue
+        if key in taken:
+            errors.append({
+                "row": i, "label": row.label,
+                "message": f"{where} sudah dipakai sensor lain di site ini",
+            })
+            continue
+        seen[key] = i
+
+        config: dict = {"mqtt_topic": topic}
+        if fld:
+            config["mqtt_field"] = fld
+        if row.sampling_level:
+            config["sampling_level"] = row.sampling_level
+        if row.store_enabled:
+            config["store_enabled"] = True
+            config["store_cycle_start"] = rnet_settings.now_iso()
+        for name in ("alarm_min", "alarm_max", "warn_min", "warn_max", "decimals"):
+            value = getattr(row, name)
+            if value is not None:
+                config[name] = value
+        # Omit no-op scaling so an imported config reads like a hand-made one.
+        if row.scale is not None and row.scale != 1:
+            config["scale"] = row.scale
+        if row.offset is not None and row.offset != 0:
+            config["offset"] = row.offset
+
+        try:
+            validate_sampling_level(config)
+            validate_mqtt_field(config)
+        except ValueError as e:
+            errors.append({"row": i, "label": row.label, "message": str(e)})
+            continue
+
+        prepared.append((config, row))
+
+    if errors:
+        # Nothing created. `created: 0` alongside the list says so plainly.
+        return {"created": 0, "errors": errors}
+
+    created = []
+    for config, row in prepared:
+        tag = ScadaTag(
+            sheet_id=body.sheet_id,
+            source="mqtt",
+            site_id=body.site_id,
+            # Sensible default: the gateway part of the topic is what an
+            # operator would have typed into "perangkat" anyway.
+            device_key=row.device_key.strip() or config["mqtt_topic"].split("/")[-1],
+            label=row.label.strip(),
+            unit=row.unit.strip(),
+            enabled=True,
+            config=config,
+            meta={},
+        )
+        db.add(tag)
+        created.append(tag)
+    await db.flush()
+
+    # No historian.backfill(): that seeds demo history for SIMULATOR tags and is
+    # a no-op for mqtt ones. Import only ever creates mqtt tags, so calling it
+    # 300 times would buy nothing.
+    for tag in created:
+        scada_audit.log_scada_change(
+            db, profile, LOG_CREATE, TARGET_TAG,
+            target_id=tag.id, target_label=tag.label,
+            changes=scada_audit.diff_fields({}, scada_audit.tag_snapshot(tag)),
+        )
+    return {"created": len(created), "errors": []}
+
+
 @router.patch("/tags/{tag_id}", response_model=TagOut)
 @limiter.limit(WRITE_LIMIT)
 async def update_tag(
@@ -1096,6 +1235,7 @@ async def update_tag(
     # changed) — schema-level validation can't see the other half.
     try:
         validate_sampling_level(tag.config)
+        validate_mqtt_field(tag.config)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -1903,21 +2043,36 @@ async def get_sparklines(
     request: Request,
     range_h: Annotated[int, Query(ge=1, le=744)] = 12,
     points: Annotated[int, Query(ge=10, le=SPARK_MAX_POINTS)] = 120,
+    tag_ids: Annotated[
+        list[uuid.UUID] | None, Query(max_length=SPARK_MAX_TAGS)
+    ] = None,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
-    """One bucketed series (avg per bucket) per visible tag over the last
-    `range_h` hours — feeds the mini-charts in the Analisis table in a single
-    query instead of N per-tag requests. Same visibility rule as the tag list:
+    """One bucketed series (avg per bucket) per tag over the last `range_h`
+    hours — feeds the mini-charts in the Analisis table in a single query
+    instead of N per-tag requests. Same visibility rule as the tag list:
     no scada:manage → enabled tags only.
 
+    `tag_ids` = the rows the caller is actually rendering. WITHOUT it the
+    endpoint falls back to "some tags, capped at SPARK_MAX_TAGS", which on a
+    300-sensor plant meant an ARBITRARY 60 got a sparkline and 240 silently got
+    none — the data was there, the picture was not. The cap itself is right and
+    stays (audit D-6: uncapped, one click on Analisis aggregated tens of
+    millions of rows); what was wrong was choosing the 60 by database order
+    instead of by what is on screen. The caller paginates, so a page always
+    fits.
+
     Reads the per-minute summary whenever the bucket is a minute or wider
-    (ARSITEKTUR-DATA §2.7), capped at SPARK_MAX_TAGS tags and cached for the
-    summary TTL (audit D-6)."""
+    (ARSITEKTUR-DATA §2.7) and is cached for the summary TTL."""
     granted = await _load_permissions(db, profile.role)
     tag_query = select(ScadaTag.id)
     if "scada:manage" not in granted:
         tag_query = tag_query.where(ScadaTag.enabled.is_(True))
+    if tag_ids:
+        # Filtered in SQL, not after: asking for a tag you may not see must
+        # return nothing rather than being trimmed out of a bigger answer.
+        tag_query = tag_query.where(ScadaTag.id.in_(tag_ids))
     tag_ids = [r[0] for r in (await db.execute(tag_query)).all()][:SPARK_MAX_TAGS]
     if not tag_ids:
         return {"items": []}

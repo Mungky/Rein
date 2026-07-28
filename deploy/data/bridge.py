@@ -58,11 +58,34 @@ RESILIENCE (never crash the box)
     - Malformed payload       → logged and skipped.
     - Any unexpected error    → logged; the loop keeps running.
 
-PAYLOAD FORMAT (from the device)
-    Topic:   whatever you set in the tag's "topic" field, e.g.
-             rnet/tanobel/boiler1/temperature
-    Payload: {"value": 72.5, "ts": "2026-07-07T10:00:00Z"}   (ts optional)
-             A bare number ("72.5") is also accepted.
+PAYLOAD FORMAT — TWO SHAPES, AND WHY BOTH EXIST
+
+    SINGLE (one topic carries one number). The original shape; every sensor in
+    the live database still uses it and nothing here deprecates it.
+
+        Topic:   rnet/tanobel/boiler1/temperature
+        Payload: {"value": 72.5, "ts": "..."}    (ts optional)
+                 A bare number ("72.5") is also accepted.
+
+    BUNDLED (one topic carries a whole gateway). Chosen per tag by filling in
+    "Field" in R-Net → Analisis → Sumber:
+
+        Topic:   rnet/lombok/gw/lombok1        (tag's mqtt_topic)
+        Field:   waterlevel1                   (tag's mqtt_field)
+        Payload: {"site":"lombok","gateway":"lombok1","ts":"...",
+                  "values":{"waterlevel1":12.5,"temperature1":90.8, ...}}
+
+    The second shape is not a convenience. One topic per tag means one MQTT
+    message per reading: at 300 sensors that is ~100 messages a second on a
+    self-hosted broker, and each one drags ~29 bytes of TLS record plus a TCP
+    segment behind it. Bundling per gateway measured 6.6x fewer messages on the
+    live plant for the same readings. The bytes barely move — the packets do,
+    and packets are what a small broker runs out of first.
+
+    A field name that never appears in the payload is logged ONCE per
+    (topic, field) with the names that WERE present. That log line is the whole
+    difference between "this sensor is empty and nobody knows why" and a typo
+    you can see.
 
 RUN
     Local test (Windows):  start-bridge.bat
@@ -205,8 +228,14 @@ class SiteCfg:
     port: int
     username: str | None
     password: str | None
-    # topic -> tag_id for every enabled MQTT tag on this site
-    topics: dict[str, str] = field(default_factory=dict)
+    # topic -> {field or None -> tag_id} for every enabled MQTT tag on this site.
+    #
+    # The inner key is the tag's mqtt_field: None means "this topic carries one
+    # bare number and this tag takes it", a string means "this topic carries a
+    # bundle and this tag takes that one name out of it". Nesting rather than a
+    # flat topic->tag_id map is the entire structural change needed for bundled
+    # payloads — one topic can now feed 300 tags instead of exactly one.
+    routes: dict[str, dict[str | None, str]] = field(default_factory=dict)
 
 
 def _parse_interval(config: dict | None, levels: dict[str, int]) -> tuple[int, bool]:
@@ -241,6 +270,66 @@ def _coerce_value(payload: bytes) -> float | None:
         return float(data)
     except (TypeError, ValueError):
         return None
+
+
+def _num(v) -> float | None:
+    """One payload entry → a usable number, or None.
+
+    float(), never a prefix-parser. The gateways stamp their serial number into
+    the payload alongside the sensors, and Line 2's happens to start with
+    digits: a parser that reads a number off the FRONT of "31c73eb96aaf..."
+    returns 31 and it lands in the database looking like a plausible reading.
+    float() rejects the whole string. This was found in live capture, not in
+    review, which is why it is spelled out here.
+
+    bool is checked first because in Python True is an int, and a flag arriving
+    as a sensor value would silently become 1.0."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        num = float(v)
+    elif isinstance(v, str) and v.strip():
+        try:
+            num = float(v)
+        except ValueError:
+            return None
+    else:
+        return None
+    # NaN and ±inf are storable floats but meaningless readings.
+    if num != num or num in (float("inf"), float("-inf")):
+        return None
+    return num
+
+
+def _coerce_bulk(payload: bytes) -> dict[str, float] | None:
+    """Parse a BUNDLED payload into {field name: number}.
+
+    Accepts {"values": {...}} (what the R-Net Node-RED flow publishes) and, as a
+    fallback, a flat object of numbers — so a gateway that bundles without the
+    envelope still works. Returns None only when the payload is not an object at
+    all; an object whose entries are all unusable yields {}, which the caller
+    reports per field rather than as one blanket "bad payload".
+
+    Non-numeric entries are dropped silently on purpose: site/gateway/ts sit in
+    the same object as the readings and are not errors."""
+    text = payload.decode("utf-8", errors="replace").strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    values = data.get("values")
+    if not isinstance(values, dict):
+        values = data
+    out: dict[str, float] = {}
+    for key, raw in values.items():
+        num = _num(raw)
+        if num is not None:
+            out[str(key)] = num
+    return out
 
 
 # tag_id -> (scale, offset, decimals|None). Applied to the RAW sensor value
@@ -308,8 +397,11 @@ class Bridge:
         self._bucket: dict[str, int] = {}
         # site_id -> live paho client
         self._clients: dict[str, mqtt.Client] = {}
-        # site_id -> topic -> tag_id (the desired subscription set)
-        self._routes: dict[str, dict[str, str]] = {}
+        # site_id -> topic -> {field or None -> tag_id} (the desired
+        # subscription set). See SiteCfg.routes for why it is nested.
+        self._routes: dict[str, dict[str, dict[str | None, str]]] = {}
+        # (topic, field) pairs already complained about — see _warn_missing_field
+        self._missing_warned: set[tuple[str, str]] = set()
         # tag_id -> (scale, offset, decimals) applied to the raw value on ingest
         self._xform: dict[str, Transform] = {}
         self._conn: psycopg.Connection | None = None
@@ -388,31 +480,49 @@ class Bridge:
         return self._buf
 
     def _buffer_put(self, tag_id: str, ts: datetime, value: float) -> None:
-        """Persist a tag's newest history value to disk BEFORE it lands in
+        """One value — the single-tag shape of _buffer_put_many, kept because
+        most callers and tests deal in one reading at a time."""
+        self._buffer_put_many([(tag_id, value)], ts)
+
+    def _buffer_put_many(self, rows: list[tuple[str, float]], ts: datetime) -> None:
+        """Persist ONE MQTT PACKET's worth of values to disk before they land in
         memory. Never raises — a buffer hiccup must not stop ingest.
 
-        Only the IN-FLIGHT value is replaced: the previous row for this tag is
+        Batched, not one call per value. A bundled packet carries every sensor
+        on a gateway at once: the per-value version did a DELETE, an INSERT, a
+        COMMIT and a count(*) each time, so a 300-sensor packet meant 300 fsyncs
+        on a field PC's disk arriving several times a second. One transaction
+        per packet does the same work with the same guarantee.
+
+        Only the IN-FLIGHT value is replaced: the previous row for a tag is
         dropped first, but only while it is still in flight. Once a bucket has
         been stamped and failed to store, flush() 'seals' it (clears _buf_ts) so
         this method leaves it alone and it stays queued. That is the difference
         between remembering one value per tag and remembering an outage."""
-        if not BUFFER_ENABLED:
+        if not BUFFER_ENABLED or not rows:
             return
         try:
             with self._buf_lock:
                 db = self._buffer_db()
-                prev = self._buf_ts.get(tag_id)
-                if prev is not None:
-                    db.execute(
+                stamp = ts.isoformat()
+                stale = [
+                    (tag_id, prev.isoformat())
+                    for tag_id, _v in rows
+                    if (prev := self._buf_ts.get(tag_id)) is not None
+                ]
+                if stale:
+                    db.executemany(
                         "DELETE FROM pending_samples WHERE tag_id = ? AND ts = ?",
-                        (tag_id, prev.isoformat()),
+                        stale,
                     )
-                db.execute(
+                db.executemany(
                     "INSERT OR REPLACE INTO pending_samples (tag_id, ts, value) "
                     "VALUES (?, ?, ?)",
-                    (tag_id, ts.isoformat(), value),
+                    [(tag_id, stamp, value) for tag_id, value in rows],
                 )
                 db.commit()
+                # Once per packet, not once per value — the count(*) inside is
+                # the expensive part.
                 self._buffer_trim(db)
         except Exception:
             log.exception("Gagal menulis buffer disk (lanjut dari memori)")
@@ -578,9 +688,30 @@ class Bridge:
                 site = sites.get(str(site_id))
                 if site is None:
                     continue  # tag points at a disabled/removed site
-                topic = (config or {}).get("mqtt_topic")
+                cfg = config or {}
+                topic = cfg.get("mqtt_topic")
                 if isinstance(topic, str) and topic.strip():
-                    site.topics[topic.strip()] = str(tag_id)
+                    topic = topic.strip()
+                    # None = this tag takes the topic's bare value; a string =
+                    # it takes that one name out of a bundled payload.
+                    raw_field = cfg.get("mqtt_field")
+                    key = (
+                        raw_field.strip()
+                        if isinstance(raw_field, str) and raw_field.strip()
+                        else None
+                    )
+                    slot = site.routes.setdefault(topic, {})
+                    if key in slot and slot[key] != str(tag_id):
+                        # Two tags claiming the same (topic, field) is a config
+                        # mistake that is otherwise invisible: one of them just
+                        # never receives anything, forever.
+                        log.warning(
+                            "Site %s topik %s%s: dipakai lebih dari satu sensor "
+                            "— hanya satu yang akan menerima nilai. Perbaiki di "
+                            "R-Net > Analisis > Sumber.",
+                            site_id, topic, f" field '{key}'" if key else "",
+                        )
+                    slot[key] = str(tag_id)
                     site_of[str(tag_id)] = str(site_id)
                     xform[str(tag_id)] = _parse_transform(config)
                     interval[str(tag_id)], is_ring = _parse_interval(config, self._levels)
@@ -590,15 +721,30 @@ class Bridge:
 
     # -- mqtt callbacks (paho v2 signatures) ------------------------------- #
 
+    @staticmethod
+    def _qos_for(slot: dict) -> int:
+        """QoS 1 for bundled topics, QoS 0 for plain ones.
+
+        Bundling changed the cost of a dropped packet: one lost message used to
+        cost one reading, now it costs every sensor on that gateway. QoS 1 makes
+        the broker retry instead of shrugging, which is exactly the trade a
+        7-in-1 packet is worth — and only there, so single-value topics keep the
+        behaviour they have had all along.
+
+        The delivered QoS is min(published, subscribed), so this only takes
+        effect for publishers that already send at 1 (the R-Net Node-RED flow
+        does). Asking for 1 against a QoS 0 publisher is harmless."""
+        return 1 if any(f is not None for f in slot) else 0
+
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         site_id = userdata
         if reason_code != 0:
             log.warning("Site %s: gagal konek ke broker (rc=%s)", site_id, reason_code)
             return
-        topics = list(self._routes.get(site_id, {}).keys())
-        for topic in topics:
-            client.subscribe(topic, qos=0)
-        log.info("Site %s: terhubung, subscribe %d topik", site_id, len(topics))
+        routes = self._routes.get(site_id, {})
+        for topic, slot in routes.items():
+            client.subscribe(topic, qos=self._qos_for(slot))
+        log.info("Site %s: terhubung, subscribe %d topik", site_id, len(routes))
 
     def _on_disconnect(self, client, userdata, *args):
         # paho reconnects automatically (loop + reconnect_delay_set); just note it
@@ -606,23 +752,81 @@ class Bridge:
 
     def _on_message(self, client, userdata, msg):
         site_id = userdata
-        tag_id = self._routes.get(site_id, {}).get(msg.topic)
-        if tag_id is None:
+        slot = self._routes.get(site_id, {}).get(msg.topic)
+        if not slot:
             return  # not a topic we care about
-        raw = _coerce_value(msg.payload)
-        if raw is None:
-            log.debug("Site %s topik %s: payload tidak valid, dilewati", site_id, msg.topic)
-            return
-        # Scale/tune the raw sensor value before storing (config set in R-Net).
-        value = _apply_transform(raw, self._xform.get(tag_id, (1.0, 0.0, None)))
+
+        # Which shape? Decided by the CONFIG, not by sniffing the payload: a
+        # topic whose tags declare no field is a plain one, anything else is a
+        # bundle. Guessing from the bytes would make a plain reading of `{}`
+        # behave differently from a plain reading of `5`.
+        if set(slot) == {None}:
+            raw = _coerce_value(msg.payload)
+            if raw is None:
+                log.debug(
+                    "Site %s topik %s: payload tidak valid, dilewati",
+                    site_id, msg.topic,
+                )
+                return
+            pairs = [(slot[None], raw)]
+        else:
+            values = _coerce_bulk(msg.payload)
+            if values is None:
+                log.debug(
+                    "Site %s topik %s: paket gabungan tidak terbaca, dilewati",
+                    site_id, msg.topic,
+                )
+                return
+            pairs = []
+            for fld, tag_id in slot.items():
+                if fld is None:
+                    continue  # plain tag sharing a bundled topic — nothing to take
+                raw = values.get(fld)
+                if raw is None:
+                    self._warn_missing_field(site_id, msg.topic, fld, values)
+                    continue
+                pairs.append((tag_id, raw))
+            if not pairs:
+                return
+
+        # Scale/tune each raw sensor value before storing (config set in R-Net).
+        rows = [
+            (tag_id, _apply_transform(raw, self._xform.get(tag_id, (1.0, 0.0, None))))
+            for tag_id, raw in pairs
+        ]
         now = datetime.now(timezone.utc)
         # Persist to disk FIRST: if the box dies before flush() reaches the next
-        # bucket boundary, this value survives and is replayed on restart.
-        self._buffer_put(tag_id, now, value)
+        # bucket boundary, these values survive and are replayed on restart.
+        # One transaction for the whole packet — see _buffer_put_many.
+        self._buffer_put_many(rows, now)
         with self._lock:
-            self._pending[tag_id] = value
-            self._latest_pending[tag_id] = (now, value)
-            self._buf_ts[tag_id] = now
+            for tag_id, value in rows:
+                self._pending[tag_id] = value
+                self._latest_pending[tag_id] = (now, value)
+                self._buf_ts[tag_id] = now
+
+    def _warn_missing_field(
+        self, site_id: str, topic: str, fld: str, values: dict[str, float]
+    ) -> None:
+        """A configured field that the gateway never sends. Logged ONCE per
+        (topic, field), with the names that WERE present.
+
+        Once, because this fires on every packet — several times a second,
+        forever — and a warning that repeats that fast is a warning nobody
+        reads. The present-names list is the useful half: a field named
+        `waterlevel1` against a payload offering `WaterLevel1` is a typo you can
+        see, where an empty sensor is a mystery. Reset on reconcile() so a
+        corrected config that breaks again warns again."""
+        key = (topic, fld)
+        if key in self._missing_warned:
+            return
+        self._missing_warned.add(key)
+        present = ", ".join(sorted(values)[:12]) or "(tidak ada angka sama sekali)"
+        log.warning(
+            "Site %s topik %s: field '%s' tidak ada di paket — sensor ini tidak "
+            "akan menerima nilai. Yang dikirim gateway: %s",
+            site_id, topic, fld, present,
+        )
 
     # -- client lifecycle -------------------------------------------------- #
 
@@ -665,8 +869,12 @@ class Bridge:
                 log.info("Site %s: dinonaktifkan, memutus koneksi", site_id)
                 self._teardown_client(site_id)
 
+        # A changed config deserves a fresh chance to complain: a field name
+        # that was wrong, got fixed, and is wrong again must warn again.
+        self._missing_warned.clear()
+
         for site_id, site in sites.items():
-            new_routes = site.topics
+            new_routes = site.routes
             old_routes = self._routes.get(site_id, {})
             self._routes[site_id] = new_routes
 
@@ -687,7 +895,7 @@ class Bridge:
             # full (re)subscribe after any reconnect)
             if client.is_connected():
                 for topic in new_routes.keys() - old_routes.keys():
-                    client.subscribe(topic, qos=0)
+                    client.subscribe(topic, qos=self._qos_for(new_routes[topic]))
                 for topic in old_routes.keys() - new_routes.keys():
                     client.unsubscribe(topic)
 

@@ -1,0 +1,693 @@
+[
+    {
+        "id": "pabrik1",
+        "type": "tab",
+        "label": "GBS",
+        "disabled": false,
+        "info": "Simulasi alat pabrik untuk menguji R-Net TANPA alat asli.\n\n3 sensor palsu terus mengirim angka ke broker MQTT:\n- rnet/demo/boiler1/temperature (tiap 2 detik)\n- rnet/demo/boiler1/pressure    (tiap 5 detik)\n- rnet/demo/tangki1/level       (tiap 5 detik)\n\nTombol di sisi kiri:\n- NILAI GILA  : suhu boiler melonjak melewati batas -> alarm R-Net menyala\n- NORMAL LAGI : suhu kembali aman -> alarm otomatis selesai\n- SENSOR BISU ON/OFF : semua sensor berhenti/lanjut mengirim -> menguji alarm 'sensor bisu'\n\nSebelum dipakai: klik dua kali salah satu kotak ungu (mqtt), lalu edit broker —\nisi alamat & password broker Mosquitto Anda, klik Update, lalu Deploy."
+    },
+    {
+        "id": "com_judul",
+        "type": "comment",
+        "z": "pabrik1",
+        "name": "Line 1 Lombok",
+        "info": "",
+        "x": 100,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "out_level",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/level1",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 650,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "61e3075a1d6818b6",
+        "type": "mqtt in",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "fikri/vnet/lombok1",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "ccd1eda9cd1b1f5b",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 100,
+        "y": 100,
+        "wires": [
+            [
+                "91f5e3eb0c3a3c57",
+                "f6ab5be44c5d1173",
+                "aef9bfc63ac752bd",
+                "d07c2f9b72d7c64c",
+                "f0aa99e6ede6daa6",
+                "a4b11e8836c733ea",
+                "04e2e9139b54e69d",
+                "d312afee1c74e413"
+            ]
+        ]
+    },
+    {
+        "id": "91f5e3eb0c3a3c57",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 1",
+        "func": "msg.payload = msg.payload.data.waterlevel1;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 340,
+        "y": 100,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "out_level"
+            ]
+        ]
+    },
+    {
+        "id": "f6ab5be44c5d1173",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 2",
+        "func": "msg.payload = msg.payload.data.waterlevel2;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 340,
+        "y": 140,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "58e99a980365d94f"
+            ]
+        ]
+    },
+    {
+        "id": "aef9bfc63ac752bd",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 3",
+        "func": "msg.payload = msg.payload.data.waterlevel3;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 340,
+        "y": 180,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "8b755b202465371d"
+            ]
+        ]
+    },
+    {
+        "id": "d07c2f9b72d7c64c",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "heating",
+        "func": "msg.payload = msg.payload.data.temperature1;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 320,
+        "y": 280,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "47bb94c10a616063"
+            ]
+        ]
+    },
+    {
+        "id": "f0aa99e6ede6daa6",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "holding",
+        "func": "msg.payload = msg.payload.data.temperature2;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 320,
+        "y": 320,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "d8a6875a09ccb4e4"
+            ]
+        ]
+    },
+    {
+        "id": "a4b11e8836c733ea",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "cooling",
+        "func": "msg.payload = msg.payload.data.temperature3;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 320,
+        "y": 360,
+        "wires": [
+            [
+                "04e2e9139b54e69d",
+                "ab9b2533e3b2d75b"
+            ]
+        ]
+    },
+    {
+        "id": "04e2e9139b54e69d",
+        "type": "debug",
+        "z": "pabrik1",
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 300,
+        "y": 560,
+        "wires": []
+    },
+    {
+        "id": "58e99a980365d94f",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/level2",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 650,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "8b755b202465371d",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/level3",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 650,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "47bb94c10a616063",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/heating",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 650,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "d8a6875a09ccb4e4",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/holding",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 650,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "ab9b2533e3b2d75b",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/cooling",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 650,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "d312afee1c74e413",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 4",
+        "func": "msg.payload = msg.payload.data.waterlevel4;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 340,
+        "y": 220,
+        "wires": [
+            [
+                "ded995fc28a68635"
+            ]
+        ]
+    },
+    {
+        "id": "ded995fc28a68635",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line1/level4",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 650,
+        "y": 280,
+        "wires": []
+    },
+    {
+        "id": "ca8ee3d29d6d700b",
+        "type": "comment",
+        "z": "pabrik1",
+        "name": "Line 2 Lombok",
+        "info": "",
+        "x": 900,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "b1620d2a856d9fa6",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line2/level1",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1450,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "ee855dba0a0e3fa2",
+        "type": "mqtt in",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "fikri/vnet/lombok2",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "ccd1eda9cd1b1f5b",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 900,
+        "y": 100,
+        "wires": [
+            [
+                "4db885af81bc37e2",
+                "98d3c5edb6f3731b",
+                "66804c47166b089e",
+                "1924e5c1ab47f559",
+                "fcf6367acbd91b07",
+                "f4418a52f955457b",
+                "c77b63208703bd91",
+                "038175a033de6b8c"
+            ]
+        ]
+    },
+    {
+        "id": "4db885af81bc37e2",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 1",
+        "func": "msg.payload = msg.payload.data.waterlevel1;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1140,
+        "y": 100,
+        "wires": [
+            [
+                "c77b63208703bd91",
+                "b1620d2a856d9fa6"
+            ]
+        ]
+    },
+    {
+        "id": "98d3c5edb6f3731b",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 2",
+        "func": "msg.payload = msg.payload.data.waterlevel2;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1140,
+        "y": 140,
+        "wires": [
+            [
+                "c77b63208703bd91",
+                "1427ef66aa3047c9"
+            ]
+        ]
+    },
+    {
+        "id": "66804c47166b089e",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 3",
+        "func": "msg.payload = msg.payload.data.waterlevel3;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1140,
+        "y": 180,
+        "wires": [
+            [
+                "c77b63208703bd91",
+                "168ea4d039f9e15f"
+            ]
+        ]
+    },
+    {
+        "id": "1924e5c1ab47f559",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "heating",
+        "func": "msg.payload = msg.payload.data.temperature1;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1120,
+        "y": 280,
+        "wires": [
+            [
+                "c77b63208703bd91",
+                "4ab9c3e9682d49f6"
+            ]
+        ]
+    },
+    {
+        "id": "fcf6367acbd91b07",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "holding",
+        "func": "msg.payload = msg.payload.data.temperature2;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1120,
+        "y": 320,
+        "wires": [
+            [
+                "c77b63208703bd91",
+                "9db10fb4ff33cd31"
+            ]
+        ]
+    },
+    {
+        "id": "f4418a52f955457b",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "cooling",
+        "func": "msg.payload = msg.payload.data.temperature3;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1120,
+        "y": 360,
+        "wires": [
+            [
+                "c77b63208703bd91",
+                "e2b27f3ba4b5c03c"
+            ]
+        ]
+    },
+    {
+        "id": "c77b63208703bd91",
+        "type": "debug",
+        "z": "pabrik1",
+        "name": "debug 2",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1200,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "1427ef66aa3047c9",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line2/level2",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1450,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "168ea4d039f9e15f",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line2/level3",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1450,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "4ab9c3e9682d49f6",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line2/tt01",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1440,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "9db10fb4ff33cd31",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line2/tt02",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1440,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "e2b27f3ba4b5c03c",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line2/tt03",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1440,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "038175a033de6b8c",
+        "type": "function",
+        "z": "pabrik1",
+        "name": "Water Level 4",
+        "func": "msg.payload = msg.payload.data.waterlevel4;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1140,
+        "y": 220,
+        "wires": [
+            [
+                "f93a40c24c83d7c1"
+            ]
+        ]
+    },
+    {
+        "id": "f93a40c24c83d7c1",
+        "type": "mqtt out",
+        "z": "pabrik1",
+        "name": "",
+        "topic": "rnet/lombok/line2/level4",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ccd1eda9cd1b1f5b",
+        "x": 1450,
+        "y": 280,
+        "wires": []
+    },
+    {
+        "id": "ccd1eda9cd1b1f5b",
+        "type": "mqtt-broker",
+        "name": "Mosquitto R-Net",
+        "broker": "mqtt.remula-inti.com",
+        "port": "8883",
+        "tls": "",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": true,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    }
+]

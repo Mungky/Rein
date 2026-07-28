@@ -1,0 +1,159 @@
+[
+  {
+    "id": "rnet_generik",
+    "type": "tab",
+    "label": "R-Net — Kirim Generik (BARU)",
+    "disabled": false,
+    "info": "FLOW GENERIK — satu topik per GATEWAY, bukan satu topik per sensor.\n\nGateway V-Box sudah mengirim SATU pesan berisi semua nilai sekaligus.\nFlow ini tidak membongkarnya. Ia hanya menempeli label lalu meneruskannya\nke satu topik menuju jembatan (bridge) R-Net.\n\n  fikri/vnet/lombok1  ->\n                        [Tempel Label]  ->  rnet/lombok/gw/<gateway>\n  fikri/vnet/lombok2  ->\n\nTopik masuk ditulis LENGKAP, satu kotak per gateway — bukan '+'. Yang\nmasuk hanya yang Anda daftarkan sendiri. Menambah gateway = menyalin\nsatu kotak mqtt in; kotak Tempel Label tidak disentuh.\n\nCara lama: 14 sensor = 14 topik = 14 pesan MQTT tiap kali gateway lapor.\nCara ini : 2 gateway  =  2 topik =  2 pesan. Terukur di plant ini: 4,6\npesan/detik jadi 0,7 pesan/detik untuk pembacaan yang sama persis. Yang\ndihemat bukan byte-nya (hampir sama) — tapi JUMLAH PAKET, dan itu yang\nlebih dulu habis di broker yang di-hosting sendiri.\n\nNama sensor di dalam paket ditulis apa adanya ('waterlevel1'), tanpa\nawalan nama gateway. Nama itulah yang diketik di kolom Field di\nR-Net > Analisis > Sumber.\n\nSatu pesan gateway masuk = satu paket keluar, SEKETIKA. Tidak ada\npenampung berbasis waktu. Versi sebelumnya menahan nilai selama 1 detik\nagar semua gateway tergabung, dan pengukuran 17 jam membuktikan itu\nmembuang 2,0% pembacaan (pesan kedua menimpa yang pertama).\n\nTIDAK ADA nama sensor yang tertulis di flow ini. Pemetaan 'field mana\nmilik sensor mana' diatur di R-Net > Kelola Sumber, bukan di sini.\n\nAKIBATNYA:\n- Gateway menambah sensor  -> otomatis ikut terkirim, flow tidak disentuh.\n- Line 3 online nanti      -> salin satu kotak mqtt in, ganti topiknya,\n                              tarik garis ke Tempel Label. Selesai.\n- Plant lain               -> salin flow ini, ganti satu baris SITE.\n\nSEBELUM DEPLOY: dobel-klik kotak mqtt ungu > ikon pensil di sebelah nama\nbroker > tab Security > isi username & password broker. Node-RED tidak\npernah ikut mengekspor password, jadi harus diisi sekali di sini.\n\nTIDAK ADA kunci database di flow ini. Kalau PC ini bermasalah, tidak ada\nrahasia besar yang bocor."
+  },
+  {
+    "id": "gen_com1",
+    "type": "comment",
+    "z": "rnet_generik",
+    "name": "BACA DULU: klik kanan tab ini > Show tab info",
+    "info": "",
+    "x": 260,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "gen_com2",
+    "type": "comment",
+    "z": "rnet_generik",
+    "name": "SATU KOTAK PER GATEWAY — tambah gateway = tambah kotak",
+    "info": "Topiknya sengaja ditulis LENGKAP, bukan pakai '+'.\n\n'+' berarti 'gateway apa pun': gateway baru langsung ikut\nterkirim tanpa siapa pun menyetujuinya, dan kalau ada alat\nlain menerbitkan di bawah fikri/vnet/ ia ikut tersedot juga.\nEnak sampai suatu hari tidak.\n\nDengan topik lengkap, yang masuk hanya yang Anda daftarkan.\n\nMENAMBAH GATEWAY (mis. Line 3):\n  1. Salin salah satu kotak mqtt in di bawah (Ctrl+C, Ctrl+V)\n  2. Dobel-klik, ganti Topic jadi fikri/vnet/lombok3\n  3. Tarik garis dari kotak itu ke kotak 'Tempel Label'\n  4. Deploy\n\nKotak Tempel Label TIDAK perlu disentuh — berapa pun kotak\nmqtt in yang masuk ke sana, isinya sama.",
+    "x": 300,
+    "y": 120,
+    "wires": []
+  },
+  {
+    "id": "gen_in1",
+    "type": "mqtt in",
+    "z": "rnet_generik",
+    "name": "Line 1",
+    "topic": "fikri/vnet/lombok1",
+    "qos": "0",
+    "datatype": "auto-detect",
+    "broker": "gen_broker",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 150,
+    "y": 200,
+    "wires": [
+      [
+        "gen_fn"
+      ]
+    ]
+  },
+  {
+    "id": "gen_in2",
+    "type": "mqtt in",
+    "z": "rnet_generik",
+    "name": "Line 2",
+    "topic": "fikri/vnet/lombok2",
+    "qos": "0",
+    "datatype": "auto-detect",
+    "broker": "gen_broker",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 150,
+    "y": 280,
+    "wires": [
+      [
+        "gen_fn"
+      ]
+    ]
+  },
+  {
+    "id": "gen_fn",
+    "type": "function",
+    "z": "rnet_generik",
+    "name": "Tempel Label",
+    "func": "// ---------------------------------------------------------------------------\n// TEMPEL LABEL — kotak ini TIDAK menyebut satu pun nama sensor.\n// Tugasnya: ambil semua angka dari pesan gateway, beri label, teruskan.\n// Menambah sensor / menambah line TIDAK perlu menyunting kotak ini.\n//\n// SATU PESAN GATEWAY MASUK = SATU PAKET KELUAR, seketika.\n//\n// Versi pertama menahan nilai sampai denyut 1 detik berikutnya supaya semua\n// gateway tergabung jadi satu paket. Pengukuran 17 jam di lapangan menunjukkan\n// itu MEMBUANG 2,0% pembacaan: kalau dua pesan gateway jatuh di detik yang\n// sama, yang kedua menimpa yang pertama sebelum sempat terkirim. Terukur 845\n// pasang pesan berjarak <1 detik, dan defisitnya tersebar merata 1-2 per menit\n// di 210 menit yang berbeda — bukan menggerombol seperti gangguan jaringan.\n// Penggabungan antar-gateway itu juga semu: gateway tidak pernah serempak.\n//\n// SATU TOPIK PER GATEWAY: rnet/<site>/gw/<gateway>\n// Bukan satu topik untuk seluruh plant. Alasannya bukan hemat byte — topiknya\n// cuma dikirim sekali per paket — tapi supaya langganan bisa sebagian: R-Net\n// (atau alat lain) boleh mendengarkan satu gateway saja tanpa ikut menerima\n// semua yang lain, dan gateway yang bermasalah bisa diisolasi tanpa menyentuh\n// yang sehat.\n//\n// NAMA KUNCI TANPA AWALAN GATEWAY\n// Kunci ditulis 'waterlevel1', bukan 'lombok1.waterlevel1'. Nama gateway sudah\n// ada DUA KALI di paket ini (di topik dan di kolom \"gateway\"), jadi mengulangnya\n// di setiap kunci hanya menambah teks. Terukur di plant: awalan itu memakan ~8\n// byte per nilai — 45,5 B jadi ~37,5 B per pembacaan, sekitar 18% isi paket.\n// ---------------------------------------------------------------------------\n\n// vvv SATU-SATUNYA baris yang diganti kalau flow ini dipakai di plant lain vvv\nconst SITE = 'lombok';\n// ^^^--------------------------------------------------------------------^^^\n\n// Nama gateway diambil dari POTONGAN TERAKHIR topik masuk:\n//   fikri/vnet/lombok3  ->  \"lombok3\"  ->  terbit ke rnet/<site>/gw/lombok3\n// Itu satu-satunya hubungan antara kotak mqtt in dan kotak ini, dan itulah\n// sebabnya menambah gateway cukup menambah kotak mqtt in — tidak ada daftar\n// gateway di dalam sini yang perlu ikut diperbarui.\nconst gw = String(msg.topic || '').split('/').pop();\nif (!gw) { return null; }\n\n// Payload biasanya sudah objek (mqtt in datatype auto-detect). Kalau brokernya\n// mengirim teks mentah, coba urai sendiri sekali.\nlet p = msg.payload;\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) { p = null; }\n}\nif (!p || typeof p !== 'object') {\n    node.warn('Gateway ' + gw + ': isi pesan tidak dikenali, dilewati.');\n    return null;\n}\n\n// Angka-angkanya ada di dalam .data. Kalau suatu saat gateway mengirim rata\n// tanpa .data, pakai payload-nya langsung — jangan sampai diam-diam kosong.\nconst data = (p.data && typeof p.data === 'object') ? p.data : p;\n\n// Field bawaan V-Box yang BUKAN sensor. 'id' adalah nomor seri gateway.\nconst BUKAN_SENSOR = ['id'];\n\nconst values = {};\nlet n = 0;\nfor (const k of Object.keys(data)) {\n    if (BUKAN_SENSOR.indexOf(k) !== -1) { continue; }\n    const v = data[k];\n\n    // Number(), BUKAN parseFloat(). parseFloat membaca angka dari DEPAN teks\n    // lalu berhenti: parseFloat('31c73eb96aaf...') = 31. Nomor seri gateway\n    // Line 2 kebetulan diawali angka, jadi ia akan terkirim sebagai nilai\n    // sensor palsu 31. Number() menolak seluruh teks itu (NaN). Ini ketahuan\n    // dari data lapangan asli, bukan dari tebakan.\n    const num = (typeof v === 'number')\n        ? v\n        : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);\n\n    // Number.isFinite menolak NaN dan Infinity — nilai rusak tidak ikut\n    // terkirim, tapi sensor lain di pesan yang sama tetap jalan.\n    if (Number.isFinite(num)) {\n        // Apa adanya dari gateway. Nama inilah yang diketik di R-Net >\n        // Analisis > Sumber > Field, jadi mengubahnya di sini akan memutus\n        // sensor yang sudah terdaftar.\n        values[k] = num;\n        n++;\n    }\n}\n\nif (n === 0) {\n    node.warn('Gateway ' + gw + ': tidak ada angka yang bisa dibaca dari pesan ini.');\n    return null;\n}\n\n// Catat gateway yang pernah terlihat, supaya status kotak menunjukkan\n// Line 3 langsung muncul sendiri begitu PC-nya online.\nconst gws = context.get('gws') || [];\nif (gws.indexOf(gw) === -1) {\n    gws.push(gw);\n    gws.sort();\n    context.set('gws', gws);\n    node.warn('Gateway baru terdeteksi: ' + gw + ' (' + n + ' nilai). ' +\n              'Daftarkan sensornya di R-Net > Kelola Sumber.');\n}\n\n// Hitung paket terkirim, sekadar supaya status kotak informatif.\nconst tot = (context.get('tot') || 0) + 1;\ncontext.set('tot', tot);\nnode.status({\n    fill: 'green', shape: 'dot',\n    text: gw + ': ' + n + ' nilai | ' + gws.length + ' gateway (' +\n          gws.join(', ') + ') | ' + tot + ' paket'\n});\n\nreturn {\n    topic: 'rnet/' + SITE + '/gw/' + gw,\n    payload: { site: SITE, gateway: gw, ts: new Date().toISOString(), values: values }\n};\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 450,
+    "y": 240,
+    "wires": [
+      [
+        "gen_out",
+        "gen_debug"
+      ]
+    ]
+  },
+  {
+    "id": "gen_out",
+    "type": "mqtt out",
+    "z": "rnet_generik",
+    "name": "rnet/lombok/gw/<gateway>",
+    "topic": "",
+    "qos": "1",
+    "retain": "false",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "gen_broker",
+    "x": 720,
+    "y": 200,
+    "wires": []
+  },
+  {
+    "id": "gen_debug",
+    "type": "debug",
+    "z": "rnet_generik",
+    "name": "intip paket (NORMALNYA MATI)",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 760,
+    "y": 300,
+    "wires": []
+  },
+  {
+    "id": "gen_broker",
+    "type": "mqtt-broker",
+    "name": "Broker R-Net (TLS terverifikasi)",
+    "broker": "mqtt.remula.online",
+    "port": "8883",
+    "clientid": "nodered-lombok-generik",
+    "autoConnect": true,
+    "usetls": true,
+    "verifyservercert": true,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "birthQos": "0",
+    "birthRetain": "false",
+    "birthPayload": "",
+    "birthMsg": {},
+    "closeTopic": "",
+    "closeQos": "0",
+    "closeRetain": "false",
+    "closePayload": "",
+    "closeMsg": {},
+    "willTopic": "",
+    "willQos": "0",
+    "willRetain": "false",
+    "willPayload": "",
+    "willMsg": {},
+    "userProps": "",
+    "sessionExpiry": ""
+  }
+]

@@ -26,6 +26,33 @@ interface LatestRow {
 
 const LATEST_CAP = 100; // GET /latest caps at 100 tags per request
 
+/** Seed/refresh last-known values for ANY number of tags.
+ *
+ *  /latest caps at 100 ids per request, and this used to be handled by
+ *  `.slice(0, LATEST_CAP)` — which is not a cap, it is silently dropping
+ *  sensors 101 and up. On a 300-sensor plant two thirds of the table showed
+ *  "—" until a Realtime event happened to arrive, and the watchdog that exists
+ *  precisely for when Realtime is NOT arriving never covered them at all.
+ *  Chunking asks the same question in several breaths instead of forgetting
+ *  most of it. */
+async function seedLatest(
+  ids: string[],
+  apply: (tagId: string, v: { value: number; ts: string }) => void
+): Promise<void> {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += LATEST_CAP) {
+    chunks.push(ids.slice(i, i + LATEST_CAP));
+  }
+  const results = await Promise.all(
+    chunks.map((c) => scadaApi.getLatest(c).catch(() => null))
+  );
+  for (const res of results) {
+    for (const item of res?.items ?? []) {
+      apply(item.tag_id, { value: item.value, ts: item.ts });
+    }
+  }
+}
+
 export function useLiveSamples(enabled: boolean) {
   const setLiveValue = useScadaStore((s) => s.setLiveValue);
   const tags = useScadaStore((s) => s.tags);
@@ -61,10 +88,11 @@ export function useLiveSamples(enabled: boolean) {
     shownRef.current = shownIds;
   }, [shownIds]);
 
-  const tagIdsKey = useMemo(
-    () => tags.map((t) => t.id).slice(0, LATEST_CAP).join(","),
-    [tags]
-  );
+  // Yang di-seed/di-poll = tag yang SEDANG DITAMPILKAN (baris tabel aktif +
+  // tag yang dirujuk panel), bukan seluruh isi store. Diurutkan supaya kunci
+  // ini stabil dan efek di bawah tidak terpicu ulang hanya karena urutan
+  // berubah.
+  const tagIdsKey = useMemo(() => [...shownIds].sort().join(","), [shownIds]);
 
   // Watchdog: when Realtime is quiet (blocked websocket, RLS hiccup, broken
   // subscription — we've been burned before), fall back to polling /latest
@@ -75,14 +103,7 @@ export function useLiveSamples(enabled: boolean) {
     if (!enabled || tagIdsKey === "") return;
     const t = setInterval(() => {
       if (Date.now() - lastEventAt.current < 10_000) return; // realtime sehat
-      scadaApi
-        .getLatest(tagIdsKey.split(","))
-        .then((res) => {
-          for (const item of res.items) {
-            setLiveValue(item.tag_id, { value: item.value, ts: item.ts });
-          }
-        })
-        .catch(() => undefined);
+      void seedLatest(tagIdsKey.split(","), setLiveValue);
     }, 5_000);
     return () => clearInterval(t);
   }, [enabled, tagIdsKey, setLiveValue]);
@@ -94,15 +115,10 @@ export function useLiveSamples(enabled: boolean) {
   useEffect(() => {
     if (!enabled || tagIdsKey === "") return;
     let cancelled = false;
-    scadaApi
-      .getLatest(tagIdsKey.split(","))
-      .then((res) => {
-        if (cancelled) return;
-        for (const item of res.items) {
-          setLiveValue(item.tag_id, { value: item.value, ts: item.ts });
-        }
-      })
-      .catch(() => undefined); // best-effort — Realtime/polling still run
+    // best-effort — Realtime/polling still run kalau ini gagal
+    void seedLatest(tagIdsKey.split(","), (id, v) => {
+      if (!cancelled) setLiveValue(id, v);
+    });
     return () => {
       cancelled = true;
     };

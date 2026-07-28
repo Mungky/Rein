@@ -594,14 +594,19 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     await Promise.all([refreshTags(), refreshActiveAlarms()]);
     // Re-seed latest values so quiet sensors update their "last known" too
     try {
-      const ids = get()
-        .tags.map((t) => t.id)
-        .slice(0, 100);
-      if (ids.length > 0) {
-        const res = await scadaApi.getLatest(ids);
+      // Dipotong 100 per permintaan (batas endpoint), BUKAN dibuang di atas
+      // 100: `.slice(0, 100)` dulu membuat tombol refresh manual diam-diam
+      // melewatkan sensor ke-101 dan seterusnya.
+      const ids = get().tags.map((t) => t.id);
+      const chunks: string[][] = [];
+      for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100));
+      const pages = await Promise.all(
+        chunks.map((c) => scadaApi.getLatest(c).catch(() => null))
+      );
+      for (const res of pages) {
         // Lewat setLiveValue agar gerbang interval-sinkron ikut berlaku di
         // refresh manual — nilai tag tersimpan tetap berganti per interval.
-        for (const item of res.items) {
+        for (const item of res?.items ?? []) {
           get().setLiveValue(item.tag_id, { value: item.value, ts: item.ts });
         }
       }
