@@ -225,11 +225,36 @@ export function SourceDialog({
                       .
                     </>
                   )}{" "}
-                  Isi kalau satu gateway dikirim lewat satu topik gabungan.
-                  Tulis <span className="font-mono">apa adanya dari gateway</span>{" "}
-                  — tanpa awalan nama gateway, karena gateway sudah ditentukan
-                  oleh topik di atas.
+                  Isi kalau topik di atas membawa banyak nilai sekaligus.
                 </p>
+                {/* Aturan yang menentukan benar-salahnya, dan satu-satunya yang
+                    pernah menggigit: nama field harus unik DI DALAM satu topik.
+                    Kalau satu topik memuat beberapa gateway, nama polos tidak
+                    unik — tiap line punya waterlevel1. */}
+                <div className="mt-2 rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-2.5 py-2 text-[11px] text-text-muted">
+                  <div className="mb-1 font-semibold text-text">
+                    Pakai awalan gateway atau tidak?
+                  </div>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
+                    <span className="font-mono text-text-muted">…/gw/lombok1</span>
+                    <span>
+                      topik sudah menyebut gateway →{" "}
+                      <span className="font-mono text-text">waterlevel1</span>
+                    </span>
+                    <span className="font-mono text-text-muted">…/lombok/all</span>
+                    <span>
+                      satu topik banyak gateway →{" "}
+                      <span className="font-mono text-text">lombok1.waterlevel1</span>
+                    </span>
+                  </div>
+                  <p className="mt-1.5">
+                    Setiap line punya <span className="font-mono">waterlevel1</span>.
+                    Kalau satu topik memuat beberapa gateway dan Field ditulis
+                    polos, sensor ini akan <span className="font-semibold">bergantian
+                    membaca dua tangki berbeda</span> — tanpa error, tanpa data
+                    hilang, jumlah barisnya justru bertambah.
+                  </p>
+                </div>
                 {/* Jembatan (bridge) sudah bisa membaca paket gabungan, tapi
                     versinya harus disalin dulu ke PC lapangan — di sana masih
                     berjalan yang lama. Peringatan ini tetap tampil selama Field

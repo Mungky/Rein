@@ -97,7 +97,8 @@ def test_numbers_as_text_are_still_numbers():
 
 
 def test_bulk_parsing_ignores_the_envelope_fields():
-    out = bridge_mod._coerce_bulk(REAL_PACKET)
+    gw, out = bridge_mod._coerce_bulk(REAL_PACKET)
+    assert gw == "lombok1"
     assert set(out) == {
         "waterlevel1", "waterlevel2", "waterlevel3", "waterlevel4",
         "temperature1", "temperature2", "temperature3",
@@ -107,7 +108,8 @@ def test_bulk_parsing_ignores_the_envelope_fields():
 
 def test_a_payload_without_the_values_envelope_still_works():
     """A gateway that bundles without wrapping must not be silently empty."""
-    out = bridge_mod._coerce_bulk(b'{"suhu": 30, "level": 4.5}')
+    gw, out = bridge_mod._coerce_bulk(b'{"suhu": 30, "level": 4.5}')
+    assert gw is None
     assert out == {"suhu": 30.0, "level": 4.5}
 
 
@@ -245,6 +247,111 @@ def test_a_bundle_arriving_on_a_plain_topic_is_rejected_not_guessed(tmp_path):
     br._on_message(None, SITE, FakeMsg(TOPIC, REAL_PACKET))
 
     assert br._pending == {}
+
+
+# --- one topic for a whole plant: the field name stops being unique -------
+#
+# Regresi dari kejadian nyata 28 Juli 2026. Node-RED diarahkan menerbitkan
+# SATU topik untuk seluruh plant (fikri/rnet/lombok/all), dan sebuah tag
+# membaca field polos `waterlevel1`. Setiap line punya waterlevel1, jadi tag itu
+# mengambil milik gateway yang kebetulan menerbitkan paling akhir. Terekspor
+# 43,9% nilai 0 — bukan sensor rusak, melainkan tangki Line 2 (0) berselang-
+# seling dengan tangki Line 1 (12-13) dalam satu kolom. Tidak ada error, tidak
+# ada nilai hilang, jumlah baris justru NAIK.
+
+L1 = (b'{"site":"lombok","gateway":"lombok1","values":{"waterlevel1":12}}')
+L2 = (b'{"site":"lombok","gateway":"lombok2","values":{"waterlevel1":0}}')
+ALL = "fikri/rnet/lombok/all"
+
+
+def test_a_qualified_field_takes_only_its_own_gateway(tmp_path):
+    """`lombok1.waterlevel1` di topik bersama harus mengabaikan paket lombok2."""
+    tag = str(uuid.uuid4())
+    br = _bridge(tmp_path, {"lombok1.waterlevel1": tag}, topic=ALL)
+
+    br._on_message(None, SITE, FakeMsg(ALL, L1))
+    assert br._pending[tag] == 12.0
+
+    br._on_message(None, SITE, FakeMsg(ALL, L2))
+    assert br._pending[tag] == 12.0        # nilai lombok2 TIDAK menimpa
+
+
+def test_two_gateways_on_one_topic_feed_two_separate_tags(tmp_path):
+    """Bentuk yang benar untuk satu topik per plant: satu tag per gateway,
+    dibedakan oleh awalan di kolom Field."""
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    br = _bridge(
+        tmp_path, {"lombok1.waterlevel1": a, "lombok2.waterlevel1": b}, topic=ALL
+    )
+
+    br._on_message(None, SITE, FakeMsg(ALL, L1))
+    br._on_message(None, SITE, FakeMsg(ALL, L2))
+
+    assert br._pending[a] == 12.0
+    assert br._pending[b] == 0.0           # dua tangki, dua kolom
+
+
+def test_a_field_addressed_to_another_gateway_is_not_reported_missing(tmp_path, caplog):
+    """`lombok2.x` saat paket datang dari lombok1 bukan salah ketik — kalau
+    diperingatkan, log akan banjir peringatan palsu tiap paket."""
+    br = _bridge(tmp_path, {"lombok2.waterlevel1": str(uuid.uuid4())}, topic=ALL)
+
+    with caplog.at_level(logging.WARNING):
+        br._on_message(None, SITE, FakeMsg(ALL, L1))
+
+    assert caplog.records == []
+
+
+def test_a_bare_field_fed_by_two_gateways_is_reported(tmp_path, caplog):
+    """Cacat yang tidak punya gejala apa pun. Hanya jembatan yang bisa
+    melihatnya, karena hanya dia yang menerima kedua paket."""
+    br = _bridge(tmp_path, {"waterlevel1": str(uuid.uuid4())}, topic=ALL)
+
+    with caplog.at_level(logging.WARNING):
+        br._on_message(None, SITE, FakeMsg(ALL, L1))
+        assert caplog.records == []        # satu gateway saja: belum ada masalah
+        br._on_message(None, SITE, FakeMsg(ALL, L2))
+
+    pesan = "\n".join(r.getMessage() for r in caplog.records)
+    assert "waterlevel1" in pesan
+    assert "lombok1" in pesan and "lombok2" in pesan
+
+
+def test_the_collision_warning_is_logged_once(tmp_path, caplog):
+    br = _bridge(tmp_path, {"waterlevel1": str(uuid.uuid4())}, topic=ALL)
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(20):
+            br._on_message(None, SITE, FakeMsg(ALL, L1))
+            br._on_message(None, SITE, FakeMsg(ALL, L2))
+
+    assert len(caplog.records) == 1
+
+
+def test_a_bare_field_on_a_per_gateway_topic_never_warns(tmp_path, caplog):
+    """Topik per gateway sudah membedakannya, jadi field polos memang benar —
+    peringatan di sini akan jadi gangguan untuk pemakaian yang normal."""
+    br = _bridge(tmp_path, {"waterlevel1": str(uuid.uuid4())})
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(20):
+            br._on_message(None, SITE, FakeMsg(TOPIC, REAL_PACKET))
+
+    assert caplog.records == []
+
+
+def test_a_dotted_field_name_from_the_gateway_still_works(tmp_path):
+    """Titik di nama field belum tentu awalan gateway. Pencocokan harfiah
+    didahulukan supaya gateway seperti ini tidak ikut rusak."""
+    tag = str(uuid.uuid4())
+    br = _bridge(tmp_path, {"tank.level": tag}, topic=ALL)
+
+    br._on_message(
+        None, SITE,
+        FakeMsg(ALL, b'{"gateway":"lombok1","values":{"tank.level":7.5}}'),
+    )
+
+    assert br._pending[tag] == 7.5
 
 
 # --- delivery guarantee scales with what a lost packet costs --------------

@@ -301,14 +301,19 @@ def _num(v) -> float | None:
     return num
 
 
-def _coerce_bulk(payload: bytes) -> dict[str, float] | None:
-    """Parse a BUNDLED payload into {field name: number}.
+def _coerce_bulk(payload: bytes) -> tuple[str | None, dict[str, float]] | None:
+    """Parse a BUNDLED payload into (gateway name, {field name: number}).
 
     Accepts {"values": {...}} (what the R-Net Node-RED flow publishes) and, as a
     fallback, a flat object of numbers — so a gateway that bundles without the
     envelope still works. Returns None only when the payload is not an object at
     all; an object whose entries are all unusable yields {}, which the caller
     reports per field rather than as one blanket "bad payload".
+
+    The gateway name is carried out separately because it is what disambiguates
+    a field: `waterlevel1` means a different physical sensor on every line, and
+    when one topic carries a whole plant the field name alone cannot say which.
+    See _resolve_field.
 
     Non-numeric entries are dropped silently on purpose: site/gateway/ts sit in
     the same object as the readings and are not errors."""
@@ -321,6 +326,8 @@ def _coerce_bulk(payload: bytes) -> dict[str, float] | None:
         return None
     if not isinstance(data, dict):
         return None
+    gw = data.get("gateway")
+    gw = gw.strip() if isinstance(gw, str) and gw.strip() else None
     values = data.get("values")
     if not isinstance(values, dict):
         values = data
@@ -329,7 +336,40 @@ def _coerce_bulk(payload: bytes) -> dict[str, float] | None:
         num = _num(raw)
         if num is not None:
             out[str(key)] = num
-    return out
+    return gw, out
+
+
+# Sentinel: this tag's field is addressed to a DIFFERENT gateway, so this packet
+# simply is not for it. Distinct from "missing", which deserves a warning.
+_NOT_MINE = object()
+
+
+def _resolve_field(fld: str, gw: str | None, values: dict[str, float]):
+    """Pick this tag's value out of a bundled packet.
+
+    TWO WAYS TO NAME A FIELD, and the difference is what keeps two lines apart:
+
+        waterlevel1            bare — "whatever gateway sent this packet"
+        lombok1.waterlevel1    qualified — that gateway only
+
+    Bare is correct when the TOPIC already names the gateway
+    (rnet/lombok/gw/lombok1). It is WRONG when one topic carries a whole plant,
+    because every line has a `waterlevel1` and the tag then takes whichever
+    gateway published last. That is not theoretical: on 2026-07-28 a tag reading
+    bare `waterlevel1` off a plant-wide topic recorded 43.9% zeros, alternating
+    between Line 1 (12-13) and Line 2 (0) — two different tanks in one column.
+
+    Literal lookup comes first so a gateway that genuinely puts a dot in a key
+    keeps working."""
+    raw = values.get(fld)
+    if raw is not None:
+        return raw
+    prefix, _, rest = fld.partition(".")
+    if rest and gw is not None:
+        if prefix != gw:
+            return _NOT_MINE
+        return values.get(rest)
+    return None
 
 
 # tag_id -> (scale, offset, decimals|None). Applied to the RAW sensor value
@@ -402,6 +442,10 @@ class Bridge:
         self._routes: dict[str, dict[str, dict[str | None, str]]] = {}
         # (topic, field) pairs already complained about — see _warn_missing_field
         self._missing_warned: set[tuple[str, str]] = set()
+        # (topic, bare field) -> gateways seen sending it. More than one means
+        # the tag reading it is mixing two physical sensors — see
+        # _check_field_collision.
+        self._field_gws: dict[tuple[str, str], set[str]] = {}
         # tag_id -> (scale, offset, decimals) applied to the raw value on ingest
         self._xform: dict[str, Transform] = {}
         self._conn: psycopg.Connection | None = None
@@ -770,21 +814,26 @@ class Bridge:
                 return
             pairs = [(slot[None], raw)]
         else:
-            values = _coerce_bulk(msg.payload)
-            if values is None:
+            parsed = _coerce_bulk(msg.payload)
+            if parsed is None:
                 log.debug(
                     "Site %s topik %s: paket gabungan tidak terbaca, dilewati",
                     site_id, msg.topic,
                 )
                 return
+            gw, values = parsed
             pairs = []
             for fld, tag_id in slot.items():
                 if fld is None:
                     continue  # plain tag sharing a bundled topic — nothing to take
-                raw = values.get(fld)
+                raw = _resolve_field(fld, gw, values)
+                if raw is _NOT_MINE:
+                    continue  # addressed to another gateway — not missing
                 if raw is None:
                     self._warn_missing_field(site_id, msg.topic, fld, values)
                     continue
+                if gw is not None and "." not in fld:
+                    self._check_field_collision(site_id, msg.topic, fld, gw)
                 pairs.append((tag_id, raw))
             if not pairs:
                 return
@@ -804,6 +853,35 @@ class Bridge:
                 self._pending[tag_id] = value
                 self._latest_pending[tag_id] = (now, value)
                 self._buf_ts[tag_id] = now
+
+    def _check_field_collision(
+        self, site_id: str, topic: str, fld: str, gw: str
+    ) -> None:
+        """Two gateways feeding ONE bare field name on ONE topic.
+
+        This is the failure that has no symptom. Nothing errors, no value is
+        dropped, the row count even goes UP — the tag just silently alternates
+        between two different physical sensors. It cost a real 23-minute capture
+        on 2026-07-28: a tag on `waterlevel1` over a plant-wide topic logged
+        43.9% zeros, which were Line 2's tank (0) interleaved with Line 1's
+        (12-13). Neither number was wrong; the column was two sensors.
+
+        Detectable only here, because only the bridge sees both packets. Warned
+        once per (topic, field) — it recurs every packet forever otherwise."""
+        seen = self._field_gws.setdefault((topic, fld), set())
+        if gw in seen:
+            return
+        seen.add(gw)
+        if len(seen) < 2:
+            return
+        log.warning(
+            "Site %s topik %s: field '%s' dikirim oleh %d gateway sekaligus "
+            "(%s) — nilai sensor ini BERCAMPUR dari beberapa alat. Perbaiki "
+            "salah satu: pakai topik per gateway (rnet/<site>/gw/<gateway>), "
+            "atau tulis Field lengkap '<gateway>.%s' di R-Net > Analisis > "
+            "Sumber.",
+            site_id, topic, fld, len(seen), ", ".join(sorted(seen)), fld,
+        )
 
     def _warn_missing_field(
         self, site_id: str, topic: str, fld: str, values: dict[str, float]
@@ -872,6 +950,7 @@ class Bridge:
         # A changed config deserves a fresh chance to complain: a field name
         # that was wrong, got fixed, and is wrong again must warn again.
         self._missing_warned.clear()
+        self._field_gws.clear()
 
         for site_id, site in sites.items():
             new_routes = site.routes

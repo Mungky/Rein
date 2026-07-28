@@ -80,7 +80,23 @@ Yang tersisa: daftarkan sensornya di **R-Net → Analisis → Sumber**, isi:
 | Kolom | Isi |
 |---|---|
 | **Topik** | `rnet/lombok/gw/lombok1` — satu topik per gateway |
-| **Field** | `waterlevel1` — nama sensor **apa adanya dari gateway**, tanpa awalan |
+| **Field** | `waterlevel1` — nama sensor apa adanya dari gateway |
+
+> ### ⚠️ Aturan yang menentukan: nama Field harus unik DI DALAM satu topik
+>
+> Setiap line punya `waterlevel1`. Yang membedakannya adalah **topik**.
+>
+> | Bentuk topik terbit | Field ditulis |
+> |---|---|
+> | `rnet/lombok/gw/lombok1` (satu topik per gateway) | `waterlevel1` |
+> | `rnet/lombok/all` (satu topik seluruh plant) | `lombok1.waterlevel1` |
+>
+> Kalau satu topik memuat beberapa gateway dan Field ditulis polos, sensor itu
+> **bergantian membaca dua alat berbeda**. Tidak ada error, tidak ada data
+> hilang, jumlah barisnya justru bertambah — terjadi 28 Juli 2026: satu tag
+> tercatat 43,9% bernilai 0, ternyata tangki Line 2 (0) berselang-seling dengan
+> tangki Line 1 (12–13). Jembatan sekarang menulis peringatan sekali di log
+> begitu mendeteksinya.
 
 Nama di kolom Field harus sama persis dengan yang dikirim gateway. Kalau
 meleset, jembatan menulis satu baris peringatan di log yang menyebutkan nama
