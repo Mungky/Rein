@@ -135,6 +135,10 @@ MQTT_KEEPALIVE_S = int(os.getenv("MQTT_KEEPALIVE_S", "60"))
 LATEST_FLUSH_S = float(os.getenv("LATEST_FLUSH_S", "1.0"))
 LATEST_ENABLED = os.getenv("LATEST_ENABLED", "1") not in ("0", "false", "False")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+# Topic monitor: at most one row-update per (topic, gateway) per this many
+# seconds. The UI reads "what is this topic sending", which does not get more
+# useful by being written 50x a second. 0 disables the feature entirely.
+PROBE_EVERY_S = float(os.getenv("PROBE_EVERY_S", "5"))
 
 # Fastest storage interval a tag may configure (seconds) — floor for the
 # "Fastest" sampling level.
@@ -449,6 +453,12 @@ class Bridge:
         # topic -> gateway names actually seen publishing there. Decides whether
         # a tag's "Perangkat" is a gateway filter — see _gateway_filter_applies.
         self._gws_seen: dict[str, set[str]] = {}
+        # Topic monitor (scada_topic_probe): newest parsed payload waiting to
+        # be written, keyed (topic, gateway); plus when each was last written.
+        self._probe_pending: dict[tuple[str, str], tuple[datetime, dict]] = {}
+        self._probe_last: dict[tuple[str, str], float] = {}
+        # topic -> site_id, so a probe row knows which plant it belongs to
+        self._site_of_topic: dict[str, str] = {}
         # tag_id -> (scale, offset, decimals) applied to the raw value on ingest
         self._xform: dict[str, Transform] = {}
         self._conn: psycopg.Connection | None = None
@@ -827,6 +837,13 @@ class Bridge:
         if not slot:
             return  # not a topic we care about
 
+        # Record what this topic is sending BEFORE deciding how to read it. A
+        # tag whose Field is still empty parses as "plain" and its bundled
+        # payload is rejected below — which is exactly the moment the operator
+        # most needs to see the field names. Probing first means the monitor
+        # helps precisely when the configuration is still wrong.
+        self._probe(msg.topic, msg.payload)
+
         # Which shape? Decided by the CONFIG, not by sniffing the payload: a
         # topic whose tags declare no field is a plain one, anything else is a
         # bundle. Guessing from the bytes would make a plain reading of `{}`
@@ -890,6 +907,94 @@ class Bridge:
                 self._pending[tag_id] = value
                 self._latest_pending[tag_id] = (now, value)
                 self._buf_ts[tag_id] = now
+
+    def _prune_probes(self) -> None:
+        """Forget monitor rows for topics this PC no longer subscribes to.
+
+        Without it, retyping a topic leaves the old one on the monitor forever,
+        frozen at its last payload — and a frozen row looks exactly like a live
+        one that went quiet, which is the opposite of what a monitor is for.
+        Scoped to this PC's own topics so a second bridge cannot delete rows it
+        does not know about."""
+        if PROBE_EVERY_S <= 0 or not self._site_of_topic:
+            return
+        by_site: dict[str, list[str]] = {}
+        for topic, sid in self._site_of_topic.items():
+            by_site.setdefault(sid, []).append(topic)
+        try:
+            with self._db().cursor() as cur:
+                for sid, topics in by_site.items():
+                    cur.execute(
+                        "DELETE FROM scada_topic_probe "
+                        "WHERE site_id = %s AND NOT (topic = ANY(%s))",
+                        (sid, topics),
+                    )
+        except Exception:
+            log.debug("Gagal merapikan pemantau topik (diabaikan)", exc_info=True)
+
+    def _probe(self, topic: str, payload: bytes) -> None:
+        """Remember the newest payload per (topic, gateway) for the UI monitor.
+
+        Throttled per key, and it never touches the database here — this runs on
+        the MQTT callback thread, where a blocking write would stall ingest for
+        every sensor on the connection. The rows go out in flush_probes()."""
+        if PROBE_EVERY_S <= 0:
+            return
+        now = time.monotonic()
+        try:
+            parsed = _coerce_bulk(payload)
+            if parsed is not None:
+                gw, values = parsed
+                if not values:
+                    return
+                gw = gw or ""
+            else:
+                # Plain topic: one bare number, stored under the empty name so
+                # the UI can render it without a second shape.
+                raw = _coerce_value(payload)
+                if raw is None:
+                    return
+                gw, values = "", {"": raw}
+            key = (topic, gw)
+            if now - self._probe_last.get(key, 0.0) < PROBE_EVERY_S:
+                return
+            self._probe_last[key] = now
+            with self._lock:
+                self._probe_pending[key] = (datetime.now(timezone.utc), values)
+        except Exception:
+            # A monitor must never be able to break ingest.
+            log.debug("Probe topik %s gagal, diabaikan", topic, exc_info=True)
+
+    def flush_probes(self) -> None:
+        """Write the topic monitor rows. Best-effort: a failure here is a stale
+        monitor, never a lost reading, so nothing is retried or re-queued."""
+        with self._lock:
+            if not self._probe_pending:
+                return
+            batch = list(self._probe_pending.items())
+            self._probe_pending.clear()
+
+        rows = []
+        for (topic, gw), (seen, values) in batch:
+            site_id = self._site_of_topic.get(topic)
+            if site_id is None:
+                continue
+            rows.append((site_id, topic, gw, json.dumps(values), len(values), seen))
+        if not rows:
+            return
+        try:
+            with self._db().cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO scada_topic_probe "
+                    "  (site_id, topic, gateway, \"values\", n_values, seen_at) "
+                    "VALUES (%s, %s, %s, %s::jsonb, %s, %s) "
+                    "ON CONFLICT (site_id, topic, gateway) DO UPDATE "
+                    "SET \"values\" = EXCLUDED.\"values\", "
+                    "    n_values = EXCLUDED.n_values, seen_at = EXCLUDED.seen_at",
+                    rows,
+                )
+        except Exception:
+            log.debug("Gagal menyimpan pemantau topik (diabaikan)", exc_info=True)
 
     def _check_field_collision(
         self, site_id: str, topic: str, fld: str, gw: str
@@ -989,6 +1094,10 @@ class Bridge:
         self._missing_warned.clear()
         self._field_gws.clear()
         self._gws_seen.clear()
+        self._site_of_topic = {
+            topic: sid for sid, site in sites.items() for topic in site.routes
+        }
+        self._prune_probes()
 
         for site_id, site in sites.items():
             new_routes = site.routes
@@ -1226,6 +1335,7 @@ class Bridge:
             self.flush()
             if LATEST_ENABLED and now - last_latest >= LATEST_FLUSH_S:
                 self.flush_latest()
+                self.flush_probes()
                 last_latest = now
             if now - last_hb >= HEARTBEAT_S:
                 self.heartbeat()

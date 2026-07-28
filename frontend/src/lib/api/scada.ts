@@ -248,6 +248,21 @@ export const scadaApi = {
     );
   },
 
+  /** Isi TERAKHIR dari setiap topik MQTT yang sedang dilanggan jembatan —
+   *  sumber jawaban untuk "kolom Field harus diisi apa". scada:manage. */
+  listTopicProbes: () =>
+    apiClient.get<{
+      items: {
+        site_id: string;
+        site_name: string;
+        topic: string;
+        gateway: string;
+        bundled: boolean;
+        fields: { name: string; value: number; used_by: string[] }[];
+        seen_at: string;
+      }[];
+    }>("/api/scada/topic-probes"),
+
   /** Buat banyak sensor sekaligus dari satu daftar (CSV yang sudah diurai).
    *  Semua-atau-tidak sama sekali: kalau ada satu baris bermasalah, TIDAK ADA
    *  yang dibuat dan `errors` berisi nomor barisnya. */

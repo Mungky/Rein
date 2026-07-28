@@ -1100,6 +1100,34 @@ class RollupArchiveListOut(BaseModel):
     items: list[RollupArchiveOut]
 
 
+class TopicFieldOut(BaseModel):
+    """One name inside a topic's latest payload, and whether a sensor claims it.
+
+    `used_by` is what turns the monitor from "here are some names" into a
+    checklist: an operator can see at a glance which of a gateway's 30 values
+    are already wired up and which are still on the table."""
+
+    name: str
+    value: float
+    used_by: list[str] = Field(default_factory=list)
+
+
+class TopicProbeOut(BaseModel):
+    site_id: str
+    site_name: str
+    topic: str
+    # "" for a plain single-value topic.
+    gateway: str
+    # True when this topic carries a bundle (several named values).
+    bundled: bool
+    fields: list[TopicFieldOut]
+    seen_at: str
+
+
+class TopicProbeListOut(BaseModel):
+    items: list[TopicProbeOut]
+
+
 class LatestItemOut(BaseModel):
     tag_id: str
     ts: str

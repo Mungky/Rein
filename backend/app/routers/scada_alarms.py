@@ -31,6 +31,7 @@ from app.schemas.scada import (
     LatestOut,
     RollupArchiveListOut,
     TagArchiveListOut,
+    TopicProbeListOut,
 )
 from app.services import (
     archiver,
@@ -46,8 +47,10 @@ from db.models.scada import (
     ScadaAlarmSettings,
     ScadaRollupArchive,
     ScadaTag,
+    ScadaSite,
     ScadaTagArchive,
     ScadaTagLatest,
+    ScadaTopicProbe,
 )
 from db.session import get_db
 
@@ -297,6 +300,95 @@ async def run_rollup_archiver_now(
     Use this to prove the Drive path works BEFORE trusting retention with it."""
     results = await rollup_archiver.archive_once(db)
     return {"archived": results}
+
+
+@router.get("/topic-probes", response_model=TopicProbeListOut)
+@limiter.limit(READ_LIMIT)
+async def list_topic_probes(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    _profile: Annotated[Profile, Depends(require_permission("scada:manage"))] = None,
+):
+    """What every subscribed MQTT topic is sending right now, with the field
+    names an operator has to type into "Field".
+
+    Answers the question the bridge used to answer only in its own log file on
+    the field PC: a bundled sensor's Field must match the gateway's variable
+    name exactly, and getting it wrong produces an empty sensor and no error.
+
+    Each field is annotated with the sensors already reading it, so the list
+    doubles as a checklist of what is still unwired. Matching is on
+    (topic, field) plus the tag's "Perangkat" when that names this gateway —
+    the same rule the bridge routes by, so what is shown here is what actually
+    happens rather than a second guess at it.
+
+    scada:manage, not scada:view: this is a setup tool and it exposes
+    device-internal variable names.
+    """
+    probes = (
+        (
+            await db.execute(
+                select(ScadaTopicProbe).order_by(
+                    ScadaTopicProbe.topic, ScadaTopicProbe.gateway
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not probes:
+        return {"items": []}
+
+    sites = {
+        s.id: s.name
+        for s in (await db.execute(select(ScadaSite))).scalars().all()
+    }
+    tags = (
+        (await db.execute(select(ScadaTag).where(ScadaTag.source == "mqtt")))
+        .scalars()
+        .all()
+    )
+    # (topic, field, device) -> labels. Device is kept so two lines sharing a
+    # field name do not both light up on the same gateway's row.
+    claims: dict[tuple[str, str, str], list[str]] = {}
+    for tag in tags:
+        cfg = tag.config or {}
+        topic = str(cfg.get("mqtt_topic") or "").strip()
+        if not topic:
+            continue
+        fld = str(cfg.get("mqtt_field") or "").strip()
+        dev = (tag.device_key or "").strip()
+        claims.setdefault((topic, fld, dev), []).append(tag.label)
+
+    items = []
+    for p in probes:
+        values = p.values or {}
+        bundled = not (len(values) == 1 and "" in values)
+        fields = []
+        for name in sorted(values):
+            used = list(claims.get((p.topic, name, p.gateway), []))
+            # A sensor with no Perangkat set takes the field on any gateway.
+            used += claims.get((p.topic, name, ""), []) if p.gateway else []
+            # ...and the older, explicitly-prefixed spelling still counts.
+            if p.gateway:
+                used += claims.get((p.topic, f"{p.gateway}.{name}", ""), [])
+            try:
+                value = float(values[name])
+            except (TypeError, ValueError):
+                continue
+            fields.append(
+                {"name": name, "value": value, "used_by": sorted(set(used))}
+            )
+        items.append({
+            "site_id": str(p.site_id),
+            "site_name": sites.get(p.site_id, "(site terhapus)"),
+            "topic": p.topic,
+            "gateway": p.gateway,
+            "bundled": bundled,
+            "fields": fields,
+            "seen_at": str(p.seen_at),
+        })
+    return {"items": items}
 
 
 def _settings_dict(s: ScadaAlarmSettings) -> dict:

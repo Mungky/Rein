@@ -21,6 +21,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RadioTower,
   Server,
   Table2,
   TrendingUp,
@@ -40,6 +41,7 @@ import { ManageSitesDialog } from "../manage-sites-dialog";
 import { AlarmSettingsDialog } from "./alarm-settings-dialog";
 import { ExportRangeDialog } from "./export-range-dialog";
 import { ImportTagsDialog } from "./import-tags-dialog";
+import { TopicMonitorDialog } from "./topic-monitor-dialog";
 import { TagDetailRow } from "./tag-detail-row";
 import { TagSparkline, type SparkStatus } from "./tag-sparkline";
 
@@ -122,6 +124,7 @@ export function AnalysisView({
   const [addingRow, setAddingRow] = useState(false);
   const [showAlarmSettings, setShowAlarmSettings] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showMonitor, setShowMonitor] = useState(false);
   // Paginasi. Bukan hiasan: SEMUA yang di bawah ini dibatasi oleh halaman —
   // sparkline (server memotong di 60 tag) dan pengambilan data mentah. Tanpa
   // paginasi, plant 300 sensor berarti 300 permintaan HTTP tiap 60 detik dan
@@ -595,6 +598,14 @@ export function AnalysisView({
           {canManage && (
             <>
               <button
+                onClick={() => setShowMonitor(true)}
+                className="btn btn-ghost btn-sm gap-1.5"
+                title="Lihat isi terakhir tiap topik MQTT — sumber nama untuk kolom Field"
+              >
+                <RadioTower className="size-3.5" />
+                <span className="hidden sm:inline">Pemantau Topik</span>
+              </button>
+              <button
                 onClick={() => setShowImport(true)}
                 disabled={!activeSheet}
                 className="btn btn-ghost btn-sm gap-1.5"
@@ -967,6 +978,7 @@ export function AnalysisView({
       {showAlarmSettings && (
         <AlarmSettingsDialog onClose={() => setShowAlarmSettings(false)} />
       )}
+      {showMonitor && <TopicMonitorDialog onClose={() => setShowMonitor(false)} />}
       {showImport && activeSheet && (
         <ImportTagsDialog
           sheetId={activeSheet.id}

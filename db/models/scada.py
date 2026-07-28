@@ -567,6 +567,45 @@ class ScadaTagArchive(Base):
     )
 
 
+class ScadaTopicProbe(Base):
+    """What each subscribed MQTT topic is sending RIGHT NOW — one row per
+    (site, topic, gateway), UPSERTed by the bridge and never appended to.
+
+    Exists because configuring a bundled sensor means typing a field name that
+    must match the gateway's own variable name exactly, and the only way to
+    learn that name used to be opening Node-RED on the field PC. This is the
+    bridge answering it in the UI instead.
+
+    Not a log, on purpose: "what is this topic sending" is a question about the
+    present, and a message log at 300 sensors is gigabytes a day for no better
+    answer. Bounded by topic count, so it never grows with time.
+
+    `gateway` is part of the key rather than a column because ONE topic can
+    carry several gateways — the exact case an operator needs help with, since
+    every line has a `waterlevel1`. Empty string (not NULL) for plain topics: a
+    NULL in a primary key never compares equal to itself.
+
+    DDL lives in migration o5p6q7r8s9t0. Never create_all() it."""
+
+    __tablename__ = "scada_topic_probe"
+
+    site_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scada_sites.id", ondelete="CASCADE"), primary_key=True
+    )
+    topic: Mapped[str] = mapped_column(String(300), primary_key=True)
+    gateway: Mapped[str] = mapped_column(
+        String(120), primary_key=True, server_default=""
+    )
+    # {field: number} as parsed by the bridge; {"": value} for a plain topic.
+    values: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    n_values: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    seen_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class ScadaRollupArchive(Base):
     """Ledger of archived SUMMARY months — one row per (plant, month).
 
