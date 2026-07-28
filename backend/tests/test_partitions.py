@@ -46,6 +46,7 @@ class _Session:
         self._existing = list(existing)
         self._nonempty = set(nonempty)
         self.commits = 0
+        self.rollbacks = 0
 
     async def execute(self, stmt, params=None):
         sql = " ".join(str(stmt).split())
@@ -68,6 +69,9 @@ class _Session:
 
     async def commit(self):
         self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
 
 
 def _install(monkeypatch, log, existing, ring_window_h=24, nonempty=(), archived=None):
@@ -388,6 +392,41 @@ def test_summary_floor_survives_a_clock_jump(monkeypatch):
     assert set(have) - set(dropped) == {
         "scada_rollup_1m_2020_04", "scada_rollup_1m_2020_05",
     }
+
+
+def test_the_24h_lane_is_pruned_even_when_the_summary_side_blows_up(monkeypatch):
+    """The two lanes must not be able to stop each other.
+
+    They shared one transaction, so anything raised while pruning the summary
+    rolled back the raw DROPs that had already run. That is not hypothetical:
+    the summary side reads the archive ledger, which does not exist on any
+    database that has not run `alembic upgrade head` — and production does not
+    migrate on deploy. Symptom: the 24 h lane silently stops being pruned and
+    grows ~2.8 GB/day/plant, with only "maintenance iteration failed" in the
+    log."""
+    log = []
+    monkeypatch.setattr(partitions, "ROLLUP_KEEP_MONTHS", 1)
+    _install(monkeypatch, log, existing=[
+        "scada_raw_2020_01_01", "scada_raw_2020_01_02", "scada_raw_2020_01_03",
+        "scada_rollup_1m_2019_01", "scada_rollup_1m_2026_07",
+    ])
+
+    from app.services import rollup_archiver
+
+    async def boom(_db):
+        raise RuntimeError('relation "scada_rollup_archives" does not exist')
+
+    monkeypatch.setattr(rollup_archiver, "fully_archived_months", boom)
+
+    res = asyncio.run(partitions.maintain_once(now=datetime(2026, 7, 26, 12, 0, tzinfo=UTC)))
+
+    # All three 2020 drawers are expired and none is protected (the floor holds
+    # the newest two, which by then are the freshly-created future ones).
+    assert res["dropped_raw"] == [
+        "scada_raw_2020_01_01", "scada_raw_2020_01_02", "scada_raw_2020_01_03",
+    ]
+    assert res["dropped_rollup"] == []                      # summary side gave up
+    assert res["future_raw"] == partitions.RAW_AHEAD_DAYS   # and the pass finished
 
 
 def test_summary_drop_is_off_when_keep_months_is_zero(monkeypatch):

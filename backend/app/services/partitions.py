@@ -272,8 +272,31 @@ async def maintain_once(now: datetime | None = None) -> dict:
         await db.commit()
 
         dropped_raw = await drop_expired_raw(db, now, window_h)
-        dropped_rollup = await drop_expired_rollup(db, now)
         await db.commit()
+
+        # The summary lane is pruned in its OWN transaction, and its failure is
+        # contained here rather than allowed to reach maintain_loop.
+        #
+        # Sharing one transaction was a real bug with a slow, silent symptom:
+        # drop_expired_rollup consults the archive ledger, so on any database
+        # where that table does not exist yet — every deploy between shipping
+        # this code and running `alembic upgrade head`, and production does NOT
+        # migrate on deploy — it raises, rolling back the raw DROPs that had
+        # already run above. The 24 h lane would quietly stop being pruned and
+        # grow at ~2.8 GB/day/plant, while the log only said "maintenance
+        # iteration failed". The two lanes have nothing to do with each other;
+        # neither should be able to stop the other.
+        dropped_rollup: list[str] = []
+        try:
+            dropped_rollup = await drop_expired_rollup(db, now)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception(
+                "Pemangkasan ringkasan gagal (lane 24 jam TIDAK terpengaruh). "
+                "Kalau tabel scada_rollup_archives belum ada: jalankan "
+                "`alembic upgrade head`."
+            )
 
         # Runway check — the failure this warns about is silent data loss.
         names = await _partitions(db, "scada_raw\\_%")
