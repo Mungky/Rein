@@ -85,11 +85,23 @@ export function TopicMonitorDialog({ onClose }: { onClose: () => void }) {
 
   usePanelRefresh(muat);
 
-  async function salin(nama: string) {
+  /** Yang disalin adalah nama LENGKAP dengan gateway-nya — `lombok1.waterlevel1`,
+   *  bukan `waterlevel1`.
+   *
+   *  Bentuk lengkap benar di KEDUA bentuk topik, jadi tidak ada pilihan yang
+   *  perlu ditebak orang yang menyalin: kalau topiknya sudah satu per gateway,
+   *  jembatan mengupas awalannya karena cocok dengan gateway paket itu; kalau
+   *  satu topik memuat seluruh plant, awalan itulah yang memisahkan Line 1 dari
+   *  Line 2. Menyalin bentuk polos hanya benar di salah satunya, dan salahnya
+   *  tidak bergejala — sensornya diam-diam membaca dua alat bergantian.
+   *
+   *  Paket tanpa kolom `gateway` tidak punya awalan untuk ditambahkan, jadi
+   *  disalin apa adanya. */
+  async function salin(teks: string) {
     try {
-      await navigator.clipboard.writeText(nama);
-      setDisalin(nama);
-      setTimeout(() => setDisalin((c) => (c === nama ? null : c)), 1500);
+      await navigator.clipboard.writeText(teks);
+      setDisalin(teks);
+      setTimeout(() => setDisalin((c) => (c === teks ? null : c)), 1500);
     } catch {
       toast.error("Gagal menyalin");
     }
@@ -98,7 +110,7 @@ export function TopicMonitorDialog({ onClose }: { onClose: () => void }) {
   return (
     <Drawer
       title="Pemantau Topik"
-      subtitle="Isi terakhir dari tiap topik MQTT — sumber nama untuk kolom Field"
+      subtitle="Isi terakhir dari tiap topik MQTT — sumber nama untuk kolom Perangkat"
       icon={<RadioTower className="size-5" />}
       onClose={onClose}
       footer={
@@ -129,7 +141,7 @@ export function TopicMonitorDialog({ onClose }: { onClose: () => void }) {
             <p className="mt-1.5">
               Jembatan hanya berlangganan topik yang sudah dipakai minimal satu
               sensor. Cara memakainya: buat sensor, isi{" "}
-              <span className="font-semibold">Topik</span> saja (Field
+              <span className="font-semibold">Topik</span>
               dikosongkan dulu), tunggu ~30 detik sampai jembatan membaca ulang
               konfigurasinya — nama-nama field-nya akan muncul di sini.
             </p>
@@ -180,17 +192,21 @@ export function TopicMonitorDialog({ onClose }: { onClose: () => void }) {
               {terbuka && (
                 <table className="w-full text-[11.5px]">
                   <tbody>
-                    {p.fields.map((f) => (
+                    {p.fields.map((f) => {
+                      // Persis teks yang tersalin — supaya yang dilihat sama
+                      // dengan yang ditempel, tanpa kejutan.
+                      const penuh = p.gateway ? `${p.gateway}.${f.name}` : f.name;
+                      return (
                       <tr key={f.name} className="border-t border-border-soft">
                         <td className="w-8 py-1 pl-3">
-                          {/* Menyalin nama fieldnya, bukan nilainya — itu yang
-                              ditempel ke kolom Field. */}
+                          {/* Menyalin NAMANYA, bukan nilainya — itu yang
+                              ditempel ke kolom Perangkat. */}
                           <button
-                            onClick={() => void salin(f.name)}
+                            onClick={() => void salin(penuh)}
                             className="cursor-pointer p-0.5 text-text-light hover:text-text"
-                            title={`Salin "${f.name}"`}
+                            title={`Salin "${penuh}" — tempel ke kolom Perangkat`}
                           >
-                            {disalin === f.name ? (
+                            {disalin === penuh ? (
                               <Check className="size-3.5 text-green" />
                             ) : (
                               <Copy className="size-3.5" />
@@ -198,7 +214,16 @@ export function TopicMonitorDialog({ onClose }: { onClose: () => void }) {
                           </button>
                         </td>
                         <td className="py-1 pr-2 font-mono text-text">
-                          {f.name || <span className="text-text-light">(nilai polos)</span>}
+                          {f.name ? (
+                            <>
+                              {p.gateway && (
+                                <span className="text-text-light">{p.gateway}.</span>
+                              )}
+                              {f.name}
+                            </>
+                          ) : (
+                            <span className="text-text-light">(nilai polos)</span>
+                          )}
                         </td>
                         <td className="py-1 pr-3 text-right font-mono tabular-nums text-text-muted">
                           {angka(f.value)}
@@ -214,7 +239,8 @@ export function TopicMonitorDialog({ onClose }: { onClose: () => void }) {
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
@@ -224,11 +250,14 @@ export function TopicMonitorDialog({ onClose }: { onClose: () => void }) {
 
         {items !== null && items.some((p) => p.gateway) && (
           <p className="rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-3 py-2.5 text-[11px] text-text-muted">
-            Kalau satu topik muncul beberapa kali dengan lencana gateway berbeda,
-            berarti topik itu memuat beberapa alat. Nama field-nya sama di semua
-            gateway, jadi isi kolom{" "}
-            <span className="font-semibold text-text">Perangkat</span> di tabel
-            Analisis dengan nama gateway-nya supaya sensornya tidak tertukar.
+            Tombol salin sudah menyertakan nama gateway-nya, jadi yang tertempel
+            di kolom{" "}
+            <span className="font-semibold text-text">Perangkat</span> langsung
+            berbentuk{" "}
+            <span className="font-mono text-text">lombok1.waterlevel1</span>.
+            Bentuk itu benar untuk kedua macam topik, jadi tidak ada yang perlu
+            ditebak — dan kalau satu topik memuat beberapa alat, awalan itulah
+            yang mencegah sensornya tertukar.
           </p>
         )}
       </div>

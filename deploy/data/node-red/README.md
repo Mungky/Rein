@@ -79,28 +79,27 @@ Yang tersisa: daftarkan sensornya di **R-Net → Analisis → Sumber**, isi:
 
 | Kolom | Isi |
 |---|---|
-| **Topik** | `rnet/lombok/gw/lombok1` — satu topik per gateway |
-| **Field** | `waterlevel1` — nama sensor apa adanya dari gateway |
+| **Topik** | `rnet/lombok/gw/lombok1` — di R-Net > Analisis > Sumber |
+| **Perangkat** | `waterlevel1` — nama nilai itu **apa adanya dari gateway**, diketik di kolom Perangkat pada tabel Analisis |
 
-> ### ⚠️ Aturan yang menentukan: nama Field harus unik DI DALAM satu topik
+> ### ⚠️ Aturan yang menentukan: nama Perangkat harus unik DI DALAM satu topik
 >
 > Setiap line punya `waterlevel1`. Yang membedakannya adalah **topik**.
 >
-> | Bentuk topik terbit | Field | Perangkat |
-> |---|---|---|
-> | `rnet/lombok/gw/lombok1` (satu topik per gateway) | `waterlevel1` | bebas |
-> | `rnet/lombok/all` (satu topik seluruh plant) | `waterlevel1` | **`lombok1`** |
+> | Bentuk topik terbit | Isi kolom Perangkat |
+> |---|---|
+> | `rnet/lombok/gw/lombok1` (satu topik per gateway) | `waterlevel1` |
+> | `rnet/lombok/all` (satu topik seluruh plant) | `lombok1.waterlevel1` |
 >
-> Pada bentuk kedua, **kolom Perangkat-lah yang memisahkan kedua line** — kolom
-> itu memang artinya "sensor ini menempel di alat mana". (Menulis Field lengkap
-> `lombok1.waterlevel1` juga masih diterima, tapi tidak perlu.)
->
-> Kalau satu topik memuat beberapa gateway dan Field ditulis polos, sensor itu
-> **bergantian membaca dua alat berbeda**. Tidak ada error, tidak ada data
+> Kalau satu topik memuat beberapa gateway dan Perangkat ditulis polos, sensor
+> itu **bergantian membaca dua alat berbeda**. Tidak ada error, tidak ada data
 > hilang, jumlah barisnya justru bertambah — terjadi 28 Juli 2026: satu tag
 > tercatat 43,9% bernilai 0, ternyata tangki Line 2 (0) berselang-seling dengan
 > tangki Line 1 (12–13). Jembatan sekarang menulis peringatan sekali di log
 > begitu mendeteksinya.
+>
+> Untuk topik yang hanya membawa SATU nilai, kolom Perangkat tidak dipakai
+> mencocokkan apa pun — isinya bebas, sekadar label.
 
 Nama di kolom Field harus sama persis dengan yang dikirim gateway. Kalau
 meleset, jembatan menulis satu baris peringatan di log yang menyebutkan nama

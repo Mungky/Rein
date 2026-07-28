@@ -89,8 +89,9 @@ def test_crash_recovery_replays_unflushed_value(tmp_path):
 
     # --- process A: receive a value, then get killed before any flush ---
     a = Bridge("", buffer_path=buf)
-    # topic -> {field or None -> tag}; None = "this topic carries one number"
-    a._routes = {site: {topic: {(None, None): tag}}}
+    # topic -> {nama-di-sumber -> tag}. "DEV-01" tidak cocok dengan apa pun di
+    # payload polos, jadi jalur polos yang dipakai — persis sensor produksi.
+    a._routes = {site: {topic: {"DEV-01": tag}}}
     a._xform = {tag: (1.0, 0.0, None)}
     a._on_message(None, site, FakeMsg(topic, b'{"value": 72.5}'))
 

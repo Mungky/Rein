@@ -1,6 +1,13 @@
 "use client";
 
-/** "Atur Sumber" — where a tag's data comes from, edited inline in Analisis.
+/** "Atur Sumber" — DARI MANA data sensor ini datang: topiknya, dan tidak lebih.
+ *
+ *  Sempat ada kotak "Field" di sini yang isinya nama nilai di sumber, padahal
+ *  tabel Analisis sudah punya kolom "Perangkat" yang artinya persis itu. Dua
+ *  kotak untuk satu hal, dan tidak ada yang bisa membedakan mana untuk apa.
+ *  Sekarang tinggal satu, dan tempatnya di tabel — bukan di sini.
+ *
+ *  Aslinya:
  *  One path only: **Node-RED** (over MQTT under the hood) — Node-RED is the
  *  universal translator that speaks to any PLC/device and forwards values to
  *  the broker; R-Net just listens. Pick a site (broker), type the topic, set
@@ -32,9 +39,6 @@ export function SourceDialog({
 
   const [siteId, setSiteId] = useState(tag.site_id ?? enabledSites[0]?.id ?? "");
   const [topic, setTopic] = useState(String(cfg.mqtt_topic ?? ""));
-  // Kosong = topik ini cuma membawa satu angka (satu topik per sensor).
-  // Diisi   = topik membawa banyak angka sekaligus dan ini nama angkanya.
-  const [field, setField] = useState(String(cfg.mqtt_field ?? ""));
   const [alarmMin, setAlarmMin] = useState(
     cfg.alarm_min === undefined || cfg.alarm_min === null ? "" : String(cfg.alarm_min)
   );
@@ -84,12 +88,10 @@ export function SourceDialog({
       // sampling_level, store_cycle_start) — this dialog only owns
       // topic/alarm/scaling. Spreading ...cfg keeps them intact.
       const config: Record<string, unknown> = { ...cfg, mqtt_topic: topic.trim() };
-      // Dihapus dulu lalu diisi ulang hanya kalau ada isinya — supaya
-      // mengosongkan kotak Field benar-benar mengembalikan sensor ini ke mode
-      // "satu topik = satu nilai", bukan menyisakan field kosong yang tidak
-      // pernah cocok dengan apa pun.
+      // "Field" sudah tidak ada — nama nilai di sumbernya sekarang tinggal di
+      // kolom Perangkat. Sisa mqtt_field dari versi lama dibuang saat sensor
+      // ini disimpan, supaya tidak ada dua tempat yang mengaku benar.
       delete config.mqtt_field;
-      if (field.trim() !== "") config.mqtt_field = field.trim();
       delete config.alarm_min;
       delete config.alarm_max;
       delete config.warn_min;
@@ -192,81 +194,26 @@ export function SourceDialog({
                 <p className="mt-1.5 text-[11px] text-text-light">
                   Samakan persis dengan topik di node <span className="font-mono">mqtt out</span> Node-RED.
                 </p>
-              </div>
-              {/* Satu topik boleh membawa SATU angka (kosongkan Field) atau
-                  BANYAK angka sekaligus (isi Field dengan nama angkanya).
-                  Yang kedua itu yang bikin satu plant cukup satu topik, bukan
-                  satu topik per sensor. */}
-              <div>
-                <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">
-                  Field <span className="font-normal text-text-light">(opsional)</span>
-                </label>
-                <input
-                  className="field-input font-mono"
-                  placeholder="waterlevel1"
-                  value={field}
-                  onChange={(e) => setField(e.target.value)}
-                  maxLength={200}
-                />
-                <p className="mt-1.5 text-[11px] text-text-light">
-                  {field.trim() === "" ? (
-                    <>
-                      <span className="font-semibold text-text-muted">Kosong</span> =
-                      topik di atas hanya berisi satu angka, dan angka itu milik
-                      sensor ini.
-                    </>
-                  ) : (
-                    <>
-                      Topik di atas berisi banyak angka sekaligus; sensor ini
-                      mengambil yang bernama{" "}
-                      <span className="font-mono font-semibold text-text">
-                        {field.trim()}
-                      </span>
-                      .
-                    </>
-                  )}{" "}
-                  Isi kalau topik di atas membawa banyak nilai sekaligus.
-                </p>
-                {/* Aturan yang menentukan benar-salahnya, dan satu-satunya yang
-                    pernah menggigit: nama field harus unik DI DALAM satu topik.
-                    Kalau satu topik memuat beberapa gateway, nama polos tidak
-                    unik — tiap line punya waterlevel1. */}
+                {/* Hanya topik yang diatur di sini. Nama nilainya ada di kolom
+                    Perangkat pada tabel — satu tempat, bukan dua. */}
                 <div className="mt-2 rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-2.5 py-2 text-[11px] text-text-muted">
-                  <div className="mb-1 font-semibold text-text">
-                    Kalau satu topik memuat beberapa gateway
+                  Kalau satu topik membawa <span className="font-semibold">banyak
+                  nilai sekaligus</span>, nama nilai yang diambil sensor ini
+                  ditulis di kolom{" "}
+                  <span className="font-semibold text-text">Perangkat</span> pada
+                  tabel Analisis — bukan di sini.
+                  <div className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                    <span className="font-mono text-text-muted">…/gw/lombok1</span>
+                    <span>
+                      Perangkat: <span className="font-mono text-text">waterlevel1</span>
+                    </span>
+                    <span className="font-mono text-text-muted">…/lombok/all</span>
+                    <span>
+                      Perangkat:{" "}
+                      <span className="font-mono text-text">lombok1.waterlevel1</span>
+                    </span>
                   </div>
-                  <p>
-                    Setiap line punya <span className="font-mono">waterlevel1</span>.
-                    Yang membedakannya: isi kolom{" "}
-                    <span className="font-semibold text-text">Perangkat</span> di
-                    tabel Analisis dengan{" "}
-                    <span className="font-mono text-text">nama gateway</span>-nya
-                    (mis. <span className="font-mono">lombok1</span>) — Field-nya
-                    tetap ditulis polos.
-                  </p>
-                  <p className="mt-1.5">
-                    Tanpa itu, sensor ini{" "}
-                    <span className="font-semibold">bergantian membaca dua alat
-                    berbeda</span>: tanpa error, tanpa data hilang, jumlah barisnya
-                    justru bertambah. Kalau topiknya sudah satu per gateway
-                    (<span className="font-mono">…/gw/lombok1</span>), Perangkat
-                    boleh diisi apa saja.
-                  </p>
                 </div>
-                {/* Jembatan (bridge) sudah bisa membaca paket gabungan, tapi
-                    versinya harus disalin dulu ke PC lapangan — di sana masih
-                    berjalan yang lama. Peringatan ini tetap tampil selama Field
-                    diisi; hapus kalau semua PC sudah diperbarui. */}
-                {field.trim() !== "" && (
-                  <p className="mt-2 rounded-[var(--r)] border border-amber/40 bg-amber/10 px-2.5 py-2 text-[11px] text-text-muted">
-                    <span className="font-semibold text-amber">Butuh jembatan
-                    versi baru.</span>{" "}
-                    Pastikan <span className="font-mono">bridge.py</span> terbaru
-                    sudah disalin ke PC lapangan. Yang lama hanya mengerti{" "}
-                    <em>satu topik = satu angka</em>: sensor ini akan kosong —
-                    bukan salah nilai, memang tidak menerima apa-apa.
-                  </p>
-                )}
               </div>
               {/* Ambang status — dipakai SEMUA panel gauge/level sensor ini
                   (satu sumber). Urut nilai: Alarm bawah < Waspada bawah <

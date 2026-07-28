@@ -1208,11 +1208,10 @@ class TagImportRow(BaseModel):
     label: str = Field(min_length=1, max_length=120)
     unit: str = Field(default="", max_length=30)
     mqtt_topic: str = Field(min_length=1, max_length=300)
-    # Empty = this topic carries one bare number (see TagCreateRequest.config).
-    mqtt_field: str = Field(default="", max_length=MQTT_FIELD_MAX)
-    # Free-form grouping key; the router defaults it to the gateway part of the
-    # topic when left out, which is what an operator would have typed anyway.
-    device_key: str = Field(default="", max_length=120)
+    # "Perangkat" — the value's name at the source, and the ONLY thing the
+    # bridge routes a bundled payload by. Required: leaving it blank used to be
+    # possible and produced a sensor that could never receive anything.
+    device_key: str = Field(min_length=1, max_length=120)
     sampling_level: SamplingLevel | None = None
     store_enabled: bool = False
     alarm_min: float | None = None

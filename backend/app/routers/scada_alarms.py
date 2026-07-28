@@ -316,11 +316,10 @@ async def list_topic_probes(
     the field PC: a bundled sensor's Field must match the gateway's variable
     name exactly, and getting it wrong produces an empty sensor and no error.
 
-    Each field is annotated with the sensors already reading it, so the list
+    Each name is annotated with the sensors already reading it, so the list
     doubles as a checklist of what is still unwired. Matching is on
-    (topic, field) plus the tag's "Perangkat" when that names this gateway —
-    the same rule the bridge routes by, so what is shown here is what actually
-    happens rather than a second guess at it.
+    (topic, "Perangkat") — the same rule the bridge routes by, so what is shown
+    here is what actually happens rather than a second guess at it.
 
     scada:manage, not scada:view: this is a setup tool and it exposes
     device-internal variable names.
@@ -348,17 +347,16 @@ async def list_topic_probes(
         .scalars()
         .all()
     )
-    # (topic, field, device) -> labels. Device is kept so two lines sharing a
-    # field name do not both light up on the same gateway's row.
-    claims: dict[tuple[str, str, str], list[str]] = {}
+    # (topic, perangkat) -> labels. "Perangkat" is the value's name at the
+    # source and the only thing the bridge routes by, so it is what decides
+    # whether a name on the monitor is already spoken for.
+    claims: dict[tuple[str, str], list[str]] = {}
     for tag in tags:
         cfg = tag.config or {}
         topic = str(cfg.get("mqtt_topic") or "").strip()
         if not topic:
             continue
-        fld = str(cfg.get("mqtt_field") or "").strip()
-        dev = (tag.device_key or "").strip()
-        claims.setdefault((topic, fld, dev), []).append(tag.label)
+        claims.setdefault((topic, (tag.device_key or "").strip()), []).append(tag.label)
 
     items = []
     for p in probes:
@@ -366,12 +364,10 @@ async def list_topic_probes(
         bundled = not (len(values) == 1 and "" in values)
         fields = []
         for name in sorted(values):
-            used = list(claims.get((p.topic, name, p.gateway), []))
-            # A sensor with no Perangkat set takes the field on any gateway.
-            used += claims.get((p.topic, name, ""), []) if p.gateway else []
-            # ...and the older, explicitly-prefixed spelling still counts.
+            used = list(claims.get((p.topic, name), []))
+            # The gateway-qualified spelling names the same value.
             if p.gateway:
-                used += claims.get((p.topic, f"{p.gateway}.{name}", ""), [])
+                used += claims.get((p.topic, f"{p.gateway}.{name}"), [])
             try:
                 value = float(values[name])
             except (TypeError, ValueError):

@@ -67,13 +67,18 @@ PAYLOAD FORMAT — TWO SHAPES, AND WHY BOTH EXIST
         Payload: {"value": 72.5, "ts": "..."}    (ts optional)
                  A bare number ("72.5") is also accepted.
 
-    BUNDLED (one topic carries a whole gateway). Chosen per tag by filling in
-    "Field" in R-Net → Analisis → Sumber:
+    BUNDLED (one topic carries a whole gateway). Nothing selects this shape —
+    it is decided per MESSAGE, by whether the sensor's name resolves inside the
+    payload. There is exactly ONE box to fill:
 
-        Topic:   rnet/lombok/gw/lombok1        (tag's mqtt_topic)
-        Field:   waterlevel1                   (tag's mqtt_field)
-        Payload: {"site":"lombok","gateway":"lombok1","ts":"...",
-                  "values":{"waterlevel1":12.5,"temperature1":90.8, ...}}
+        Topic:      rnet/lombok/gw/lombok1     (tag's mqtt_topic)
+        Perangkat:  waterlevel1                (tag's device_key)
+        Payload:    {"site":"lombok","gateway":"lombok1","ts":"...",
+                     "values":{"waterlevel1":12.5,"temperature1":90.8, ...}}
+
+    "Perangkat" is the value's name AT THE SOURCE. When one topic carries
+    several gateways it must be qualified — `lombok1.waterlevel1` — because
+    every line has a `waterlevel1` and the name alone cannot say which tank.
 
     The second shape is not a convenience. One topic per tag means one MQTT
     message per reading: at 300 sensors that is ~100 messages a second on a
@@ -82,10 +87,11 @@ PAYLOAD FORMAT — TWO SHAPES, AND WHY BOTH EXIST
     live plant for the same readings. The bytes barely move — the packets do,
     and packets are what a small broker runs out of first.
 
-    A field name that never appears in the payload is logged ONCE per
-    (topic, field) with the names that WERE present. That log line is the whole
+    A name that never appears in a bundled payload is logged ONCE per
+    (topic, name) with the names that WERE present. That log line is the whole
     difference between "this sensor is empty and nobody knows why" and a typo
-    you can see.
+    you can see. Plain topics never trigger it: a payload with fewer than two
+    values is not treated as a bundle at all.
 
 RUN
     Local test (Windows):  start-bridge.bat
@@ -232,14 +238,12 @@ class SiteCfg:
     port: int
     username: str | None
     password: str | None
-    # topic -> {field or None -> tag_id} for every enabled MQTT tag on this site.
-    #
-    # The inner key is the tag's mqtt_field: None means "this topic carries one
-    # bare number and this tag takes it", a string means "this topic carries a
-    # bundle and this tag takes that one name out of it". Nesting rather than a
-    # flat topic->tag_id map is the entire structural change needed for bundled
-    # payloads — one topic can now feed 300 tags instead of exactly one.
-    routes: dict[str, dict[str | None, str]] = field(default_factory=dict)
+    # topic -> {name -> tag_id} for every enabled MQTT tag on this site, where
+    # `name` is the tag's "Perangkat" (device_key) — the value's name at the
+    # source. Nesting rather than a flat topic->tag_id map is the entire
+    # structural change needed for bundled payloads: one topic can now feed 300
+    # tags instead of exactly one.
+    routes: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def _parse_interval(config: dict | None, levels: dict[str, int]) -> tuple[int, bool]:
@@ -351,7 +355,7 @@ _NOT_MINE = object()
 def _resolve_field(fld: str, gw: str | None, values: dict[str, float]):
     """Pick this tag's value out of a bundled packet.
 
-    TWO WAYS TO NAME A FIELD, and the difference is what keeps two lines apart:
+    TWO WAYS TO WRITE "Perangkat", and the difference keeps two lines apart:
 
         waterlevel1            bare — "whatever gateway sent this packet"
         lombok1.waterlevel1    qualified — that gateway only
@@ -450,9 +454,8 @@ class Bridge:
         # the tag reading it is mixing two physical sensors — see
         # _check_field_collision.
         self._field_gws: dict[tuple[str, str], set[str]] = {}
-        # topic -> gateway names actually seen publishing there. Decides whether
-        # a tag's "Perangkat" is a gateway filter — see _gateway_filter_applies.
-        self._gws_seen: dict[str, set[str]] = {}
+        # (topic, name) yang sudah diperingatkan soal sisa config.mqtt_field
+        self._legacy_warned: set[tuple[str, str]] = set()
         # Topic monitor (scada_topic_probe): newest parsed payload waiting to
         # be written, keyed (topic, gateway); plus when each was last written.
         self._probe_pending: dict[tuple[str, str], tuple[datetime, dict]] = {}
@@ -749,33 +752,27 @@ class Bridge:
                 topic = cfg.get("mqtt_topic")
                 if isinstance(topic, str) and topic.strip():
                     topic = topic.strip()
-                    # None = this tag takes the topic's bare value; a string =
-                    # it takes that one name out of a bundled payload.
-                    raw_field = cfg.get("mqtt_field")
-                    fld = (
-                        raw_field.strip()
-                        if isinstance(raw_field, str) and raw_field.strip()
-                        else None
-                    )
-                    # "Perangkat" doubles as the gateway this sensor sits on.
-                    # It is the column that already means "which device is this"
-                    # — see _resolve_field for how it disambiguates.
-                    dev = device_key.strip() if isinstance(device_key, str) else ""
-                    key = (fld, dev or None)
+                    # ONE box, and it is the column that already exists:
+                    # "Perangkat" holds the value's name at the source
+                    # ("waterlevel1", or "lombok1.waterlevel1" when one topic
+                    # carries several gateways). For a plain single-value topic
+                    # it matches nothing and is simply a label, as it always was.
+                    name = (device_key or "").strip()
+                    if not name:
+                        continue
+                    if cfg.get("mqtt_field"):
+                        self._warn_legacy_field(site_id, topic, name)
                     slot = site.routes.setdefault(topic, {})
-                    if key in slot and slot[key] != str(tag_id):
-                        # Two tags claiming the same (topic, field, perangkat) is
-                        # a config mistake that is otherwise invisible: one of
-                        # them just never receives anything, forever.
+                    if name in slot and slot[name] != str(tag_id):
+                        # Two sensors claiming one name on one topic: the loser
+                        # never receives anything, forever, with no error.
                         log.warning(
-                            "Site %s topik %s%s%s: dipakai lebih dari satu sensor "
-                            "— hanya satu yang akan menerima nilai. Beri Perangkat "
-                            "yang berbeda (nama gateway) di R-Net > Analisis.",
-                            site_id, topic,
-                            f" field '{fld}'" if fld else "",
-                            f" perangkat '{dev}'" if dev else "",
+                            "Site %s topik %s: Perangkat '%s' dipakai lebih dari "
+                            "satu sensor — hanya satu yang akan menerima nilai. "
+                            "Beri nama berbeda di R-Net > Analisis.",
+                            site_id, topic, name,
                         )
-                    slot[key] = str(tag_id)
+                    slot[name] = str(tag_id)
                     site_of[str(tag_id)] = str(site_id)
                     xform[str(tag_id)] = _parse_transform(config)
                     interval[str(tag_id)], is_ring = _parse_interval(config, self._levels)
@@ -785,37 +782,24 @@ class Bridge:
 
     # -- mqtt callbacks (paho v2 signatures) ------------------------------- #
 
-    def _gateway_filter_applies(self, topic: str, dev: str | None) -> bool:
-        """Is this tag's "Perangkat" actually the name of a gateway here?
-
-        Perangkat is free text and predates any of this — live tags carry things
-        like "boiler1" in it. Treating it as a gateway filter unconditionally
-        would silence every one of them the moment a packet arrives from a
-        gateway with a different name. So it only filters once that exact name
-        has been SEEN publishing on this topic; anything else is left alone and
-        behaves exactly as before.
-
-        Cost of the caution: in the seconds before a gateway's first packet, a
-        tag pinned to it can accept one reading from a sibling. It corrects
-        itself on that gateway's first message and only matters on a shared
-        topic, which is the configuration this is here to rescue in the first
-        place."""
-        return bool(dev) and dev in self._gws_seen.get(topic, ())
-
     @staticmethod
     def _qos_for(slot: dict) -> int:
-        """QoS 1 for bundled topics, QoS 0 for plain ones.
+        """QoS 1 for topics feeding SEVERAL sensors, QoS 0 for single ones.
 
         Bundling changed the cost of a dropped packet: one lost message used to
         cost one reading, now it costs every sensor on that gateway. QoS 1 makes
         the broker retry instead of shrugging, which is exactly the trade a
-        7-in-1 packet is worth — and only there, so single-value topics keep the
-        behaviour they have had all along.
+        7-in-1 packet is worth.
+
+        Several sensors on one topic IS the definition of a bundle, so the tag
+        count decides it — the config no longer records a shape (that is settled
+        per message now, see _on_message). A single-sensor topic keeps the QoS 0
+        it has always had, whether or not its payload happens to be bundled.
 
         The delivered QoS is min(published, subscribed), so this only takes
         effect for publishers that already send at 1 (the R-Net Node-RED flow
         does). Asking for 1 against a QoS 0 publisher is harmless."""
-        return 1 if any(fld is not None for fld, _dev in slot) else 0
+        return 1 if len(slot) > 1 else 0
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         site_id = userdata
@@ -837,60 +821,58 @@ class Bridge:
         if not slot:
             return  # not a topic we care about
 
-        # Record what this topic is sending BEFORE deciding how to read it. A
-        # tag whose Field is still empty parses as "plain" and its bundled
-        # payload is rejected below — which is exactly the moment the operator
-        # most needs to see the field names. Probing first means the monitor
-        # helps precisely when the configuration is still wrong.
+        # Record what this topic is sending BEFORE trying to read it. A sensor
+        # whose name does not match anything is exactly the case where the
+        # operator most needs to see what the gateway actually sends, so the
+        # monitor has to be filled even when the configuration is wrong.
         self._probe(msg.topic, msg.payload)
 
-        # Which shape? Decided by the CONFIG, not by sniffing the payload: a
-        # topic whose tags declare no field is a plain one, anything else is a
-        # bundle. Guessing from the bytes would make a plain reading of `{}`
-        # behave differently from a plain reading of `5`.
-        if all(fld is None for fld, _dev in slot):
+        # BUNDLE FIRST, PLAIN AS THE FALLBACK — decided per MESSAGE, not per
+        # config. There is only one box to fill now ("Perangkat" = the value's
+        # name at the source), so the config can no longer say which shape a
+        # topic has. It does not need to: a name either resolves inside the
+        # payload or it does not.
+        #
+        # This ordering is what keeps every existing sensor working. A plain
+        # topic sends `72.5` (not an object at all) or `{"value": 72.5}`, and no
+        # sensor is named "value", so nothing resolves and the plain path takes
+        # over — exactly the old behaviour, with nothing to configure.
+        pairs: list[tuple[str, float]] = []
+        parsed = _coerce_bulk(msg.payload)
+        gw, values = (parsed if parsed is not None else (None, {}))
+        bundled = len(values) >= 2
+        misses: list[str] = []
+        for name, tag_id in slot.items():
+            raw = _resolve_field(name, gw, values)
+            if raw is _NOT_MINE:
+                continue  # named for another gateway — not missing
+            if raw is None:
+                misses.append(name)
+                continue
+            if gw is not None and "." not in name:
+                self._check_field_collision(site_id, msg.topic, name, gw)
+            pairs.append((tag_id, raw))
+
+        if not pairs:
             raw = _coerce_value(msg.payload)
             if raw is None:
-                log.debug(
-                    "Site %s topik %s: payload tidak valid, dilewati",
-                    site_id, msg.topic,
-                )
+                if bundled:
+                    # A real bundle where NO name matched is a typo, not a plain
+                    # topic. Only worth saying once, and only with the names
+                    # that were actually sent.
+                    for name in misses:
+                        self._warn_missing_field(site_id, msg.topic, name, values)
+                else:
+                    log.debug(
+                        "Site %s topik %s: payload tidak terbaca, dilewati",
+                        site_id, msg.topic,
+                    )
                 return
+            # One bare number: every sensor on this topic reads the same value.
             pairs = [(tag_id, raw) for tag_id in slot.values()]
-        else:
-            parsed = _coerce_bulk(msg.payload)
-            if parsed is None:
-                log.debug(
-                    "Site %s topik %s: paket gabungan tidak terbaca, dilewati",
-                    site_id, msg.topic,
-                )
-                return
-            gw, values = parsed
-            if gw:
-                self._gws_seen.setdefault(msg.topic, set()).add(gw)
-            pairs = []
-            for (fld, dev), tag_id in slot.items():
-                if fld is None:
-                    continue  # plain tag sharing a bundled topic — nothing to take
-                # "Perangkat" pins a sensor to one gateway. Checked before the
-                # value is even looked up: on a shared topic every gateway sends
-                # `waterlevel1`, so without this the tag takes whichever
-                # published last (see _check_field_collision).
-                if gw and dev != gw and self._gateway_filter_applies(msg.topic, dev):
-                    continue
-                raw = _resolve_field(fld, gw, values)
-                if raw is _NOT_MINE:
-                    continue  # addressed to another gateway — not missing
-                if raw is None:
-                    self._warn_missing_field(site_id, msg.topic, fld, values)
-                    continue
-                if gw is not None and "." not in fld and not (
-                    dev and self._gateway_filter_applies(msg.topic, dev)
-                ):
-                    self._check_field_collision(site_id, msg.topic, fld, gw)
-                pairs.append((tag_id, raw))
-            if not pairs:
-                return
+        elif bundled and misses:
+            for name in misses:
+                self._warn_missing_field(site_id, msg.topic, name, values)
 
         # Scale/tune each raw sensor value before storing (config set in R-Net).
         rows = [
@@ -996,6 +978,26 @@ class Bridge:
         except Exception:
             log.debug("Gagal menyimpan pemantau topik (diabaikan)", exc_info=True)
 
+    def _warn_legacy_field(self, site_id: str, topic: str, name: str) -> None:
+        """A tag still carrying the old config.mqtt_field, which is now IGNORED.
+
+        There used to be two boxes — "Field" in the Sumber dialog and
+        "Perangkat" in the table — and nobody could tell which did what. There
+        is one now, and it is Perangkat. A leftover mqtt_field is silently
+        inert, which is the same confusion in a new costume, so it says so out
+        loud exactly once."""
+        key = (topic, name)
+        if key in self._legacy_warned:
+            return
+        self._legacy_warned.add(key)
+        log.warning(
+            "Site %s topik %s: sensor ini masih menyimpan 'Field' lama dan itu "
+            "SUDAH TIDAK DIPAKAI. Yang dibaca sekarang kolom Perangkat ('%s'). "
+            "Buka R-Net > Analisis > Sumber lalu Simpan sekali untuk "
+            "membersihkannya.",
+            site_id, topic, name,
+        )
+
     def _check_field_collision(
         self, site_id: str, topic: str, fld: str, gw: str
     ) -> None:
@@ -1017,11 +1019,10 @@ class Bridge:
         if len(seen) < 2:
             return
         log.warning(
-            "Site %s topik %s: field '%s' dikirim oleh %d gateway sekaligus "
-            "(%s) — nilai sensor ini BERCAMPUR dari beberapa alat. Perbaiki "
-            "salah satu: pakai topik per gateway (rnet/<site>/gw/<gateway>), "
-            "atau tulis Field lengkap '<gateway>.%s' di R-Net > Analisis > "
-            "Sumber.",
+            "Site %s topik %s: '%s' dikirim oleh %d gateway sekaligus (%s) — "
+            "nilai sensor ini BERCAMPUR dari beberapa alat. Perbaiki salah "
+            "satu: pakai topik per gateway (rnet/<site>/gw/<gateway>), atau "
+            "tulis Perangkat lengkap '<gateway>.%s' di R-Net > Analisis.",
             site_id, topic, fld, len(seen), ", ".join(sorted(seen)), fld,
         )
 
@@ -1093,7 +1094,7 @@ class Bridge:
         # that was wrong, got fixed, and is wrong again must warn again.
         self._missing_warned.clear()
         self._field_gws.clear()
-        self._gws_seen.clear()
+        self._legacy_warned.clear()
         self._site_of_topic = {
             topic: sid for sid, site in sites.items() for topic in site.routes
         }

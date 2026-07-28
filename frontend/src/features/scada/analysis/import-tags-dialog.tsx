@@ -23,12 +23,12 @@ import type { Site } from "../types";
 /** Kolom yang dikenali, sesuai urutan contoh. Nama header tidak wajib urut —
  *  yang dibaca adalah namanya, bukan posisinya. */
 const KOLOM = [
-  "nama", "satuan", "topik", "field", "perangkat",
+  "nama", "satuan", "topik", "perangkat",
   "level", "simpan", "alarm_min", "alarm_max", "warn_min", "warn_max",
   "skala", "offset", "desimal",
 ] as const;
 
-const CONTOH = `nama,satuan,topik,field,level,simpan,alarm_min,alarm_max
+const CONTOH = `nama,satuan,topik,perangkat,level,simpan,alarm_min,alarm_max
 Level Tangki 1,cm,rnet/lombok/gw/lombok1,waterlevel1,fast,,0,200
 Level Tangki 2,cm,rnet/lombok/gw/lombok1,waterlevel2,fast,,0,200
 Suhu Heating,°C,rnet/lombok/gw/lombok1,temperature1,slow,ya,60,95`;
@@ -114,6 +114,7 @@ export function ImportTagsDialog({
       let galat: string | null = null;
       if (!nilai.nama) galat = "kolom 'nama' kosong";
       else if (!nilai.topik) galat = "kolom 'topik' kosong";
+      else if (!nilai.perangkat) galat = "kolom 'perangkat' kosong";
       else if (nilai.level && !LEVELS.includes(nilai.level.toLowerCase()))
         galat = `level '${nilai.level}' tidak dikenal (fastest/fast/slow/slowest)`;
       else if (ya(nilai.simpan ?? "") && nilai.level &&
@@ -139,7 +140,6 @@ export function ImportTagsDialog({
           label: nilai.nama,
           unit: nilai.satuan ?? "",
           mqtt_topic: nilai.topik,
-          mqtt_field: nilai.field ?? "",
           device_key: nilai.perangkat ?? "",
           sampling_level: nilai.level ? nilai.level.toLowerCase() : null,
           store_enabled: ya(nilai.simpan ?? ""),
@@ -290,7 +290,7 @@ export function ImportTagsDialog({
                         <th className="px-2 py-1.5 text-left font-semibold">#</th>
                         <th className="px-2 py-1.5 text-left font-semibold">Nama</th>
                         <th className="px-2 py-1.5 text-left font-semibold">Topik</th>
-                        <th className="px-2 py-1.5 text-left font-semibold">Field</th>
+                        <th className="px-2 py-1.5 text-left font-semibold">Perangkat</th>
                         <th className="px-2 py-1.5 text-left font-semibold">Catatan</th>
                       </tr>
                     </thead>
@@ -313,7 +313,7 @@ export function ImportTagsDialog({
                               {b.nilai.topik || "—"}
                             </td>
                             <td className="px-2 py-1 font-mono text-[10.5px] text-text-muted">
-                              {b.nilai.field || <span className="text-text-light">—</span>}
+                              {b.nilai.perangkat || <span className="text-text-light">—</span>}
                             </td>
                             <td className="px-2 py-1 text-red">{pesan ?? ""}</td>
                           </tr>

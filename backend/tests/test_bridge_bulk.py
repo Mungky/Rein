@@ -64,8 +64,8 @@ REAL_PACKET = (
 def _bridge(tmp_path, fields, topic=TOPIC):
     """A bridge wired to `fields` (name -> tag id) on one bundled topic."""
     br = Bridge("", buffer_path=str(tmp_path / "buf.db"))
-    # kunci rute sekarang (field, perangkat); perangkat None = tanpa penyaring
-    br._routes = {SITE: {topic: {(name, None): tid for name, tid in fields.items()}}}
+    # rute = {nama-di-sumber (kolom Perangkat) -> tag_id}
+    br._routes = {SITE: {topic: dict(fields)}}
     br._xform = {tid: (1.0, 0.0, None) for tid in fields.values()}
     return br
 
@@ -227,7 +227,7 @@ def test_plain_single_value_topics_still_work(tmp_path):
     is a plant going dark."""
     tag = str(uuid.uuid4())
     br = Bridge("", buffer_path=str(tmp_path / "buf.db"))
-    br._routes = {SITE: {"rnet/lombok/line1/level1": {(None, None): tag}}}
+    br._routes = {SITE: {"rnet/lombok/line1/level1": {"DEV-01": tag}}}
     br._xform = {tag: (1.0, 0.0, None)}
 
     br._on_message(None, SITE, FakeMsg("rnet/lombok/line1/level1", b'{"value": 72.5}'))
@@ -242,7 +242,7 @@ def test_a_bundle_arriving_on_a_plain_topic_is_rejected_not_guessed(tmp_path):
     a plain topic would behave differently depending on what arrived."""
     tag = str(uuid.uuid4())
     br = Bridge("", buffer_path=str(tmp_path / "buf.db"))
-    br._routes = {SITE: {TOPIC: {(None, None): tag}}}
+    br._routes = {SITE: {TOPIC: {"DEV-01": tag}}}
     br._xform = {tag: (1.0, 0.0, None)}
 
     br._on_message(None, SITE, FakeMsg(TOPIC, REAL_PACKET))
@@ -355,87 +355,118 @@ def test_a_dotted_field_name_from_the_gateway_still_works(tmp_path):
     assert br._pending[tag] == 7.5
 
 
-# --- "Perangkat" sebagai penunjuk gateway ---------------------------------
+# --- "Perangkat" = nama nilai itu di sumbernya ------------------------------
 #
-# Kolom Perangkat sudah ada jauh sebelum ini dan artinya memang "sensor ini
-# menempel di alat mana". Dipakai ulang sebagai penyaring gateway supaya tidak
-# ada kolom baru dan tidak ada awalan yang harus diketik/diingat.
+# SATU kotak, bukan dua. Sebelumnya ada "Field" di dialog Sumber DAN "Perangkat"
+# di tabel, dan tidak ada yang bisa membedakan mana untuk apa. Sekarang cuma
+# Perangkat, kolom yang memang sudah ada dan memang artinya "nilai ini namanya
+# apa di alat sana".
 #
-# Syaratnya satu, dan itu yang paling diuji di sini: TIDAK BOLEH mendiamkan tag
-# lama. Tag hidup hari ini berisi "boiler1", "SIM-01", dan sejenisnya di kolom
-# itu — kalau nama tak dikenal diperlakukan sebagai penyaring, semuanya berhenti
-# menerima nilai begitu paket datang dari gateway bernama lain.
+# Yang paling dijaga di sini: 14 sensor produksi memakai topik bernilai tunggal
+# dan Perangkat-nya berisi "DEV-01", "boiler1", dan sejenisnya. Nama-nama itu
+# tidak cocok dengan apa pun di payload, dan HARUS jatuh ke jalur polos —
+# kalau tidak, seluruh plant diam seketika.
 
 
 def _bridge_dev(tmp_path, entries, topic=ALL):
-    """entries: {(field, perangkat): tag_id}"""
+    """entries: {nama-di-kolom-Perangkat: tag_id}"""
     br = Bridge("", buffer_path=str(tmp_path / "buf.db"))
     br._routes = {SITE: {topic: dict(entries)}}
     br._xform = {tid: (1.0, 0.0, None) for tid in entries.values()}
     return br
 
 
-def test_perangkat_memisahkan_dua_line_di_satu_topik(tmp_path):
-    """Kasus 28 Juli, diperbaiki tanpa mengetik awalan apa pun."""
+def test_nama_polos_mengambil_nilai_dari_paket_gabungan(tmp_path):
+    tag = str(uuid.uuid4())
+    br = _bridge_dev(tmp_path, {"waterlevel1": tag}, topic=TOPIC)
+
+    br._on_message(None, SITE, FakeMsg(TOPIC, REAL_PACKET))
+
+    assert br._pending[tag] == 12.0
+
+
+def test_nama_lengkap_juga_benar_di_topik_per_gateway(tmp_path):
+    """Ini yang membuat tombol salin di Pemantau Topik boleh SELALU menyertakan
+    nama gateway: bentuk lengkap benar di kedua macam topik.
+
+    Di topik per gateway, `lombok1.waterlevel1` tidak ada harfiah di paket —
+    awalannya dikupas karena cocok dengan gateway paket itu. Kalau ini tidak
+    berlaku, orang harus menebak kapan memakai awalan dan kapan tidak, dan
+    salahnya tidak bergejala."""
+    tag = str(uuid.uuid4())
+    br = _bridge_dev(tmp_path, {"lombok1.waterlevel1": tag}, topic=TOPIC)
+
+    br._on_message(None, SITE, FakeMsg(TOPIC, REAL_PACKET))
+
+    assert br._pending[tag] == 12.0
+
+
+def test_nama_berawalan_gateway_memisahkan_dua_line(tmp_path):
+    """Satu topik untuk seluruh plant: yang membedakan adalah awalan gateway di
+    kolom Perangkat. Ini kasus 28 Juli."""
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
     br = _bridge_dev(tmp_path, {
-        ("waterlevel1", "lombok1"): a,
-        ("waterlevel1", "lombok2"): b,
+        "lombok1.waterlevel1": a,
+        "lombok2.waterlevel1": b,
     })
 
-    br._on_message(None, SITE, FakeMsg(ALL, L1))
-    br._on_message(None, SITE, FakeMsg(ALL, L2))
-    br._on_message(None, SITE, FakeMsg(ALL, L1))
-    br._on_message(None, SITE, FakeMsg(ALL, L2))
+    for _ in range(3):
+        br._on_message(None, SITE, FakeMsg(ALL, L1))
+        br._on_message(None, SITE, FakeMsg(ALL, L2))
 
-    assert br._pending[a] == 12.0     # Line 1 tetap 12, tidak pernah jadi 0
-    assert br._pending[b] == 0.0
+    assert br._pending[a] == 12.0     # Line 1 tidak pernah jadi 0
+    assert br._pending[b] == 0.0      # dua tangki, dua kolom
 
 
-def test_perangkat_asing_tidak_mendiamkan_tag_lama(tmp_path):
-    """SATU-SATUNYA cara perubahan ini bisa merusak produksi. 'boiler1' bukan
-    nama gateway mana pun, jadi tag itu harus tetap menerima nilai apa adanya."""
+def test_sensor_produksi_bernilai_tunggal_tetap_jalan(tmp_path):
+    """SATU-SATUNYA cara perubahan ini bisa memadamkan plant. "DEV-01" tidak
+    cocok dengan apa pun, jadi payload polos harus tetap terbaca."""
     tag = str(uuid.uuid4())
-    br = _bridge_dev(tmp_path, {("waterlevel1", "boiler1"): tag})
+    br = _bridge_dev(tmp_path, {"DEV-01": tag}, topic="rnet/lombok/line1/level1")
 
-    br._on_message(None, SITE, FakeMsg(ALL, L1))
+    br._on_message(None, SITE, FakeMsg("rnet/lombok/line1/level1", b"72.5"))
+    assert br._pending[tag] == 72.5
 
-    assert br._pending[tag] == 12.0
-
-
-def test_perangkat_kosong_berperilaku_seperti_sebelumnya(tmp_path):
-    tag = str(uuid.uuid4())
-    br = _bridge_dev(tmp_path, {("waterlevel1", None): tag})
-
-    br._on_message(None, SITE, FakeMsg(ALL, L1))
-
-    assert br._pending[tag] == 12.0
+    br._on_message(None, SITE, FakeMsg("rnet/lombok/line1/level1", b'{"value": 73.5}'))
+    assert br._pending[tag] == 73.5
 
 
-def test_perangkat_mulai_menyaring_setelah_gateway_itu_terlihat(tmp_path):
-    """Penyaring baru menyala setelah nama itu terbukti ada di topik ini —
-    itulah yang membuat nama asing aman. Konsekuensinya: satu paket pertama
-    bisa lolos sebelum gateway-nya sempat memperkenalkan diri."""
-    tag = str(uuid.uuid4())
-    br = _bridge_dev(tmp_path, {("waterlevel1", "lombok2"): tag})
+def test_nama_yang_tidak_cocok_di_paket_gabungan_dilaporkan(tmp_path, caplog):
+    """Paket JELAS gabungan tapi tidak ada nama yang cocok = salah ketik, bukan
+    topik polos. Harus bersuara, sekali, dengan daftar nama yang benar."""
+    br = _bridge_dev(tmp_path, {"WaterLevel9": str(uuid.uuid4())}, topic=TOPIC)
 
-    br._on_message(None, SITE, FakeMsg(ALL, L1))   # lombok2 belum pernah terlihat
-    assert br._pending[tag] == 12.0                # lolos, sekali
+    with caplog.at_level(logging.WARNING):
+        for _ in range(10):
+            br._on_message(None, SITE, FakeMsg(TOPIC, REAL_PACKET))
 
-    br._on_message(None, SITE, FakeMsg(ALL, L2))   # lombok2 memperkenalkan diri
-    assert br._pending[tag] == 0.0
-    br._on_message(None, SITE, FakeMsg(ALL, L1))   # sejak sekarang disaring
-    assert br._pending[tag] == 0.0
+    assert br._pending == {}
+    pesan = "\n".join(r.getMessage() for r in caplog.records)
+    assert "WaterLevel9" in pesan and "waterlevel1" in pesan
+    assert len(caplog.records) == 1
 
 
-def test_perangkat_yang_benar_mematikan_peringatan_tabrakan(tmp_path, caplog):
-    """Sudah dipisahkan Perangkat = tidak ada yang bercampur = tidak ada yang
-    perlu diperingatkan. Peringatan yang tetap muncul setelah diperbaiki adalah
+def test_satu_nama_meleset_tidak_menjatuhkan_yang_lain(tmp_path, caplog):
+    baik, salah = str(uuid.uuid4()), str(uuid.uuid4())
+    br = _bridge_dev(tmp_path, {"waterlevel1": baik, "salahketik": salah},
+                     topic=TOPIC)
+
+    with caplog.at_level(logging.WARNING):
+        br._on_message(None, SITE, FakeMsg(TOPIC, REAL_PACKET))
+
+    assert br._pending[baik] == 12.0
+    assert salah not in br._pending
+    assert any("salahketik" in r.getMessage() for r in caplog.records)
+
+
+def test_awalan_yang_benar_mematikan_peringatan_tabrakan(tmp_path, caplog):
+    """Sudah dipisahkan = tidak ada yang bercampur = tidak ada yang perlu
+    diperingatkan. Peringatan yang tetap muncul setelah diperbaiki adalah
     peringatan yang mulai diabaikan."""
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
     br = _bridge_dev(tmp_path, {
-        ("waterlevel1", "lombok1"): a,
-        ("waterlevel1", "lombok2"): b,
+        "lombok1.waterlevel1": a,
+        "lombok2.waterlevel1": b,
     })
 
     with caplog.at_level(logging.WARNING):
@@ -446,14 +477,11 @@ def test_perangkat_yang_benar_mematikan_peringatan_tabrakan(tmp_path, caplog):
     assert caplog.records == []
 
 
-def test_dua_tag_identik_termasuk_perangkat_tetap_dilaporkan(tmp_path):
-    """Perangkat memisahkan, tapi dua tag yang benar-benar sama persis tetap
-    bentrok — dan itu ditangkap saat konfigurasi dibaca, bukan di sini."""
-    a, b = str(uuid.uuid4()), str(uuid.uuid4())
-    br = _bridge_dev(tmp_path, {("waterlevel1", "lombok1"): a})
-    # kunci yang sama menimpa — persis yang diperingatkan load_config
-    br._routes[SITE][ALL][("waterlevel1", "lombok1")] = b
-    assert len(br._routes[SITE][ALL]) == 1
+def test_topik_polos_hanya_di_subscribe_qos_0(tmp_path):
+    """Jumlah sensor di satu topik yang menentukan, karena konfigurasi tidak
+    lagi menyimpan bentuk paket."""
+    assert Bridge._qos_for({"DEV-01": "t1"}) == 0
+    assert Bridge._qos_for({"waterlevel1": "t1", "waterlevel2": "t2"}) == 1
 
 
 # --- delivery guarantee scales with what a lost packet costs --------------
@@ -463,12 +491,12 @@ def test_a_bundled_topic_is_subscribed_at_qos_1():
     """One dropped message used to cost one reading; bundled it costs every
     sensor on the gateway. Measured on the pilot: the QoS 0 lane lost 231 of
     34 692 readings over 2 h, the QoS 1 lane lost 0."""
-    assert Bridge._qos_for({("waterlevel1", None): "t1", ("temperature1", None): "t2"}) == 1
+    assert Bridge._qos_for({"waterlevel1": "t1", "temperature1": "t2"}) == 1
 
 
 def test_a_plain_topic_keeps_qos_0():
     """Unchanged for every sensor currently in production."""
-    assert Bridge._qos_for({(None, None): "t1"}) == 0
+    assert Bridge._qos_for({"DEV-01": "t1"}) == 0
 
 
 # --- one packet, one disk transaction -------------------------------------
@@ -479,7 +507,7 @@ def test_a_packet_costs_one_disk_commit_not_one_per_sensor(tmp_path):
     to mean 300 DELETE+INSERT+COMMIT+count(*) cycles on the field PC's disk."""
     fields = {f"sensor{i}": str(uuid.uuid4()) for i in range(1, 8)}
     br = Bridge("", buffer_path=str(tmp_path / "buf.db"))
-    br._routes = {SITE: {TOPIC: {(f, None): t for f, t in fields.items()}}}
+    br._routes = {SITE: {TOPIC: dict(fields)}}
     br._xform = {tid: (1.0, 0.0, None) for tid in fields.values()}
 
     # sqlite3.Connection.commit is read-only, so count through a proxy that

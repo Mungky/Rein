@@ -1090,17 +1090,17 @@ async def import_tags(
     # freely — they are different brokers.
     existing = (
         await db.execute(
-            select(ScadaTag.config).where(
+            select(ScadaTag.config, ScadaTag.device_key).where(
                 ScadaTag.site_id == body.site_id, ScadaTag.source == "mqtt"
             )
         )
     ).all()
     taken: set[tuple[str, str]] = set()
-    for (cfg,) in existing:
+    for cfg, dev in existing:
         cfg = cfg or {}
         topic = str(cfg.get("mqtt_topic") or "").strip()
         if topic:
-            taken.add((topic, str(cfg.get("mqtt_field") or "").strip()))
+            taken.add((topic, (dev or "").strip()))
 
     errors: list[dict] = []
     prepared: list[tuple[dict, object]] = []
@@ -1108,9 +1108,11 @@ async def import_tags(
 
     for i, row in enumerate(body.rows, start=1):
         topic = row.mqtt_topic.strip()
-        fld = row.mqtt_field.strip()
-        key = (topic, fld)
-        where = f"topik {topic}" + (f" field '{fld}'" if fld else "")
+        # "Perangkat" = the value's name at the source; it is what the bridge
+        # routes by, so it is also what has to be unique per topic.
+        dev = row.device_key.strip()
+        key = (topic, dev)
+        where = f"topik {topic} perangkat '{dev}'"
 
         if key in seen:
             errors.append({
@@ -1127,8 +1129,6 @@ async def import_tags(
         seen[key] = i
 
         config: dict = {"mqtt_topic": topic}
-        if fld:
-            config["mqtt_field"] = fld
         if row.sampling_level:
             config["sampling_level"] = row.sampling_level
         if row.store_enabled:
@@ -1165,7 +1165,7 @@ async def import_tags(
             site_id=body.site_id,
             # Sensible default: the gateway part of the topic is what an
             # operator would have typed into "perangkat" anyway.
-            device_key=row.device_key.strip() or config["mqtt_topic"].split("/")[-1],
+            device_key=row.device_key.strip(),
             label=row.label.strip(),
             unit=row.unit.strip(),
             enabled=True,

@@ -757,31 +757,37 @@ def test_a_field_has_an_upper_length():
 
 
 def _import_row(**overrides) -> dict:
-    body = {"label": "Level Tangki 1", "mqtt_topic": "rnet/lombok/gw/lombok1"}
+    body = {
+        "label": "Level Tangki 1",
+        "mqtt_topic": "rnet/lombok/gw/lombok1",
+        "device_key": "waterlevel1",
+    }
     body.update(overrides)
     return body
 
 
-def test_an_import_row_needs_only_a_name_and_a_topic():
-    """Everything else is optional so a two-column paste works — an operator
-    with just names and topics must not be blocked on filling in units."""
+def test_an_import_row_needs_a_name_a_topic_and_a_perangkat():
+    """Those three identify a value; everything else is optional so a
+    three-column paste works without filling in units or alarm bounds."""
     row = TagImportRow.model_validate(_import_row())
-    assert row.unit == "" and row.mqtt_field == "" and row.store_enabled is False
+    assert row.unit == "" and row.store_enabled is False
+    assert row.device_key == "waterlevel1"
 
 
 def test_an_import_row_carries_the_optional_settings():
     row = TagImportRow.model_validate(
         _import_row(
-            mqtt_field="waterlevel1", unit="cm", sampling_level="slow",
+            unit="cm", sampling_level="slow",
             store_enabled=True, alarm_min=0, alarm_max=200, scale=6.25, offset=-25,
         )
     )
-    assert row.mqtt_field == "waterlevel1"
     assert row.sampling_level == "slow"
     assert (row.scale, row.offset) == (6.25, -25.0)
 
 
-@pytest.mark.parametrize("bad", [{"label": ""}, {"mqtt_topic": ""}])
+@pytest.mark.parametrize(
+    "bad", [{"label": ""}, {"mqtt_topic": ""}, {"device_key": ""}]
+)
 def test_an_import_row_rejects_a_blank_required_field(bad):
     with pytest.raises(ValidationError):
         TagImportRow.model_validate(_import_row(**bad))
@@ -819,7 +825,7 @@ def test_three_hundred_rows_validate():
         "sheet_id": str(uuid.uuid4()),
         "site_id": str(uuid.uuid4()),
         "rows": [
-            _import_row(label=f"Sensor {i}", mqtt_field=f"tag{i}") for i in range(300)
+            _import_row(label=f"Sensor {i}", device_key=f"tag{i}") for i in range(300)
         ],
     }
     assert len(TagImportRequest.model_validate(body).rows) == 300

@@ -348,7 +348,9 @@ export function AnalysisView({
       const tag = await scadaApi.createTag({
         sheet_id: activeSheet.id,
         label: "Tag Baru",
-        device_key: "DEV-01",
+        // Diisi nama nilai di sumbernya begitu sensor dipasang ke
+        // topik gabungan; untuk topik bernilai tunggal ini cuma label.
+        device_key: "-",
         unit: "",
         config: {},
       });
@@ -385,11 +387,10 @@ export function AnalysisView({
       const site = store.sites.find((s) => s.id === tag.site_id);
       const cfg = tag.config as Record<string, unknown>;
       const topic = String(cfg.mqtt_topic ?? "");
-      const field = String(cfg.mqtt_field ?? "");
       // Kalau satu topik dipakai bersama (paket gabungan), ujung topiknya sama
-      // untuk semua sensor ("…/bulk") — yang membedakan justru fieldnya, jadi
-      // itu yang ditampilkan.
-      const short = field || topic.split("/").pop() || topic;
+      // untuk semua sensor — yang membedakan justru kolom Perangkat, jadi itu
+      // yang ditampilkan.
+      const short = tag.device_key || topic.split("/").pop() || topic;
       return `Node-RED · ${site?.name ?? "?"}${short ? ` / ${short}` : ""}`;
     }
     return "Belum diatur";
@@ -703,7 +704,10 @@ export function AnalysisView({
                   Nama {sortMark("label")}
                 </th>
                 <th className={thSortable} onClick={() => toggleSort("device_key")}>
-                  Perangkat {sortMark("device_key")}
+                  <span title="Nama nilai ini di sumbernya — dipakai untuk mengambil satu nilai dari topik yang membawa banyak nilai sekaligus">
+                    Perangkat
+                  </span>{" "}
+                  {sortMark("device_key")}
                 </th>
                 <th className={thBase}>Sumber</th>
                 <th className={thSortable} onClick={() => toggleSort("unit")}>
