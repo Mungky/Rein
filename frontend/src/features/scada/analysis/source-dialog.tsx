@@ -233,26 +233,24 @@ export function SourceDialog({
                     unik — tiap line punya waterlevel1. */}
                 <div className="mt-2 rounded-[var(--r)] border border-border-soft bg-bg-sidebar px-2.5 py-2 text-[11px] text-text-muted">
                   <div className="mb-1 font-semibold text-text">
-                    Pakai awalan gateway atau tidak?
+                    Kalau satu topik memuat beberapa gateway
                   </div>
-                  <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
-                    <span className="font-mono text-text-muted">…/gw/lombok1</span>
-                    <span>
-                      topik sudah menyebut gateway →{" "}
-                      <span className="font-mono text-text">waterlevel1</span>
-                    </span>
-                    <span className="font-mono text-text-muted">…/lombok/all</span>
-                    <span>
-                      satu topik banyak gateway →{" "}
-                      <span className="font-mono text-text">lombok1.waterlevel1</span>
-                    </span>
-                  </div>
-                  <p className="mt-1.5">
+                  <p>
                     Setiap line punya <span className="font-mono">waterlevel1</span>.
-                    Kalau satu topik memuat beberapa gateway dan Field ditulis
-                    polos, sensor ini akan <span className="font-semibold">bergantian
-                    membaca dua tangki berbeda</span> — tanpa error, tanpa data
-                    hilang, jumlah barisnya justru bertambah.
+                    Yang membedakannya: isi kolom{" "}
+                    <span className="font-semibold text-text">Perangkat</span> di
+                    tabel Analisis dengan{" "}
+                    <span className="font-mono text-text">nama gateway</span>-nya
+                    (mis. <span className="font-mono">lombok1</span>) — Field-nya
+                    tetap ditulis polos.
+                  </p>
+                  <p className="mt-1.5">
+                    Tanpa itu, sensor ini{" "}
+                    <span className="font-semibold">bergantian membaca dua alat
+                    berbeda</span>: tanpa error, tanpa data hilang, jumlah barisnya
+                    justru bertambah. Kalau topiknya sudah satu per gateway
+                    (<span className="font-mono">…/gw/lombok1</span>), Perangkat
+                    boleh diisi apa saja.
                   </p>
                 </div>
                 {/* Jembatan (bridge) sudah bisa membaca paket gabungan, tapi

@@ -207,7 +207,8 @@
       "Bash(sed -n '/Urutan perbaikan/,$p' docs/AUDIT-CODEBASE-2026-07-25.md)",
       "Bash(xargs echo \"  penyebutan scada_ring di bridge laptop:\")",
       "Bash(kill %1)",
-      "Bash(grep -E \"^[A-Za-z]:\\\\\\\\\\\\\\\\|^/\")"
+      "Bash(grep -E \"^[A-Za-z]:\\\\\\\\\\\\\\\\|^/\")",
+      "Bash(grep -n \"slot\\\\[key\\\\]\\\\|slot = site.routes\\\\|setdefault\\(topic, {}\\)\\\\|set\\(slot\\) == \\\\|_qos_for\" deploy/data/bridge.py)"
     ]
   }
 }

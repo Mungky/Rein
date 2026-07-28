@@ -446,6 +446,9 @@ class Bridge:
         # the tag reading it is mixing two physical sensors — see
         # _check_field_collision.
         self._field_gws: dict[tuple[str, str], set[str]] = {}
+        # topic -> gateway names actually seen publishing there. Decides whether
+        # a tag's "Perangkat" is a gateway filter — see _gateway_filter_applies.
+        self._gws_seen: dict[str, set[str]] = {}
         # tag_id -> (scale, offset, decimals) applied to the raw value on ingest
         self._xform: dict[str, Transform] = {}
         self._conn: psycopg.Connection | None = None
@@ -725,10 +728,10 @@ class Bridge:
             # Tags of other sites are dropped by the `sites.get(...) is None`
             # guard below, so this query needs no extra filter.
             cur.execute(
-                "SELECT id, site_id, config FROM scada_tags "
+                "SELECT id, site_id, device_key, config FROM scada_tags "
                 "WHERE source = 'mqtt' AND enabled = true AND site_id IS NOT NULL"
             )
-            for tag_id, site_id, config in cur.fetchall():
+            for tag_id, site_id, device_key, config in cur.fetchall():
                 site = sites.get(str(site_id))
                 if site is None:
                     continue  # tag points at a disabled/removed site
@@ -739,21 +742,28 @@ class Bridge:
                     # None = this tag takes the topic's bare value; a string =
                     # it takes that one name out of a bundled payload.
                     raw_field = cfg.get("mqtt_field")
-                    key = (
+                    fld = (
                         raw_field.strip()
                         if isinstance(raw_field, str) and raw_field.strip()
                         else None
                     )
+                    # "Perangkat" doubles as the gateway this sensor sits on.
+                    # It is the column that already means "which device is this"
+                    # — see _resolve_field for how it disambiguates.
+                    dev = device_key.strip() if isinstance(device_key, str) else ""
+                    key = (fld, dev or None)
                     slot = site.routes.setdefault(topic, {})
                     if key in slot and slot[key] != str(tag_id):
-                        # Two tags claiming the same (topic, field) is a config
-                        # mistake that is otherwise invisible: one of them just
-                        # never receives anything, forever.
+                        # Two tags claiming the same (topic, field, perangkat) is
+                        # a config mistake that is otherwise invisible: one of
+                        # them just never receives anything, forever.
                         log.warning(
-                            "Site %s topik %s%s: dipakai lebih dari satu sensor "
-                            "— hanya satu yang akan menerima nilai. Perbaiki di "
-                            "R-Net > Analisis > Sumber.",
-                            site_id, topic, f" field '{key}'" if key else "",
+                            "Site %s topik %s%s%s: dipakai lebih dari satu sensor "
+                            "— hanya satu yang akan menerima nilai. Beri Perangkat "
+                            "yang berbeda (nama gateway) di R-Net > Analisis.",
+                            site_id, topic,
+                            f" field '{fld}'" if fld else "",
+                            f" perangkat '{dev}'" if dev else "",
                         )
                     slot[key] = str(tag_id)
                     site_of[str(tag_id)] = str(site_id)
@@ -764,6 +774,23 @@ class Bridge:
         return sites, xform, interval, ring, site_of
 
     # -- mqtt callbacks (paho v2 signatures) ------------------------------- #
+
+    def _gateway_filter_applies(self, topic: str, dev: str | None) -> bool:
+        """Is this tag's "Perangkat" actually the name of a gateway here?
+
+        Perangkat is free text and predates any of this — live tags carry things
+        like "boiler1" in it. Treating it as a gateway filter unconditionally
+        would silence every one of them the moment a packet arrives from a
+        gateway with a different name. So it only filters once that exact name
+        has been SEEN publishing on this topic; anything else is left alone and
+        behaves exactly as before.
+
+        Cost of the caution: in the seconds before a gateway's first packet, a
+        tag pinned to it can accept one reading from a sibling. It corrects
+        itself on that gateway's first message and only matters on a shared
+        topic, which is the configuration this is here to rescue in the first
+        place."""
+        return bool(dev) and dev in self._gws_seen.get(topic, ())
 
     @staticmethod
     def _qos_for(slot: dict) -> int:
@@ -778,7 +805,7 @@ class Bridge:
         The delivered QoS is min(published, subscribed), so this only takes
         effect for publishers that already send at 1 (the R-Net Node-RED flow
         does). Asking for 1 against a QoS 0 publisher is harmless."""
-        return 1 if any(f is not None for f in slot) else 0
+        return 1 if any(fld is not None for fld, _dev in slot) else 0
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         site_id = userdata
@@ -804,7 +831,7 @@ class Bridge:
         # topic whose tags declare no field is a plain one, anything else is a
         # bundle. Guessing from the bytes would make a plain reading of `{}`
         # behave differently from a plain reading of `5`.
-        if set(slot) == {None}:
+        if all(fld is None for fld, _dev in slot):
             raw = _coerce_value(msg.payload)
             if raw is None:
                 log.debug(
@@ -812,7 +839,7 @@ class Bridge:
                     site_id, msg.topic,
                 )
                 return
-            pairs = [(slot[None], raw)]
+            pairs = [(tag_id, raw) for tag_id in slot.values()]
         else:
             parsed = _coerce_bulk(msg.payload)
             if parsed is None:
@@ -822,17 +849,27 @@ class Bridge:
                 )
                 return
             gw, values = parsed
+            if gw:
+                self._gws_seen.setdefault(msg.topic, set()).add(gw)
             pairs = []
-            for fld, tag_id in slot.items():
+            for (fld, dev), tag_id in slot.items():
                 if fld is None:
                     continue  # plain tag sharing a bundled topic — nothing to take
+                # "Perangkat" pins a sensor to one gateway. Checked before the
+                # value is even looked up: on a shared topic every gateway sends
+                # `waterlevel1`, so without this the tag takes whichever
+                # published last (see _check_field_collision).
+                if gw and dev != gw and self._gateway_filter_applies(msg.topic, dev):
+                    continue
                 raw = _resolve_field(fld, gw, values)
                 if raw is _NOT_MINE:
                     continue  # addressed to another gateway — not missing
                 if raw is None:
                     self._warn_missing_field(site_id, msg.topic, fld, values)
                     continue
-                if gw is not None and "." not in fld:
+                if gw is not None and "." not in fld and not (
+                    dev and self._gateway_filter_applies(msg.topic, dev)
+                ):
                     self._check_field_collision(site_id, msg.topic, fld, gw)
                 pairs.append((tag_id, raw))
             if not pairs:
@@ -951,6 +988,7 @@ class Bridge:
         # that was wrong, got fixed, and is wrong again must warn again.
         self._missing_warned.clear()
         self._field_gws.clear()
+        self._gws_seen.clear()
 
         for site_id, site in sites.items():
             new_routes = site.routes

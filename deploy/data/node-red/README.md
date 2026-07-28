@@ -86,10 +86,14 @@ Yang tersisa: daftarkan sensornya di **R-Net → Analisis → Sumber**, isi:
 >
 > Setiap line punya `waterlevel1`. Yang membedakannya adalah **topik**.
 >
-> | Bentuk topik terbit | Field ditulis |
-> |---|---|
-> | `rnet/lombok/gw/lombok1` (satu topik per gateway) | `waterlevel1` |
-> | `rnet/lombok/all` (satu topik seluruh plant) | `lombok1.waterlevel1` |
+> | Bentuk topik terbit | Field | Perangkat |
+> |---|---|---|
+> | `rnet/lombok/gw/lombok1` (satu topik per gateway) | `waterlevel1` | bebas |
+> | `rnet/lombok/all` (satu topik seluruh plant) | `waterlevel1` | **`lombok1`** |
+>
+> Pada bentuk kedua, **kolom Perangkat-lah yang memisahkan kedua line** — kolom
+> itu memang artinya "sensor ini menempel di alat mana". (Menulis Field lengkap
+> `lombok1.waterlevel1` juga masih diterima, tapi tidak perlu.)
 >
 > Kalau satu topik memuat beberapa gateway dan Field ditulis polos, sensor itu
 > **bergantian membaca dua alat berbeda**. Tidak ada error, tidak ada data

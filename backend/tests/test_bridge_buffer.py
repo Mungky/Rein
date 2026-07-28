@@ -90,7 +90,7 @@ def test_crash_recovery_replays_unflushed_value(tmp_path):
     # --- process A: receive a value, then get killed before any flush ---
     a = Bridge("", buffer_path=buf)
     # topic -> {field or None -> tag}; None = "this topic carries one number"
-    a._routes = {site: {topic: {None: tag}}}
+    a._routes = {site: {topic: {(None, None): tag}}}
     a._xform = {tag: (1.0, 0.0, None)}
     a._on_message(None, site, FakeMsg(topic, b'{"value": 72.5}'))
 
