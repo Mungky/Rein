@@ -5,12 +5,14 @@
  *  scada:edit_layout) works on a draft; Simpan persists, Batal discards. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Loader2,
+  Lock,
   Maximize,
   Minimize,
   MonitorPlay,
@@ -32,7 +34,8 @@ import { useAuth, useAuthDisplay } from "@/hooks/use-auth";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useCan } from "@/components/providers/permissions-provider";
 import type { AppRole } from "@/lib/utils/roles";
-import { useScadaStore } from "./store";
+import { useScadaCold, useScadaStore } from "./store";
+import { useIdle } from "./use-idle";
 import type { Panel } from "./types";
 import { DEFAULT_CANVAS } from "./types";
 import { CanvasStage, STAGE_PRESETS, presetRects } from "./grid/canvas-stage";
@@ -50,10 +53,14 @@ import { AlarmBell } from "./alarm-bell";
 import { DataRefresh } from "./data-refresh";
 import { useAlarmEvents } from "./use-alarm-events";
 import { useLiveSamples } from "./analysis/use-live-samples";
+import { WallVisibleProvider } from "./panels/wall-visibility";
 
 // Tab "Data" (workbench analisis) — pusat pengaturan sensor, interval
 // penyimpanan, dan alarm. Set false untuk menyembunyikannya lagi.
 const SHOW_DATA_TAB = true;
+
+/** Diam selama ini → tab Channel & Data terkunci sampai login ulang. */
+const IDLE_LOCK_MS = 30 * 60_000;
 
 export function ScadaView() {
   const { role } = useAuthDisplay();
@@ -61,6 +68,24 @@ export function ScadaView() {
   const canManage = useCan(role as AppRole, "scada:manage");
   const { profile, loading: authLoading } = useAuth();
   const signedIn = !authLoading && !!profile;
+  const router = useRouter();
+
+  /** Sesi dianggap basi setelah 30 menit tanpa tanda kehadiran.
+   *
+   *  Ini jawaban atas "ketika session habis saya masih bebas buka halaman
+   *  apapun". Sesi Supabase-nya sendiri TIDAK pernah habis — proxy.ts
+   *  memperbaruinya di setiap navigasi — jadi tidak ada momen kedaluwarsa yang
+   *  bisa ditunggu. Yang diukur di sini adalah kehadiran; lihat use-idle.ts.
+   *
+   *  Monitor tetap terbuka saat basi, sesuai keputusan: layar dinding memang
+   *  dipasang untuk ditonton berjam-jam tanpa disentuh. Channel dan Data yang
+   *  dikunci — keduanya bisa mengubah sesuatu. */
+  const sessionStale = useIdle(IDLE_LOCK_MS);
+
+  const goRelogin = useCallback(() => {
+    toast.info("Sesi sudah lama menganggur — masuk lagi untuk membuka tab ini");
+    router.push(`/login?next=${encodeURIComponent("/r-net")}`);
+  }, [router]);
 
   // Live lane (scada_tag_latest) + server alarm state (scada_alarm_events) —
   // mounted once here so every view mode (Monitor panels, bell, Data tab)
@@ -68,7 +93,19 @@ export function ScadaView() {
   useLiveSamples(signedIn);
   useAlarmEvents(signedIn);
 
-  const store = useScadaStore();
+  // Dinding Monitor tidak menampilkan satu pun nilai live secara langsung —
+  // panel-panelnya yang melakukannya, masing-masing dengan langganan sempit.
+  // Jadi komponen ini tidak perlu ikut bangun tiap sampel masuk.
+  const store = useScadaCold();
+
+  // Basi sementara user sedang DI Channel/Data → kembalikan ke Monitor. Tanpa
+  // ini, gerbangnya hanya menjaga pintu MASUK sementara halaman yang sudah
+  // terbuka tetap terbuka — dan itu persis keadaan yang dilaporkan user.
+  const viewMode = store.viewMode;
+  const setViewMode = store.setViewMode;
+  useEffect(() => {
+    if (sessionStale && viewMode !== "monitor") setViewMode("monitor");
+  }, [sessionStale, viewMode, setViewMode]);
   const active = store.perspectives.find(
     (p) => p.id === store.activePerspectiveId
   );
@@ -130,6 +167,15 @@ export function ScadaView() {
   const [pageForm, setPageForm] = useState<{ mode: "new" | "rename"; name: string } | null>(null);
   const [pageFormSaving, setPageFormSaving] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+
+  /** Apakah dinding Monitor benar-benar terlihat sekarang.
+   *
+   *  Dinding TIDAK pernah dilepas dari DOM (iframe web butuh puluhan detik untuk
+   *  boot, jadi melepasnya berarti tiap kembali ke Monitor disambut layar kosong
+   *  yang memuat ulang) — ia hanya `hidden`. Tapi "hidden" cuma menghentikan
+   *  penggambaran: tanpa penanda ini, setiap panel tetap menjalankan jadwal 60
+   *  detiknya sementara user melihat tabel di tab Data. Lihat wall-visibility.tsx. */
+  const wallVisible = store.viewMode === "monitor" || fullscreen;
   const wallRef = useRef<HTMLDivElement>(null);
 
   // Fullscreen "pages": each perspective is a page. Flip manually (arrows /
@@ -350,7 +396,7 @@ export function ScadaView() {
           channels: store.channels,
           webLive: true,
           // Hidden wall (other tab): web stays alive, video pauses.
-          videoSuspended: store.viewMode !== "monitor",
+          videoSuspended: !wallVisible,
         })
       }
       webChannelIdOf={(panel) => {
@@ -477,20 +523,31 @@ export function ScadaView() {
                 ] as const
               )
                 .filter(({ mode }) => SHOW_DATA_TAB || mode !== "analysis")
-                .map(({ mode, label }) => (
-                <button
-                  key={mode}
-                  onClick={() => store.setViewMode(mode)}
-                  className={cn(
-                    "cursor-pointer rounded-[var(--r-sm)] px-2.5 py-1 text-[11.5px] font-semibold transition-colors",
-                    store.viewMode === mode
-                      ? "bg-bg text-text shadow-[var(--shadow-xs)]"
-                      : "text-text-muted hover:text-text"
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
+                .map(({ mode, label }) => {
+                  const locked = sessionStale && mode !== "monitor";
+                  return (
+                    <button
+                      key={mode}
+                      onClick={() => (locked ? goRelogin() : store.setViewMode(mode))}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-1 rounded-[var(--r-sm)] px-2.5 py-1 text-[11.5px] font-semibold transition-colors",
+                        store.viewMode === mode
+                          ? "bg-bg text-text shadow-[var(--shadow-xs)]"
+                          : locked
+                            ? "text-text-light hover:text-text-muted"
+                            : "text-text-muted hover:text-text"
+                      )}
+                      title={
+                        locked
+                          ? "Sesi sudah lama menganggur — masuk lagi untuk membukanya"
+                          : undefined
+                      }
+                    >
+                      {locked && <Lock className="size-3" />}
+                      {label}
+                    </button>
+                  );
+                })}
             </div>
           )}
 
@@ -666,12 +723,13 @@ export function ScadaView() {
           while hidden to save bandwidth. `isolate z-0` fences the whole wall
           (including the iframe layer) so it can never cover dropdowns/menus
           outside it. */}
+      <WallVisibleProvider value={wallVisible}>
       <div
         ref={wallRef}
         className={cn(
           "relative isolate z-0 min-h-0 flex-1",
           fullscreen ? "bg-black" : "bg-bg-sidebar",
-          store.viewMode !== "monitor" && !fullscreen && "hidden"
+          !wallVisible && "hidden"
         )}
         // Panel di dinding Monitor pakai permukaan off-white lembut di light
         // mode (dark mode: nilai sama dengan --rein-bg, tak berubah).
@@ -741,7 +799,7 @@ export function ScadaView() {
                     >
                       {renderPanel(panel, store.streams, store.tags, {
                         channels: store.channels,
-                        videoSuspended: store.viewMode !== "monitor",
+                        videoSuspended: !wallVisible,
                       })}
                     </PanelFrame>
                   </div>
@@ -870,6 +928,7 @@ export function ScadaView() {
           </button>
         )}
       </div>
+      </WallVisibleProvider>
 
       {/* Dialogs */}
       {store.editMode &&

@@ -20,7 +20,9 @@ export interface UserProfile {
 export interface AuthState {
   user: User | null;
   profile: UserProfile | null;
-  role: AppRole;
+  /** NULL selama profil belum diketahui — jangan pernah ditebak. Lihat catatan
+   *  di useAuth() tentang kenapa ini sebelumnya punya nilai bawaan. */
+  role: AppRole | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<{ error: string | null }>;
   logout: () => Promise<void>;
@@ -155,7 +157,21 @@ export function useAuth(): AuthState {
     setProfile(null);
   }, [supabase]);
 
-  const role = (profile?.role ?? "engineer_mechanical") as AppRole;
+  /** Peran user, atau NULL kalau profilnya belum diketahui.
+   *
+   *  Dulu ini `profile?.role ?? "engineer_mechanical"` — sebuah peran NYATA
+   *  yang diberikan diam-diam ketika profilnya belum ada. Akibatnya bukan
+   *  kosmetik: selama profil masih dimuat, atau kalau /api/auth/me gagal, atau
+   *  di antara pergantian sesi, useCan() menjawab pertanyaan izin memakai peran
+   *  itu — jadi tombol ubah/kelola bisa muncul untuk orang yang belum jelas
+   *  siapa. Layar salah selama sedetik memang tidak berbahaya pada dirinya
+   *  sendiri, tapi ia mengajarkan bahwa UI-lah yang menentukan izin. (Yang
+   *  benar-benar menjaga data tetap backend: setiap endpoint R-Net menuntut
+   *  permission-nya sendiri.)
+   *
+   *  `useCan` sudah menerima null dan menjawab false — "belum tahu" berarti
+   *  "belum boleh", bukan "boleh". */
+  const role = profile?.role ?? null;
 
   return { user, profile, role, loading, login, logout };
 }
@@ -166,7 +182,7 @@ export function useAuthDisplay() {
   const userName = profile?.full_name || "Pengguna";
   const userInitials = profile?.initials || (profile?.full_name ? getInitials(profile.full_name) : "U");
   const username = profile?.username || "";
-  const roleLabel = ROLE_LABELS[role] ?? role;
+  const roleLabel = role ? (ROLE_LABELS[role] ?? role) : "—";
   return { userName, userInitials, username, roleLabel, role };
 }
 

@@ -10,7 +10,7 @@
  *  viewport (= this panel), never the whole monitor. */
 
 import { useEffect, useRef, useState } from "react";
-import { Globe, RefreshCw } from "lucide-react";
+import { ExternalLink, Globe, Loader2, RefreshCw } from "lucide-react";
 import type { CropRect, WebPanelConfig } from "../types";
 import { OrbitFallback } from "./orbit-fallback";
 import { CropFrame } from "./crop-frame";
@@ -18,6 +18,34 @@ import { CropFrame } from "./crop-frame";
 function clamp(v: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, v));
 }
+
+/** Berhenti menunggu setelah ini dan katakan sesuatu. Halaman HMI yang sehat
+ *  membangkitkan `load` dalam beberapa detik; kalau tidak, penyebabnya biasanya
+ *  host tak terjangkau atau tunnel mati — dan diam-diam menampilkan kotak putih
+ *  selamanya adalah jawaban paling tidak berguna yang bisa diberikan. */
+const LOAD_TIMEOUT_MS = 8000;
+
+/** Izin sandbox untuk halaman yang disematkan.
+ *
+ *  Sebelumnya hanya `allow-scripts allow-same-origin allow-forms`, dan itu
+ *  penyebab "putih" yang paling sering bisa kita perbaiki sendiri: HMI cloud
+ *  (Wecon V-Net dan sejenisnya) memanggil window.open, alert(), atau membuka
+ *  unduhan saat boot. Di dalam sandbox seketat itu panggilan tersebut MELEMPAR,
+ *  skrip boot-nya mati di tengah jalan, dan yang tersisa di layar adalah <body>
+ *  kosong — bukan pesan error, cuma putih.
+ *
+ *  `allow-top-navigation` sengaja TIDAK diberikan: halaman tersemat tidak boleh
+ *  bisa membawa seluruh REIN pindah alamat. */
+export const WEB_SANDBOX = [
+  "allow-scripts",
+  "allow-same-origin",
+  "allow-forms",
+  "allow-popups",
+  "allow-popups-to-escape-sandbox",
+  "allow-modals",
+  "allow-downloads",
+  "allow-storage-access-by-user-activation",
+].join(" ");
 
 export function WebPanel({
   config,
@@ -34,6 +62,18 @@ export function WebPanel({
   const vw = config.view_w ?? 1920;
   const vh = config.view_h ?? 1080;
   const [nonce, setNonce] = useState(0);
+  const [phase, setPhase] = useState<"loading" | "loaded" | "timeout">("loading");
+
+  // Batas waktu per percobaan muat. Direset oleh `nonce` supaya tombol muat
+  // ulang benar-benar memberi kesempatan baru, bukan langsung kembali ke pesan
+  // gagal yang sama.
+  useEffect(() => {
+    const t = setTimeout(
+      () => setPhase((p) => (p === "loading" ? "timeout" : p)),
+      LOAD_TIMEOUT_MS
+    );
+    return () => clearTimeout(t);
+  }, [nonce, config.url]);
 
   const ref = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -55,25 +95,67 @@ export function WebPanel({
 
   const s = box.w > 0 && box.h > 0 ? Math.min(box.w / vw, box.h / vh) : 0;
 
-  const blankHint = (
-    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-bg-sidebar text-center text-text-muted">
-      <Globe className="size-6 opacity-50" />
-      <span className="px-4 text-[11.5px]">
-        Kalau area ini tetap kosong, situs tersebut menolak ditampilkan di
-        dalam REIN (X-Frame-Options).
-      </span>
-    </div>
-  );
+  const reload = () => {
+    setPhase("loading");
+    setNonce((n) => n + 1);
+  };
+
+  const frameProps = {
+    key: nonce,
+    src: url,
+    title: url,
+    onLoad: () => setPhase("loaded"),
+    sandbox: WEB_SANDBOX,
+    // Dulu "no-referrer". Sebagian situs menolak disematkan justru ketika
+    // Referer-nya hilang, jadi mereka tampil putih tanpa alasan yang terlihat.
+    // Ini mengirimkan asal REIN saja (bukan alamat lengkap), dan hanya ke HTTPS.
+    referrerPolicy: "strict-origin-when-cross-origin" as const,
+  };
 
   const frame = (
     <iframe
-      key={nonce}
-      src={url}
-      title={url}
+      {...frameProps}
       className="absolute left-0 top-0 h-full w-full border-0"
-      sandbox="allow-scripts allow-same-origin allow-forms"
-      referrerPolicy="no-referrer"
     />
+  );
+
+  // DI ATAS iframe, bukan di bawahnya.
+  //
+  // Ini inti perbaikannya. Penjelasan tadi digambar SEBELUM iframe, jadi ketika
+  // situs menolak disematkan, halaman error opaque milik browser menutupinya —
+  // dan karena bg-bg-sidebar itu putih di mode terang, yang tersisa hanyalah
+  // kotak putih tanpa satu pun petunjuk. Pesannya ada; tidak pernah terlihat.
+  const overlay =
+    phase === "loading" ? (
+      <div className="pointer-events-none absolute inset-0 z-[5] flex flex-col items-center justify-center gap-2 bg-bg-sidebar text-center text-text-muted">
+        <Loader2 className="size-5 animate-spin" />
+        <span className="px-4 text-[11.5px]">Memuat halaman…</span>
+      </div>
+    ) : phase === "timeout" ? (
+      <div className="absolute inset-0 z-[5] flex flex-col items-center justify-center gap-2 bg-bg-sidebar px-4 text-center text-text-muted">
+        <Globe className="size-6 opacity-50" />
+        <span className="text-[11.5px]">
+          Halaman tidak merespons dalam 8 detik. Periksa alamatnya, atau apakah
+          perangkat/tunnel-nya sedang hidup.
+        </span>
+        <OpenExternally url={url} />
+      </div>
+    ) : null;
+
+  // Sudah termuat tapi mungkin tetap kosong — dan itu TIDAK bisa dideteksi dari
+  // sini: halaman yang diblokir X-Frame-Options tetap membangkitkan `load`, dan
+  // isinya lintas-asal sehingga tak bisa diperiksa. Jadi jangan menebak; sediakan
+  // penjelasan + jalan keluar yang muncul saat kursor masuk, sama seperti tombol
+  // muat ulang. Menonton di dinding tidak terganggu; yang sedang menyiapkan
+  // channel langsung menemukannya.
+  const blankHelp = phase === "loaded" && (
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] flex items-center justify-center gap-2 bg-black/65 px-3 py-1.5 text-[10.5px] text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+      <span className="truncate">
+        Kosong? Situs ini mungkin menolak ditampilkan di dalam REIN
+        (X-Frame-Options).
+      </span>
+      <OpenExternally url={url} light />
+    </div>
   );
 
   // Screen-channel crop path: the page is laid out at its native viewport and
@@ -81,21 +163,18 @@ export function WebPanel({
   if (crop) {
     return (
       <div className="group relative h-full w-full overflow-hidden bg-black">
-        {blankHint}
         <CropFrame srcW={vw} srcH={vh} crop={crop}>
           {frame}
         </CropFrame>
-        <ReloadButton onClick={() => setNonce((n) => n + 1)} />
+        {overlay}
+        {blankHelp}
+        <ReloadButton onClick={reload} />
       </div>
     );
   }
 
   return (
     <div ref={ref} className="group relative h-full w-full overflow-hidden bg-black">
-      {/* Blank-page hint — visible only when the site refuses embedding
-          (X-Frame-Options) and the frame stays transparent. */}
-      {blankHint}
-
       {s > 0 && (
         <div
           className="absolute overflow-hidden"
@@ -109,9 +188,7 @@ export function WebPanel({
           }}
         >
           <iframe
-            key={nonce}
-            src={url}
-            title={url}
+            {...frameProps}
             className="absolute left-0 top-0 border-0"
             style={{
               width: `calc(${100 / zoom}% + ${ox}px)`,
@@ -119,15 +196,36 @@ export function WebPanel({
               transform: `scale(${zoom}) translate(-${ox}px, -${oy}px)`,
               transformOrigin: "top left",
             }}
-            sandbox="allow-scripts allow-same-origin allow-forms"
-            referrerPolicy="no-referrer"
           />
         </div>
       )}
 
+      {overlay}
+      {blankHelp}
+
       {/* Reload — appears on hover so it never covers the HMI while watching */}
-      <ReloadButton onClick={() => setNonce((n) => n + 1)} />
+      <ReloadButton onClick={reload} />
     </div>
+  );
+}
+
+/** "Buka di tab baru" — jalan keluar ketika penyematan memang tidak mungkin.
+ *  Situs yang mengirim X-Frame-Options tidak akan pernah tampil di dalam frame,
+ *  seberapa sering pun tombol muat ulang ditekan. */
+function OpenExternally({ url, light }: { url: string; light?: boolean }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={
+        light
+          ? "inline-flex shrink-0 items-center gap-1 font-semibold underline decoration-white/40 underline-offset-2 hover:decoration-white"
+          : "btn btn-secondary btn-sm gap-1.5"
+      }
+    >
+      <ExternalLink className="size-3" /> Buka di tab baru
+    </a>
   );
 }
 

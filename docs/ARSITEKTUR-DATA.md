@@ -328,6 +328,39 @@ sensor. Dalam usulan ini centang itu **tidak perlu lagi** — **semua** sensor o
 dapat perlakuan sama: mentah 24 jam, ringkasan 30 hari, lalu arsip. Satu jalur, tidak
 ada lagi kebingungan "kok data sensor ini hilang, sensor itu tidak".
 
+### ✅ TERPASANG (30 Juli 2026)
+
+Bagian ini bukan usulan lagi. `scada_ring` dihapus di migrasi `m3n4o5p6q7r8`
+(27 Juli) dan **`scada_samples` dipensiunkan** di `p6q7r8s9t0u1` (30 Juli),
+bersama centang "Simpan data" di UI, jalur arsip xlsx per siklus, jam siklus
+per sensor, dan batasan slow/slowest.
+
+Saat diperiksa sebelum dieksekusi, lajur `scada_samples` ternyata **sudah kosong**
+(0 baris, 0 tag bercentang) — jadi tidak ada arsip final atau migrasi data yang
+diperlukan. Migrasinya berpagar `count(*) = 0`: dijalankan di database lain yang
+masih berisi, ia menolak alih-alih menghapus.
+
+Yang sekarang berlaku untuk **setiap** sensor, tanpa pilihan:
+
+| Lapis | Tabel | Umur |
+|---|---|---|
+| Papan skor | `scada_tag_latest` | ditimpa terus |
+| Mentah | `scada_raw` (partisi harian) | `ring_window_h`, nyatanya 1-2× itu |
+| Ringkasan | `scada_rollup_1m` (partisi bulanan) | ±30 hari |
+| Arsip | `.zip` CSV per plant di Google Drive | selamanya |
+
+Keempat level sampling kini sah untuk semua sensor — batasan slow/slowest dulu
+ada semata-mata agar sebulan baris muat di satu sheet Excel milik arsip lajur
+yang sekarang sudah tidak ada.
+
+**Export ikut jadi CSV (30 Juli 2026).** `GET /api/scada/export` (dulu
+`/export.xlsx`) mengirim satu `.csv` untuk satu sensor, atau `.zip` berisi satu
+CSV per sensor untuk beberapa sensor — kolomnya sama persis dengan arsip Drive
+di §2.6, jadi berkas dari dua sumber itu bisa ditumpuk tanpa penyesuaian.
+Alasannya sama dengan yang sudah ditulis di §2.6 untuk arsip: xlsx harus
+membangun tiap sel, CSV mengalir apa adanya dan mampat ~8-10×. Dengan itu
+`openpyxl` (backend) dan SheetJS/`xlsx` (bundle frontend) sama-sama keluar.
+
 ## 2.4 Kenapa membagi tabel per waktu (partisi) itu kuncinya
 
 Analogi lemari arsip:
@@ -506,6 +539,27 @@ kaca itu diganti aturan sederhana **berdasarkan rentang waktu yang diminta**:
                        ▼
               Kirim ke browser
 ```
+
+### ✅ KLARIFIKASI (30 Juli 2026) — aturan ini bukan untuk penggambaran grafik
+
+Pohon keputusan di atas berlaku untuk **export CSV** dan **pembacaan di tab
+Riwayat**: di sana rentangnya bebas, jadi memang perlu memilih lajur.
+
+Untuk **grafik di tab Data**, aturannya lebih sederhana karena rentangnya
+dibatasi: pilihan berhenti di **24 jam** (7 hari dan 30 hari dihapus dari
+selektor). Di dalam 24 jam nilai mentahnya selalu ada, jadi grafik di sana
+selalu membaca `scada_raw` — tidak ada yang perlu diputuskan. Rentang panjang
+tetap tersedia di panel **Monitor**, yang memang membaca ringkasan.
+
+Satu jebakan yang sempat aktif dan sekarang dikunci tes
+(`backend/tests/test_data_tab_lane.py`): pemilihan lajur di `/history`
+memakai **lebar bucket**, bukan rentang. Dengan jatah 360 titik, 24 jam jadi
+bucket 240 detik — melewati ambang 60 detik — sehingga grafik 24 jam diam-diam
+dijawab dari ringkasan. Sulit terlihat karena pada lebar bucket yang sama kedua
+lajur mengembalikan angka **identik** (rata-rata tertimbang, min-dari-min,
+maks-dari-maks); yang hilang cuma detailnya. Jatah titik tab Data kini 1800
+(bucket 48 detik) dan plafon `MAX_HISTORY_POINTS` dinaikkan 720 → 2000, karena
+di bawah 1.465 titik sub-menit di 24 jam mustahil diminta.
 
 Dampaknya per endpoint:
 

@@ -12,7 +12,16 @@ export interface PlaybackHandle {
   destroy: () => void;
 }
 
-function basicAuth(stream: Stream): string | null {
+/** MediaMTX (>= 1.12) hanya menerima kredensial baca lewat header
+ *  `Authorization: Basic` di setiap permintaan — parameter query (?user=&pass=)
+ *  tidak lagi dihormati untuk pembacaan.
+ *
+ *  Diekspor supaya HLS (video-panel.tsx) dan WHEP (berkas ini) memakai aturan
+ *  yang SAMA. Dua salinan identik sebelumnya berarti setiap perubahan cara
+ *  MediaMTX meminta kredensial harus diingat dua kali — dan yang terlewat
+ *  muncul sebagai 401 di satu jalur transport saja, gejala yang sangat
+ *  membingungkan untuk dilacak. */
+export function basicAuth(stream: Stream): string | null {
   if (!stream.read_user) return null;
   return "Basic " + btoa(`${stream.read_user}:${stream.read_pass ?? ""}`);
 }

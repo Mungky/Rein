@@ -11,21 +11,28 @@ import { cn } from "@/lib/utils";
 import type { LevelPanelConfig, Tag } from "../types";
 import { useTagValue } from "./use-tag-value";
 import { LayoutItem, LayoutSurface } from "./layout-box";
-import { layoutMap, readTagThresholds, tagStatusOf } from "./elements";
+import {
+  PanelPlaceholder,
+  formatValue,
+  layoutMap,
+  readTagThresholds,
+  resolveDecimals,
+  tagStatusOf,
+} from "./elements";
 
 export function LevelPanel({ config, tags }: { config: LevelPanelConfig; tags: Tag[] }) {
   const state = useTagValue(config.tag_id ?? null, tags);
 
   if (!config.tag_id) {
     return (
-      <Center icon>
+      <PanelPlaceholder icon={Droplets}>
         Level belum diatur — buka mode Atur Layout lalu klik dua kali panel ini
         untuk memilih sensor.
-      </Center>
+      </PanelPlaceholder>
     );
   }
   if (state.error && !state.loaded) {
-    return <Center>Gagal memuat nilai — mencoba lagi…</Center>;
+    return <PanelPlaceholder>Gagal memuat nilai — mencoba lagi…</PanelPlaceholder>;
   }
   if (!state.loaded) {
     return (
@@ -39,13 +46,14 @@ export function LevelPanel({ config, tags }: { config: LevelPanelConfig; tags: T
   const unit = config.unit ?? state.unit;
 
   if (state.value === null) {
-    return <Center icon>Belum ada data untuk {label}.</Center>;
+    return <PanelPlaceholder icon={Droplets}>Belum ada data untuk {label}.</PanelPlaceholder>;
   }
 
   const value = state.value;
   const span = config.max - config.min || 1;
   const f = Math.min(1, Math.max(0, (value - config.min) / span));
   const tag = tags.find((t) => t.id === config.tag_id);
+  const dec = resolveDecimals(config.decimals, tag?.config);
   const status = tagStatusOf(value, readTagThresholds(tag?.config));
   const fill =
     status === "kritis"
@@ -98,12 +106,12 @@ export function LevelPanel({ config, tags }: { config: LevelPanelConfig; tags: T
 
       {el.value?.visible && (
         <LayoutItem box={el.value.box} className="text-text">
-          <span className="font-bold tabular-nums">{value.toLocaleString("id")}</span>
+          <span className="font-bold tabular-nums">{formatValue(value, dec)}</span>
           {unit && (
             <span className="ml-[0.25em] text-[0.72em] text-text-muted">{unit}</span>
           )}
           <span className="ml-[0.4em] text-[0.6em] text-text-light">
-            · skala {config.min.toLocaleString("id")}–{config.max.toLocaleString("id")}
+            · skala {formatValue(config.min, dec)}–{formatValue(config.max, dec)}
           </span>
         </LayoutItem>
       )}
@@ -130,11 +138,3 @@ export function LevelPanel({ config, tags }: { config: LevelPanelConfig; tags: T
   );
 }
 
-function Center({ children, icon = false }: { children: React.ReactNode; icon?: boolean }) {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg px-4 text-center">
-      {icon && <Droplets className="size-6 text-text-light opacity-60" />}
-      <span className="text-[12px] text-text-muted">{children}</span>
-    </div>
-  );
-}

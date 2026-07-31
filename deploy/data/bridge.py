@@ -4,15 +4,14 @@
 WHAT IT DOES
     V-Boxes (or any device) publish sensor values to an MQTT broker. This
     bridge subscribes to the topics configured in the R-Net UI, keeps the
-    latest value per tag, and writes rows into the two historian lanes the
-    R-Net dashboards read through the `scada_samples_all` view:
-      - ring tags ("Simpan data" OFF) → `scada_raw` (24h buffer, partitioned
-        by day; retention is the BACKEND's job — it drops whole day partitions,
-        this script never deletes anything)
-      - store tags ("Simpan data" ON)  → `scada_samples` (monthly archive+reset)
-    Both sample at the tag's chosen sampling level (fastest/fast/slow/slowest,
-    seconds set by admin in scada_settings). No second database — the
-    charts/gauges/Analisis light up with real data automatically.
+    latest value per tag, and writes rows into `scada_raw` — partitioned by
+    day, which is how the BACKEND expires it (it drops whole day partitions;
+    this script never deletes anything). Every sensor samples at its chosen
+    level (fastest/fast/slow/slowest, seconds set by admin in scada_settings).
+
+    There used to be a SECOND destination, `scada_samples`, chosen per tag by
+    a "Simpan data" checkbox. That lane is retired — see the retire-store-lane
+    migration. One destination now, same treatment for every sensor.
 
 CONFIG LIVES IN THE DATABASE, NOT HERE
     Sites (brokers) and tags (topics) are managed entirely from the R-Net
@@ -38,8 +37,8 @@ RESOLUTION — TWO LANES
     from scada_settings). MQTT is push (messages arrive any time), but we store
     one row per tag per interval bucket: the latest value received in a bucket
     is written when the bucket boundary passes, stamped at that boundary (PK
-    tag_id+ts, ON CONFLICT DO NOTHING), into scada_raw or scada_samples per the
-    tag's store flag. A tag that sends nothing in a bucket produces a gap —
+    tag_id+ts, ON CONFLICT DO NOTHING). A tag that sends nothing in a bucket
+    produces a gap —
     exactly what a real sampled historian should show (the UI flags stale data).
 
     THIS SCRIPT NEVER DELETES ANYTHING. Retention belongs to the backend, which
@@ -155,11 +154,9 @@ MIN_INTERVAL_S = 2
 DEFAULT_LEVELS = {"fastest": 2, "fast": 5, "slow": 30, "slowest": 60}
 DEFAULT_LEVEL = "fast"
 
-# Ring mode ("simpan data" NOT ticked): like a CCTV SD card kept by TIME — ring
-# rows go to scada_raw, whose day partitions the BACKEND drops once they fall
-# outside `ring_window_h` (24h default). Store tags go to scada_samples and are
-# archived+reset monthly. Kept here only to describe the two lanes; this script
-# no longer reads the window for any purpose.
+# Raw values are kept like a CCTV SD card, by TIME: the BACKEND drops whole day
+# partitions of scada_raw once they fall outside `ring_window_h` (24h default).
+# Read here only to be logged for context; this script never expires anything.
 DEFAULT_RING_WINDOW_H = 24
 
 # Which sites (brokers) THIS PC is responsible for — comma-separated site UUIDs
@@ -246,13 +243,13 @@ class SiteCfg:
     routes: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
-def _parse_interval(config: dict | None, levels: dict[str, int]) -> tuple[int, bool]:
-    """Per-tag storage plan from config: returns (interval_s, is_ring).
+def _parse_interval(config: dict | None, levels: dict[str, int]) -> int:
+    """A tag's storage interval in seconds, from its `sampling_level`
+    (fastest/fast/slow/slowest → seconds from the admin-tunable scada_settings).
 
-    Both lanes sample at the tag's chosen `sampling_level` (fastest/fast/slow/
-    slowest → seconds from the admin-tunable scada_settings). `store_enabled`
-    only decides WHICH table + retention: off → ring (scada_raw, 24h window),
-    on → historian (scada_samples, monthly archive+reset)."""
+    This used to also return an `is_ring` flag read from `store_enabled`, which
+    chose between two destination tables. There is one table now (scada_raw) —
+    see the retire-store-lane migration."""
     cfg = config or {}
     level = cfg.get("sampling_level") or DEFAULT_LEVEL
     seconds = levels.get(level, levels.get(DEFAULT_LEVEL, DEFAULT_LEVELS[DEFAULT_LEVEL]))
@@ -260,7 +257,7 @@ def _parse_interval(config: dict | None, levels: dict[str, int]) -> tuple[int, b
         seconds = max(MIN_INTERVAL_S, int(seconds))
     except (TypeError, ValueError):
         seconds = DEFAULT_LEVELS[DEFAULT_LEVEL]
-    return seconds, not cfg.get("store_enabled")
+    return seconds
 
 
 def _coerce_value(payload: bytes) -> float | None:
@@ -433,8 +430,6 @@ class Bridge:
         self._latest_pending: dict[str, tuple[datetime, float]] = {}
         # tag_id -> storage interval in seconds (resolved from sampling_level)
         self._interval: dict[str, int] = {}
-        # tag_ids in ring mode (store_enabled off) — written to scada_raw
-        self._ring: set[str] = set()
         # tag_id -> site_id, so every raw row can carry its plant (audit D-1).
         self._site_of: dict[str, str] = {}
         # sampling-level durations + ring window, read from scada_settings
@@ -640,10 +635,10 @@ class Bridge:
             return []
 
     def recover_buffer(self) -> None:
-        """On start (after reconcile, so intervals + ring set are known): replay
-        every buffered value left by a previous crash/restart into the historian,
-        stamped at its interval bucket and routed to scada_raw / scada_samples
-        like a normal flush. ON CONFLICT DO NOTHING makes replay idempotent.
+        """On start (after reconcile, so intervals are known): replay every
+        buffered value left by a previous crash/restart into scada_raw, stamped
+        at its interval bucket like a normal flush. ON CONFLICT DO NOTHING
+        makes replay idempotent.
         Rows that fail (e.g. Supabase still down) stay for the next start."""
         rows = self._buffer_all()
         if not rows:
@@ -659,21 +654,13 @@ class Bridge:
             interval = self._interval.get(tag_id, FLUSH_INTERVAL_S)
             boundary = int(dt.timestamp() // interval) * interval
             bts = datetime.fromtimestamp(boundary, tz=timezone.utc)
-            is_ring = tag_id in self._ring
             try:
                 with self._db().cursor() as cur:
-                    if is_ring:
-                        cur.execute(
-                            "INSERT INTO scada_raw (tag_id, ts, site_id, value) "
-                            "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                            (tag_id, bts, self._site_of.get(tag_id), value),
-                        )
-                    else:
-                        cur.execute(
-                            "INSERT INTO scada_samples (tag_id, ts, value) "
-                            "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                            (tag_id, bts, value),
-                        )
+                    cur.execute(
+                        "INSERT INTO scada_raw (tag_id, ts, site_id, value) "
+                        "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                        (tag_id, bts, self._site_of.get(tag_id), value),
+                    )
                 recovered += 1
                 done.append((tag_id, ts_iso))
             except Exception:
@@ -686,20 +673,18 @@ class Bridge:
     def load_config(
         self,
     ) -> tuple[
-        dict[str, SiteCfg], dict[str, Transform], dict[str, int], set[str],
-        dict[str, str],
+        dict[str, SiteCfg], dict[str, Transform], dict[str, int], dict[str, str]
     ]:
         """Read enabled sites + their enabled MQTT tags from the DB.
 
         Returns the sites (with their topic→tag_id subscriptions), a
         tag_id→transform map used to scale each raw value before storing, a
-        tag_id→storage-interval map (seconds), the set of ring-mode tags, and a
-        tag_id→site_id map (stamped onto every scada_raw row).
+        tag_id→storage-interval map (seconds), and a tag_id→site_id map
+        (stamped onto every scada_raw row).
         """
         sites: dict[str, SiteCfg] = {}
         xform: dict[str, Transform] = {}
         interval: dict[str, int] = {}
-        ring: set[str] = set()
         site_of: dict[str, str] = {}
         with self._db().cursor() as cur:
             # Admin-tunable sampling-level durations + ring window (single row).
@@ -775,10 +760,8 @@ class Bridge:
                     slot[name] = str(tag_id)
                     site_of[str(tag_id)] = str(site_id)
                     xform[str(tag_id)] = _parse_transform(config)
-                    interval[str(tag_id)], is_ring = _parse_interval(config, self._levels)
-                    if is_ring:
-                        ring.add(str(tag_id))
-        return sites, xform, interval, ring, site_of
+                    interval[str(tag_id)] = _parse_interval(config, self._levels)
+        return sites, xform, interval, site_of
 
     # -- mqtt callbacks (paho v2 signatures) ------------------------------- #
 
@@ -1078,7 +1061,7 @@ class Bridge:
     def reconcile(self) -> None:
         """Re-read config and align live MQTT clients + subscriptions to it."""
         try:
-            (sites, self._xform, self._interval, self._ring,
+            (sites, self._xform, self._interval,
              self._site_of) = self.load_config()
         except Exception:
             log.exception("Gagal membaca konfigurasi dari database")
@@ -1179,37 +1162,22 @@ class Bridge:
 
         if not rows:
             return
-        # Route each row to its lane: ring tags → scada_raw (day-partitioned
-        # 24h buffer), store tags → scada_samples (historian).
+        # ONE destination. There used to be two, chosen per tag by
+        # `store_enabled`; that lane is retired and every row goes to scada_raw.
         #
-        # scada_raw replaced the old ring table in phase 5. Rows now carry their
-        # plant (site_id) so "everything for plant X" needs no detour through
-        # scada_tags (audit D-1). NOTE: rows must keep arriving in time order —
-        # scada_raw's BRIN index on ts depends on it, and out-of-order writes
-        # would quietly make that index useless.
-        ring_rows = [
-            (r[0], r[1], self._site_of.get(r[0]), r[2])
-            for r in rows if r[0] in self._ring
-        ]
-        hist_rows = [r for r in rows if r[0] not in self._ring]
+        # Rows carry their plant (site_id) so "everything for plant X" needs no
+        # detour through scada_tags (audit D-1). NOTE: rows must keep arriving
+        # in time order — scada_raw's BRIN index on ts depends on it, and
+        # out-of-order writes would quietly make that index useless.
+        raw_rows = [(r[0], r[1], self._site_of.get(r[0]), r[2]) for r in rows]
         try:
             with self._db().cursor() as cur:
-                if ring_rows:
-                    cur.executemany(
-                        "INSERT INTO scada_raw (tag_id, ts, site_id, value) "
-                        "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                        ring_rows,
-                    )
-                if hist_rows:
-                    cur.executemany(
-                        "INSERT INTO scada_samples (tag_id, ts, value) "
-                        "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                        hist_rows,
-                    )
-            log.info(
-                "Flush: %d ring + %d historian tersimpan",
-                len(ring_rows), len(hist_rows),
-            )
+                cur.executemany(
+                    "INSERT INTO scada_raw (tag_id, ts, site_id, value) "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                    raw_rows,
+                )
+            log.info("Flush: %d nilai tersimpan", len(raw_rows))
             # Durably stored in Supabase now → drop the disk copies.
             self._buffer_delete_many(buf_deletes)
             for tag_id, _ts, _v in rows:

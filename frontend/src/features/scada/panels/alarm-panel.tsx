@@ -13,6 +13,7 @@
 import { useCallback, useMemo, useState } from "react";
 import {
   AlertOctagon,
+  AlertTriangle,
   Bell,
   BellOff,
   CheckCircle2,
@@ -27,8 +28,19 @@ import { scadaApi } from "@/lib/api/scada";
 import { useAuthDisplay } from "@/hooks/use-auth";
 import { useCan } from "@/components/providers/permissions-provider";
 import type { AppRole } from "@/lib/utils/roles";
-import { useScadaStore } from "../store";
-import type { AlarmColumn, AlarmEvent, AlarmPanelConfig, Tag } from "../types";
+import { useScadaStore, useTagLiveValues } from "../store";
+import {
+  WARN_ALARM_KINDS,
+  type AlarmColumn,
+  type AlarmEvent,
+  type AlarmPanelConfig,
+  type Tag,
+} from "../types";
+import {
+  PanelPlaceholder,
+  formatValue,
+  resolveDecimals,
+} from "./elements";
 import { usePanelRefresh } from "./use-panel-refresh";
 import { AlarmHistoryDialog } from "./alarm-history-dialog";
 
@@ -54,11 +66,20 @@ export const ALARM_COLUMNS_DEFAULT: AlarmColumn[] = [
 
 const TEXT_COLUMNS = new Set<AlarmColumn>(["tag", "device"]);
 
-type Status = "kritis" | "bisu" | "diakui" | "normal" | "nodata" | "notset";
+type Status =
+  | "kritis"
+  | "waspada"
+  | "bisu"
+  | "diakui"
+  | "normal"
+  | "nodata"
+  | "notset";
 
 interface Bounds {
   min: number | null;
   max: number | null;
+  warnMin: number | null;
+  warnMax: number | null;
 }
 
 function boundsOf(tag: Tag | undefined): Bounds {
@@ -67,7 +88,12 @@ function boundsOf(tag: Tag | undefined): Bounds {
     v === undefined || v === null || v === "" || !Number.isFinite(Number(v))
       ? null
       : Number(v);
-  return { min: num(cfg.alarm_min), max: num(cfg.alarm_max) };
+  return {
+    min: num(cfg.alarm_min),
+    max: num(cfg.alarm_max),
+    warnMin: num(cfg.warn_min),
+    warnMax: num(cfg.warn_max),
+  };
 }
 
 const STATUS_UI: Record<
@@ -75,6 +101,7 @@ const STATUS_UI: Record<
   { label: string; icon: typeof CheckCircle2; text: string; row: string }
 > = {
   kritis: { label: "Alarm", icon: AlertOctagon, text: "text-red", row: "bg-red/5" },
+  waspada: { label: "Waspada", icon: AlertTriangle, text: "text-amber", row: "bg-amber/5" },
   bisu: { label: "Bisu", icon: BellOff, text: "text-amber", row: "bg-amber/5" },
   diakui: { label: "Diakui", icon: UserCheck, text: "text-amber", row: "bg-amber/5" },
   normal: { label: "Normal", icon: CheckCircle2, text: "text-green", row: "" },
@@ -84,11 +111,12 @@ const STATUS_UI: Record<
 
 const ORDER: Record<Status, number> = {
   kritis: 0,
-  bisu: 1,
-  diakui: 2,
-  nodata: 3,
-  normal: 4,
-  notset: 5,
+  waspada: 1,
+  bisu: 2,
+  diakui: 3,
+  nodata: 4,
+  normal: 5,
+  notset: 6,
 };
 
 function fmtTime(iso: string): string {
@@ -105,27 +133,10 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
   const { role } = useAuthDisplay();
   const canAck = useCan(role as AppRole, "scada:ack");
   const activeAlarms = useScadaStore((s) => s.activeAlarms);
-  const liveValues = useScadaStore((s) => s.liveValues);
   const setLiveValue = useScadaStore((s) => s.setLiveValue);
   const refreshActiveAlarms = useScadaStore((s) => s.refreshActiveAlarms);
   const [showHistory, setShowHistory] = useState(false);
   const [ackingId, setAckingId] = useState<string | null>(null);
-
-  // Fallback for live values when Realtime is unavailable: fetch the latest
-  // lane on the shared panel cadence.
-  const load = useCallback(async () => {
-    if (config.tag_ids.length === 0) return;
-    try {
-      const res = await scadaApi.getLatest(config.tag_ids);
-      for (const item of res.items) {
-        setLiveValue(item.tag_id, { value: item.value, ts: item.ts });
-      }
-    } catch {
-      /* best-effort — Realtime/polling elsewhere keeps things moving */
-    }
-  }, [config.tag_ids, setLiveValue]);
-
-  usePanelRefresh(load);
 
   const tagById = useMemo(() => new Map(tags.map((t) => [t.id, t])), [tags]);
 
@@ -139,8 +150,52 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
     return map;
   }, [activeAlarms]);
 
+  /** Daftar centang KOSONG = tampilkan semua alarm yang sedang aktif.
+   *
+   *  Ini pembetulan perilaku, bukan sekadar setelan baru. Panel ini dulu selalu
+   *  memetakan config.tag_ids, jadi alarm pada sensor yang tidak ada di daftar
+   *  itu DIBUANG — padahal barisnya sudah ada di activeAlarms. Gejalanya persis
+   *  seperti yang dilaporkan: lonceng di pojok menyalakan 3 alarm sementara
+   *  panel Alarm di dinding yang sama berkata "Semua normal". Dan karena panel
+   *  baru lahir dengan tag_ids kosong (component-palette), pemiliknya harus
+   *  mencentang manual — maksimal 8 — lalu mengingat untuk mencentang lagi
+   *  setiap kali ada sensor baru. Tidak ada orang yang ingat.
+   *
+   *  Jadi kosong sekarang berarti "semua", dan mencentang berarti "hanya ini". */
+  const showAll = config.tag_ids.length === 0;
+
+  const tagIds = useMemo(() => {
+    if (!showAll) return config.tag_ids;
+    // Panel alarm itu daftar alarm, bukan daftar sensor: dalam mode semua, yang
+    // ditampilkan hanya sensor yang PUNYA kejadian terbuka. Menampilkan 300
+    // baris "Normal" akan mengubur satu baris merah yang jadi alasan panel ini
+    // dipasang.
+    return [...new Set(activeAlarms.map((e) => e.tag_id))];
+  }, [showAll, config.tag_ids, activeAlarms]);
+
+  // Hanya nilai untuk tag panel ini — bukan seluruh peta live. Dengan peta
+  // penuh, panel alarm 4 sensor digambar ulang tiap kali sensor mana pun dari
+  // 300 berdetak.
+  const liveValues = useTagLiveValues(tagIds);
+
+  // Fallback for live values when Realtime is unavailable: fetch the latest
+  // lane on the shared panel cadence.
+  const load = useCallback(async () => {
+    if (tagIds.length === 0) return;
+    try {
+      const res = await scadaApi.getLatest(tagIds);
+      for (const item of res.items) {
+        setLiveValue(item.tag_id, { value: item.value, ts: item.ts });
+      }
+    } catch {
+      /* best-effort — Realtime/polling elsewhere keeps things moving */
+    }
+  }, [tagIds, setLiveValue]);
+
+  usePanelRefresh(load);
+
   const rows = useMemo(() => {
-    return config.tag_ids
+    return tagIds
       .map((tagId) => {
         const tag = tagById.get(tagId);
         const bounds = boundsOf(tag);
@@ -150,8 +205,10 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
         // tile red for it (it surfaces via the bell + history instead).
         const valueEvent =
           events.find((e) => e.kind === "high" || e.kind === "low") ?? null;
+        const warnEvent = events.find((e) => WARN_ALARM_KINDS.has(e.kind)) ?? null;
         const silentEvent = events.find((e) => e.kind === "silent") ?? null;
-        const primary = valueEvent ?? silentEvent;
+        // Urutan keparahan: kritis menang atas waspada, waspada atas bisu.
+        const primary = valueEvent ?? warnEvent ?? silentEvent;
 
         let status: Status;
         if (primary) {
@@ -159,23 +216,39 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
             ? "diakui"
             : primary.kind === "silent"
               ? "bisu"
-              : "kritis";
-        } else if (bounds.min === null && bounds.max === null) {
+              : WARN_ALARM_KINDS.has(primary.kind)
+                ? "waspada"
+                : "kritis";
+        } else if (
+          bounds.min === null &&
+          bounds.max === null &&
+          bounds.warnMin === null &&
+          bounds.warnMax === null
+        ) {
           status = "notset";
         } else if (!live) {
           status = "nodata";
         } else {
           status = "normal";
         }
-        return { tagId, tag, bounds, live, event: primary, status };
+        return {
+          tagId,
+          tag,
+          bounds,
+          live,
+          event: primary,
+          status,
+          decimals: resolveDecimals(config.decimals, tag?.config),
+        };
       })
       .filter((r) => r.tag !== undefined || r.event !== null)
       .sort((a, b) => ORDER[a.status] - ORDER[b.status]);
-  }, [config.tag_ids, tagById, liveValues, eventsByTag]);
+  }, [tagIds, tagById, liveValues, eventsByTag, config.decimals]);
 
   const alarmCount = rows.filter(
     (r) => r.status === "kritis" || r.status === "bisu"
   ).length;
+  const warnCount = rows.filter((r) => r.status === "waspada").length;
 
   async function ack(event: AlarmEvent) {
     setAckingId(event.id);
@@ -190,18 +263,11 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
     }
   }
 
-  if (config.tag_ids.length === 0) {
-    return <Center icon>Belum ada tag dipilih untuk alarm ini.</Center>;
-  }
-  if (rows.length === 0) {
-    return <Center>Tag tidak ditemukan (mungkin dinonaktifkan).</Center>;
-  }
-
   const columns = (config.columns ?? ALARM_COLUMNS_DEFAULT).filter((c) =>
     ALARM_COLUMNS.some((a) => a.key === c)
   );
   if (columns.length === 0) {
-    return <Center icon>Semua kolom disembunyikan — pilih minimal satu.</Center>;
+    return <PanelPlaceholder icon={Bell}>Semua kolom disembunyikan — pilih minimal satu.</PanelPlaceholder>;
   }
 
   type RowData = (typeof rows)[number];
@@ -221,16 +287,24 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
             )}
           </>
         );
-      case "bounds":
-        return r.bounds.min === null && r.bounds.max === null ? (
+      case "bounds": {
+        // Tunjukkan ambang yang MENJELASKAN baris ini. Baris waspada yang
+        // dilabeli pita alarm hanya membuat pembacanya bingung: angkanya tidak
+        // cocok dengan nilai yang bikin barisnya kuning.
+        const warnBand = r.status === "waspada";
+        const min = warnBand ? r.bounds.warnMin : r.bounds.min;
+        const max = warnBand ? r.bounds.warnMax : r.bounds.max;
+        return min === null && max === null ? (
           <span className="text-text-light">—</span>
         ) : (
           <span className="text-[10.5px] text-text-light">
-            {r.bounds.min !== null ? r.bounds.min.toLocaleString("id") : "−∞"}
+            {min !== null ? formatValue(min, r.decimals) : "−∞"}
             {"–"}
-            {r.bounds.max !== null ? r.bounds.max.toLocaleString("id") : "∞"}
+            {max !== null ? formatValue(max, r.decimals) : "∞"}
+            {warnBand && <span className="ml-1 opacity-70">wsp</span>}
           </span>
         );
+      }
       case "device":
         return (
           <span className="font-mono text-[11px] text-text-muted">
@@ -240,7 +314,7 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
       case "value":
         return (
           <>
-            {!r.live ? "—" : r.live.value.toLocaleString("id")}
+            {!r.live ? "—" : formatValue(r.live.value, r.decimals)}
             {unit && r.live && (
               <span className="ml-0.5 text-[10px] font-normal text-text-light">
                 {unit}
@@ -296,12 +370,26 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
         <div
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold",
-            alarmCount > 0 ? "bg-red/10 text-red" : "bg-green/10 text-green"
+            alarmCount > 0
+              ? "bg-red/10 text-red"
+              : warnCount > 0
+                ? "bg-amber/10 text-amber"
+                : "bg-green/10 text-green"
           )}
         >
-          <Bell className="size-3.5" />
+          {alarmCount > 0 ? (
+            <Bell className="size-3.5" />
+          ) : warnCount > 0 ? (
+            <AlertTriangle className="size-3.5" />
+          ) : (
+            <CheckCircle2 className="size-3.5" />
+          )}
           <span className="flex-1">
-            {alarmCount > 0 ? `${alarmCount} alarm aktif` : "Semua normal"}
+            {alarmCount > 0
+              ? `${alarmCount} alarm aktif${warnCount > 0 ? ` · ${warnCount} waspada` : ""}`
+              : warnCount > 0
+                ? `${warnCount} waspada`
+                : "Semua normal"}
           </span>
           <button
             type="button"
@@ -315,6 +403,13 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
+        {rows.length === 0 ? (
+          <PanelPlaceholder>
+            {showAll
+              ? "Belum ada alarm aktif. Panel ini menampilkan semua sensor yang beralarm — centang sensor tertentu di pengaturan bila ingin dibatasi."
+              : "Sensor yang dicentang tidak ditemukan (mungkin dinonaktifkan)."}
+          </PanelPlaceholder>
+        ) : (
         <table className="w-full border-collapse text-[12px]">
           <tbody>
             {rows.map((r) => {
@@ -343,6 +438,7 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
             })}
           </tbody>
         </table>
+        )}
       </div>
 
       {showHistory && (
@@ -352,11 +448,3 @@ export function AlarmPanel({ config, tags }: { config: AlarmPanelConfig; tags: T
   );
 }
 
-function Center({ children, icon = false }: { children: React.ReactNode; icon?: boolean }) {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg px-4 text-center">
-      {icon && <Bell className="size-6 text-text-light opacity-60" />}
-      <span className="text-[12px] text-text-muted">{children}</span>
-    </div>
-  );
-}

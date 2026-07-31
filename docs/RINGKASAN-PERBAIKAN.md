@@ -245,9 +245,37 @@ Semua aman, semua bisa diulang.
 | Pekerjaan | Kenapa ditunda |
 |---|---|
 | **D-5** — cara menulis `COPY` | Belum mendesak: 2% anggaran pada 300 sensor |
-| **Lebur `scada_samples` ke `scada_raw`** | Baru aman setelah arsip berbasis ringkasan terbukti (Fase 6 di produksi) |
 | **Cabut izin berlebih peran `anon`** | Saat ini tidak berbahaya (ditolak lapis lain), tapi menambah lapis kedua. Menyentuh semua tabel, bukan cuma R-Net |
 | **Utang lint lama** | 17 error di berkas non-R-Net, tidak tersentuh pekerjaan ini |
+
+### ✅ SELESAI 30 Juli 2026 — `scada_samples` dipensiunkan
+
+Baris **"Lebur `scada_samples` ke `scada_raw`"** di tabel ini sudah dikerjakan.
+Yang membuatnya jauh lebih ringan dari perkiraan: saat diperiksa, lajur itu
+ternyata **sudah tidak dipakai sama sekali** — 0 baris, 0 tag bercentang, dari
+17 tag. Jadi tidak ada arsip final, tidak ada migrasi data, tidak ada masa soak;
+hanya pembersihan kode dengan migrasi berpagar (`p6q7r8s9t0u1`).
+
+Tidak perlu deploy ke PC lapangan: `bridge.py` memilih lajur dari **data**
+(`config.store_enabled`, dibaca ulang tiap 30 detik), bukan dari kode.
+
+**Kerugian fidelitas, jujur.** Nilai mentah kini 24-48 jam untuk semua sensor,
+padahal tag bercentang dulu menyimpannya ±1 bulan. Kecil, karena tag store sudah
+dibatasi slow/slowest:
+
+| Level | Dulu | Sekarang | Hilang |
+|---|---|---|---|
+| slowest 60 dtk | 30 hari mentah @60 dtk | ringkasan `n=1`/menit | **tidak ada** (rata=min=maks) |
+| slow 30 dtk | 30 hari mentah @30 dtk | ringkasan `n=2`/menit | hanya urutan 2 sampel dalam 1 menit |
+
+Naikkan `ring_window_h` di Panel Administrasi → R-Net kalau butuh mentah lebih
+panjang; di skala sekarang biayanya nol.
+
+**Dua bug ikut diperbaiki karena pensiun ini akan memunculkannya:**
+jendela alarm bisu dulu memberi lantai 60 detik untuk tag non-store — setelah
+pensiun semua tag masuk cabang itu, dan sensor *slowest* (interval 60 detik)
+akan kedip-kedip bisu/normal selamanya; dan `DELETE` di archiver tidak berbatas
+`ts` padahal workbook-nya hanya mencakup `[cycle_start, now)`.
 
 ---
 

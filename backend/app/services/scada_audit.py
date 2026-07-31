@@ -100,6 +100,9 @@ _TAG_CONFIG_KEYS = (
     "offset",
     "decimals",
     "sampling_level",
+    # Retired knobs. Kept in the audit list on purpose: rows already written
+    # reference them, and a tag whose config still carries a leftover key must
+    # still show it disappearing when the migration strips it.
     "store_enabled",
     "storage_interval_s",
     "alarm_min",

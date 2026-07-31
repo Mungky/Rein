@@ -18,7 +18,9 @@ from app.services.alarm_engine import (
     SILENT_FLOOR_S,
     _bounds,
     _silent_after_s,
+    _warn_bounds,
     _wants_silent,
+    value_conditions,
 )
 from app.services import rnet_settings
 from app.services.notifier import build_message
@@ -64,26 +66,141 @@ def test_bounds_garbage_is_ignored():
     assert _bounds({"alarm_min": "abc", "alarm_max": ""}) == (None, None)
 
 
+def test_warn_bounds_parsing_matches_alarm_bounds():
+    assert _warn_bounds(None) == (None, None)
+    assert _warn_bounds({"warn_min": 20, "warn_max": 80}) == (20.0, 80.0)
+    assert _warn_bounds({"warn_min": "20.5", "warn_max": "80"}) == (20.5, 80.0)
+    assert _warn_bounds({"warn_min": "abc", "warn_max": ""}) == (None, None)
+
+
+# --------------------------------------------------------------------------- #
+# Value conditions: which kinds should be open for a reading
+#
+# The warn_* pair is why this section exists. The Data tab has always painted
+# rows amber from warn_min/warn_max, but the engine only ever read
+# alarm_min/alarm_max — so a sensor inside its warn band showed amber in the
+# Data tab and "Normal" on Monitor at the same time, with nothing in the bell
+# and nothing emailed. Two screens disagreeing about one sensor teaches the
+# operator that neither can be trusted.
+# --------------------------------------------------------------------------- #
+
+CFG = {"warn_min": 20, "warn_max": 80, "alarm_min": 10, "alarm_max": 90}
+
+
+def _open_kinds(value, config=CFG) -> set[str]:
+    return {k for k, breached, _ in value_conditions(value, config) if breached}
+
+
+def test_value_conditions_always_reports_every_kind():
+    """All four kinds come back every time, breached or not.
+
+    The caller needs the False rows: that is how an event opened by a threshold
+    the user has since deleted gets cleared. Returning only the breached kinds
+    is exactly the bug the old code had."""
+    kinds = [k for k, _, _ in value_conditions(50, CFG)]
+    assert kinds == ["high", "low", "warn_high", "warn_low"]
+
+
+def test_inside_every_band_opens_nothing():
+    assert _open_kinds(50) == set()
+
+
+def test_warn_band_opens_only_warn():
+    """The regression the user reported: amber in the Data tab, silence on Monitor."""
+    assert _open_kinds(85) == {"warn_high"}
+    assert _open_kinds(15) == {"warn_low"}
+
+
+def test_alarm_band_opens_only_alarm_not_warn_as_well():
+    """One severity at a time — kritis must not also raise waspada.
+
+    Both bands are breached at 95, but a sensor listed twice (once red, once
+    amber) reads as two problems. Matches the Data tab's tagStatusOf."""
+    assert _open_kinds(95) == {"high"}
+    assert _open_kinds(5) == {"low"}
+
+
+def test_thresholds_are_exclusive_at_the_boundary():
+    """Sitting exactly ON a threshold is not a breach — matches `>` / `<`.
+
+    An inclusive comparison would make a sensor parked on a round number
+    (a setpoint, very often) flap in and out of alarm on sensor noise."""
+    assert _open_kinds(80) == set()
+    assert _open_kinds(20) == set()
+    assert _open_kinds(90) == {"warn_high"}
+    assert _open_kinds(10) == {"warn_low"}
+
+
+def test_warn_alone_works_without_any_alarm_bounds():
+    """A sensor given only a warn band still reports. Half-configured is normal
+    while someone is still tuning a new sensor."""
+    assert _open_kinds(85, {"warn_max": 80}) == {"warn_high"}
+    assert _open_kinds(15, {"warn_min": 20}) == {"warn_low"}
+
+
+def test_alarm_alone_behaves_exactly_as_before_warn_existed():
+    """Tags configured before the warn band existed must not change behaviour."""
+    only_alarm = {"alarm_min": 10, "alarm_max": 90}
+    assert _open_kinds(95, only_alarm) == {"high"}
+    assert _open_kinds(5, only_alarm) == {"low"}
+    assert _open_kinds(50, only_alarm) == set()
+
+
+def test_no_bounds_at_all_opens_nothing():
+    assert _open_kinds(1e9, {}) == set()
+    assert _open_kinds(-1e9, None) == set()
+
+
+def test_thresholds_reported_with_the_kind_that_used_them():
+    """The email/panel prints this number, so it must be the bound that fired —
+    not the alarm bound on a waspada row."""
+    by_kind = {k: t for k, breached, t in value_conditions(85, CFG) if breached}
+    assert by_kind == {"warn_high": 80.0}
+    by_kind = {k: t for k, breached, t in value_conditions(95, CFG) if breached}
+    assert by_kind == {"high": 90.0}
+
+
+def test_inverted_bands_still_resolve_to_one_severity():
+    """Nothing stops a user typing warn tighter than alarm the wrong way round.
+    Whatever they typed, the sensor must not end up both red and amber."""
+    weird = {"warn_min": 90, "warn_max": 10, "alarm_min": 20, "alarm_max": 80}
+    for value in (5, 50, 95):
+        opened = _open_kinds(value, weird)
+        assert not ({"high", "low"} & opened and {"warn_high", "warn_low"} & opened)
+
+
 # --------------------------------------------------------------------------- #
 # Sensor-silence window: max(3 × interval, 60 s); ring tags = flat 60 s
 # --------------------------------------------------------------------------- #
 
 
-def test_silent_window_ring_mode_uses_floor():
-    # store off → ring mode → the 60 s floor IS the window, regardless of level
+def test_silent_window_scales_with_the_tag_own_interval():
+    """3x interval, 60 s floor, for EVERY tag.
+
+    This replaced a branch that gave non-store tags a flat 60 s window. Once
+    the store lane was retired every tag took that branch — and a `slowest` tag
+    reports exactly once per 60 s, so a 60 s window made it silent between
+    every pair of readings. The engine would open a `silent` event, the next
+    reading would clear it, forever. That is the regression this pins."""
     s = _settings()
-    assert _silent_after_s(s, {}) == SILENT_FLOOR_S
-    assert _silent_after_s(s, {"sampling_level": "slowest"}) == SILENT_FLOOR_S
+    assert _silent_after_s(s, {"sampling_level": "slow"}) == 90       # 30 s x 3
+    assert _silent_after_s(s, {"sampling_level": "slowest"}) == 180   # 60 s x 3
 
 
-def test_silent_window_store_mode_uses_level():
+def test_the_floor_still_protects_fast_levels():
+    """fastest (2 s) x 3 = 6 s would fire on any momentary hiccup."""
     s = _settings()
-    # slow = 30 s → 3× = 90 s
-    assert _silent_after_s(s, {"store_enabled": True, "sampling_level": "slow"}) == 90
-    # slowest = 60 s → 3× = 180 s
-    assert (
-        _silent_after_s(s, {"store_enabled": True, "sampling_level": "slowest"}) == 180
-    )
+    assert _silent_after_s(s, {"sampling_level": "fastest"}) == SILENT_FLOOR_S
+    assert _silent_after_s(s, {"sampling_level": "fast"}) == SILENT_FLOOR_S
+    assert _silent_after_s(s, {}) == SILENT_FLOOR_S  # no level → default "fast"
+
+
+def test_a_slowest_tag_is_never_silent_between_two_normal_readings():
+    """The failure stated as the operator would see it: readings arrive exactly
+    one interval apart, which is healthy, and must not raise an alarm."""
+    s = _settings()
+    interval = s.level_slowest_s
+    assert _silent_after_s(s, {"sampling_level": "slowest"}) > interval
 
 
 def test_wants_silent_automatic_for_mqtt():
@@ -117,13 +234,14 @@ def test_validate_level_accepts_all_for_ring():
         validate_sampling_level({"sampling_level": level})
 
 
-def test_validate_level_blocks_fast_when_storing():
-    for bad in ("fastest", "fast"):
-        with pytest.raises(ValueError):
-            validate_sampling_level({"store_enabled": True, "sampling_level": bad})
-    # slow / slowest are fine while storing
-    validate_sampling_level({"store_enabled": True, "sampling_level": "slow"})
-    validate_sampling_level({"store_enabled": True, "sampling_level": "slowest"})
+def test_every_level_is_legal_for_every_tag():
+    """The slow/slowest-only restriction existed solely to keep a month of rows
+    under Excel's sheet limit in the store lane's archive. That lane is retired,
+    so the restriction went with it — and a leftover `store_enabled` key in some
+    old config must not resurrect it."""
+    for level in ("fastest", "fast", "slow", "slowest"):
+        validate_sampling_level({"sampling_level": level})
+        validate_sampling_level({"store_enabled": True, "sampling_level": level})
 
 
 def test_validate_level_rejects_unknown():
@@ -131,36 +249,19 @@ def test_validate_level_rejects_unknown():
         validate_sampling_level({"sampling_level": "turbo"})
 
 
-def test_tag_create_request_enforces_level():
+def test_tag_create_request_rejects_an_unknown_level():
     with pytest.raises(ValueError):
         TagCreateRequest(
             sheet_id=uuid.uuid4(),
             source="simulator",
             device_key="SIM-01",
             label="Suhu",
-            config={"store_enabled": True, "sampling_level": "fast"},
+            config={"sampling_level": "turbo"},
         )
 
 
-# --------------------------------------------------------------------------- #
-# Reset cycle math (shared by alarm reminder + archiver)
-# --------------------------------------------------------------------------- #
-
-
-def test_parse_cycle_start_roundtrip():
-    iso = rnet_settings.now_iso()
-    dt = rnet_settings.parse_cycle_start({"store_cycle_start": iso})
-    assert dt is not None and dt.tzinfo is not None
-    assert rnet_settings.parse_cycle_start({}) is None
-    assert rnet_settings.parse_cycle_start({"store_cycle_start": "junk"}) is None
-
-
-def test_cycle_reset_at_adds_months():
-    s = _settings(store_months=1)
-    start = datetime(2026, 1, 31, 12, 0, tzinfo=timezone.utc)
-    reset = rnet_settings.cycle_reset_at(s, start)
-    # +1 calendar month, day clamped into February
-    assert reset.month == 2 and reset.year == 2026
+# Reset-cycle math (parse_cycle_start / cycle_reset_at / add_months) was
+# deleted with the store lane — there is no per-tag clock left to compute.
 
 
 # --------------------------------------------------------------------------- #
@@ -196,6 +297,41 @@ def test_message_low_alarm():
     )
     assert "Level Tangki" in subject
     assert "di bawah batas" in body
+
+
+def test_message_warn_says_waspada_not_alarm():
+    """Waspada is a heads-up, not a breach.
+
+    Giving both the same "ALARM:" subject is how operators learn to skim past
+    all of them — the word has to keep meaning something."""
+    subject, body = build_message(
+        _event("warn_high", trigger_value=82.0, threshold=80.0), _tag(), "triggered"
+    )
+    assert subject.startswith("WASPADA")
+    assert "ALARM" not in subject
+    assert "82" in subject and "80" in body
+    assert "di atas batas waspada" in body
+    assert "Belum melewati batas alarm" in body
+
+
+def test_message_warn_low():
+    subject, body = build_message(
+        _event("warn_low", trigger_value=18.0, threshold=20.0),
+        _tag("Level Tangki", "m"),
+        "triggered",
+    )
+    assert subject.startswith("WASPADA")
+    assert "di bawah batas waspada" in body
+
+
+def test_message_warn_cleared_pairs_with_the_warn():
+    """Clearing reuses the shared value wording, so the label must exist there
+    too — a missing KIND_LABELS entry would raise KeyError mid-notification."""
+    subject, body = build_message(
+        _event("warn_high", trigger_value=82.0, threshold=80.0), _tag(), "cleared"
+    )
+    assert "NORMAL" in subject
+    assert "di atas batas waspada" in body
 
 
 def test_message_silent_alarm():

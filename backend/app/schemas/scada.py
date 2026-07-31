@@ -12,8 +12,9 @@ Keep in sync with `frontend/src/features/scada/types.ts`.
 import re
 import uuid
 from typing import Annotated, Literal, Union
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class PanelGrid(BaseModel):
@@ -127,6 +128,9 @@ class ChartPanelConfig(ScreenSize):
     y_max: float | None = None
     # Bawaan "linear" = persis tampilan lama; smooth/step opsi baru
     line_style: Literal["smooth", "linear", "step"] = "linear"
+    # Angka di belakang koma; None = ikut config.decimals sensor, lalu otomatis
+    # (satu aturan di frontend: resolveDecimals, panels/elements.tsx)
+    decimals: int | None = Field(default=None, ge=0, le=6)
     show_legend: bool = True
     show_grid: bool = True
 
@@ -148,6 +152,9 @@ class TablePanelConfig(ScreenSize):
     range: ChartRange = "24h"
     # Urutan + isi kolom (editor kolom di inspector); None = bawaan
     columns: list[TableColumn] | None = Field(default=None, max_length=7)
+    # Angka di belakang koma; None = ikut config.decimals sensor, lalu otomatis
+    # (satu aturan di frontend: resolveDecimals, panels/elements.tsx)
+    decimals: int | None = Field(default=None, ge=0, le=6)
     show_header: bool = True
     show_footer: bool = True
 
@@ -204,6 +211,9 @@ class BarPanelConfig(ScreenSize):
     color: HexColor | None = None
     # "horizontal" = batang mendatar (bawaan), "vertical" = batang tegak
     orientation: Literal["horizontal", "vertical"] = "horizontal"
+    # Angka di belakang koma; None = ikut config.decimals sensor, lalu otomatis
+    # (satu aturan di frontend: resolveDecimals, panels/elements.tsx)
+    decimals: int | None = Field(default=None, ge=0, le=6)
     elements: PanelElements | None = None
     layout: PanelLayout | None = None
 
@@ -227,6 +237,9 @@ class AlarmPanelConfig(ScreenSize):
     range: ChartRange = "24h"
     # Urutan + isi kolom (editor kolom di inspector); None = bawaan
     columns: list[AlarmColumn] | None = Field(default=None, max_length=7)
+    # Angka di belakang koma; None = ikut config.decimals sensor, lalu otomatis
+    # (satu aturan di frontend: resolveDecimals, panels/elements.tsx)
+    decimals: int | None = Field(default=None, ge=0, le=6)
     show_header: bool = True
 
 
@@ -348,6 +361,9 @@ class LevelPanelConfig(ScreenSize):
     color: HexColor | None = None
     label: str | None = Field(default=None, max_length=120)
     unit: str | None = Field(default=None, max_length=30)
+    # Angka di belakang koma; None = ikut config.decimals sensor, lalu otomatis
+    # (satu aturan di frontend: resolveDecimals, panels/elements.tsx)
+    decimals: int | None = Field(default=None, ge=0, le=6)
     elements: PanelElements | None = None
     layout: PanelLayout | None = None
 
@@ -379,6 +395,9 @@ class LedPanelConfig(ScreenSize):
     off_label: str = Field(default="MATI", max_length=40)
     label: str | None = Field(default=None, max_length=120)
     show_value: bool = True
+    # Angka di belakang koma; None = ikut config.decimals sensor, lalu otomatis
+    # (satu aturan di frontend: resolveDecimals, panels/elements.tsx)
+    decimals: int | None = Field(default=None, ge=0, le=6)
     elements: PanelElements | None = None
     layout: PanelLayout | None = None
 
@@ -1100,6 +1119,41 @@ class RollupArchiveListOut(BaseModel):
     items: list[RollupArchiveOut]
 
 
+class LaneCoverageOut(BaseModel):
+    """How far back ONE storage lane actually reaches, right now.
+
+    `from_ts`/`to_ts` are derived from the live partition names, so they are
+    what the database can really answer — not what the retention policy says it
+    should keep. The two differ routinely: a day partition survives until ALL of
+    it has aged out, so the raw lane is usually 24-48 h rather than exactly 24.
+    """
+
+    lane: str
+    from_ts: str | None
+    to_ts: str | None
+    # ring_window_h for raw, keep-months expressed in hours for rollup — the
+    # POLICY, next to the reality above, because a user comparing the two is
+    # exactly how "why is my export short?" gets answered without asking anyone.
+    policy_hours: int | None
+    partitions: int
+
+
+class TagCoverageOut(BaseModel):
+    """First/last timestamp one sensor actually has in one lane. NULL means the
+    sensor has nothing there — which is information, not an error: it is the
+    difference between "no data in this range" and "wrong lane"."""
+
+    tag_id: str
+    lane: str
+    first_ts: str | None
+    last_ts: str | None
+
+
+class CoverageOut(BaseModel):
+    lanes: list[LaneCoverageOut]
+    tags: list[TagCoverageOut]
+
+
 class TopicFieldOut(BaseModel):
     """One name inside a topic's latest payload, and whether a sensor claims it.
 
@@ -1140,10 +1194,13 @@ class LatestOut(BaseModel):
 
 # Sampling levels a tag may pick. The name→seconds mapping is admin-editable in
 # scada_settings (default fastest 2s / fast 5s / slow 30s / slowest 60s).
+#
+# All four are legal for every sensor. There used to be a second, narrower list
+# (slow/slowest only) that applied when "Simpan data" was ticked — not because
+# fast sampling was wrong, but because a month of 2-second rows would overflow
+# an Excel sheet in the archive that lane produced. That lane is retired, the
+# archive it protected no longer exists, and the restriction went with it.
 SAMPLING_LEVELS = ("fastest", "fast", "slow", "slowest")
-# When "Simpan data" (store) is ON, only these are allowed — the fast levels are
-# reserved for the 24h ring lane so the 1-month historian never explodes.
-STORE_SAMPLING_LEVELS = ("slow", "slowest")
 
 SamplingLevel = Literal["fastest", "fast", "slow", "slowest"]
 
@@ -1158,10 +1215,6 @@ def validate_sampling_level(config: dict | None) -> None:
         return
     if raw not in SAMPLING_LEVELS:
         raise ValueError("Level sampling tidak valid")
-    if cfg.get("store_enabled") and raw not in STORE_SAMPLING_LEVELS:
-        raise ValueError(
-            "Saat simpan data aktif, level hanya boleh Slow atau Slowest"
-        )
 
 
 # Longest accepted config["mqtt_field"]. A field name is "<gateway>.<sensor>"
@@ -1213,6 +1266,11 @@ class TagImportRow(BaseModel):
     # possible and produced a sensor that could never receive anything.
     device_key: str = Field(min_length=1, max_length=120)
     sampling_level: SamplingLevel | None = None
+    # ACCEPTED AND IGNORED. The store lane is retired, but operators already
+    # have spreadsheets carrying this column; rejecting it would turn a working
+    # import into a 422 over a setting that no longer means anything. Kept as a
+    # field rather than allowed through `extra` so it stays visible here as a
+    # deliberate compatibility shim, not an oversight.
     store_enabled: bool = False
     alarm_min: float | None = None
     alarm_max: float | None = None
@@ -1244,7 +1302,8 @@ class TagImportResultOut(BaseModel):
 
 
 class RnetSettingsOut(BaseModel):
-    """R-Net global settings (single row) — sampling-level durations + retention."""
+    """R-Net global settings (single row) — sampling durations, retention, and
+    the zone used to LABEL timestamps for humans."""
 
     level_fastest_s: int
     level_fast_s: int
@@ -1253,6 +1312,7 @@ class RnetSettingsOut(BaseModel):
     ring_window_h: int
     store_months: int
     reset_warn_days: int
+    display_timezone: str
 
 
 class RnetSettingsUpdateRequest(BaseModel):
@@ -1265,3 +1325,25 @@ class RnetSettingsUpdateRequest(BaseModel):
     ring_window_h: int | None = Field(default=None, ge=1, le=168)
     store_months: int | None = Field(default=None, ge=1, le=24)
     reset_warn_days: int | None = Field(default=None, ge=1, le=90)
+    # IANA name. Validated HERE, at the write, so a typo is a 422 the admin sees
+    # immediately — the readers fall back to UTC and log, which would otherwise
+    # turn one bad keystroke into every export and archive silently switching
+    # zone.
+    display_timezone: str | None = Field(default=None, max_length=64)
+
+    @field_validator("display_timezone")
+    @classmethod
+    def _known_zone(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        name = v.strip()
+        if not name:
+            raise ValueError("Zona waktu tidak boleh kosong")
+        try:
+            ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(
+                f"Zona waktu '{name}' tidak dikenal. Pakai nama IANA, "
+                f"mis. Asia/Jakarta, Asia/Makassar, Asia/Jayapura, UTC."
+            )
+        return name

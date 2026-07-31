@@ -17,7 +17,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import TypeAdapter
@@ -33,6 +33,7 @@ from app.schemas.scada import (
     ChannelListOut,
     ChannelOut,
     ChannelUpdateRequest,
+    CoverageOut,
     DeletedOut,
     HistoryOut,
     RecentSamplesOut,
@@ -1025,10 +1026,7 @@ async def create_tag(
     await _get_sheet_or_404(db, body.sheet_id)
     if body.source == "mqtt":
         await _get_site_or_404(db, body.site_id)
-    # A tag created with "Simpan data" on starts its 1-month reset clock now.
     config = dict(body.config)
-    if config.get("store_enabled") and not config.get("store_cycle_start"):
-        config["store_cycle_start"] = rnet_settings.now_iso()
     tag = ScadaTag(
         sheet_id=body.sheet_id,
         source=body.source,
@@ -1131,9 +1129,10 @@ async def import_tags(
         config: dict = {"mqtt_topic": topic}
         if row.sampling_level:
             config["sampling_level"] = row.sampling_level
-        if row.store_enabled:
-            config["store_enabled"] = True
-            config["store_cycle_start"] = rnet_settings.now_iso()
+        # Kolom `simpan` MASIH DITERIMA lalu diabaikan. Lajur store sudah
+        # pensiun, tapi spreadsheet operator yang sudah ada memuat kolom itu —
+        # menolaknya dengan 422 akan mematahkan impor yang selama ini jalan,
+        # demi setelan yang sekarang tidak berarti apa-apa.
         for name in ("alarm_min", "alarm_max", "warn_min", "warn_max", "decimals"):
             value = getattr(row, name)
             if value is not None:
@@ -1205,7 +1204,6 @@ async def update_tag(
     # A source switch means a DIFFERENT data stream — the old history (e.g.
     # simulator placeholder values) would only mislead, so it gets purged below.
     source_changed = body.source is not None and body.source != tag.source
-    old_store = bool((tag.config or {}).get("store_enabled"))
 
     if body.sheet_id is not None:
         await _get_sheet_or_404(db, body.sheet_id)
@@ -1239,16 +1237,11 @@ async def update_tag(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    # Toggling "Simpan data" flips a tag between the ring and historian lanes —
-    # a clean break: purge both tables and (re)start the reset clock on enable.
-    new_store = bool((tag.config or {}).get("store_enabled"))
-    store_changed = new_store != old_store
-    if new_store and not (tag.config or {}).get("store_cycle_start"):
-        cfg = dict(tag.config or {})
-        cfg["store_cycle_start"] = rnet_settings.now_iso()
-        tag.config = cfg
-
-    if source_changed or store_changed:
+    # Only a SOURCE switch purges history now. It used to also fire when
+    # "Simpan data" was toggled, because that moved the tag between two tables
+    # and the old lane's rows became unreachable. There is one lane left, so a
+    # config change no longer strands anything.
+    if source_changed:
         # Audit D-10: hand the purge to the background worker instead of
         # deleting here. The old code ran three unbounded DELETEs inside this
         # request — on a tag with millions of rows the operator watched a
@@ -1366,7 +1359,16 @@ async def get_samples_page(
 # ---------------------------------------------------------------------------
 
 MAX_HISTORY_TAGS = 4
-MAX_HISTORY_POINTS = 720
+# Raised from 720. The old ceiling made one window UNSERVABLE at raw
+# resolution: 24 h / 720 = 120 s per bucket, which is over ROLLUP_MIN_BUCKET_S,
+# so a 24-hour chart was always answered from the per-minute summary no matter
+# how many points the caller asked for. That is exactly backwards — 24 h is the
+# window the raw lane exists to serve. Sub-minute buckets over 24 h need
+# > 1 440 points, so the cap had to move before the choice was even possible.
+#
+# 2 000 is a ceiling, not a default: the Monitor panels still ask for 300-600
+# (RANGE_POINTS), and only the Data tab spends the extra budget.
+MAX_HISTORY_POINTS = 2000
 MAX_HISTORY_SPAN = timedelta(days=45)
 
 # --- Raw vs summary: which lane answers a bucketed read? -------------------
@@ -1376,9 +1378,20 @@ MAX_HISTORY_SPAN = timedelta(days=45)
 # therefore about the BUCKET, not about the window:
 #
 #   bucket < 60 s  → the caller wants sub-minute detail → raw.
-#                    (Only short ranges ask for this, and short ranges are
-#                    inside raw's 24 h retention anyway.)
 #   bucket >= 60 s → the summary already holds the answer, pre-aggregated.
+#
+# WORTH KNOWING, because it is counter-intuitive: at the SAME bucket width the
+# two lanes return identical numbers. The average is reconstructed exactly
+# (sum(avg*n)/sum(n) == sum of all values / count of all values, see
+# _rollup_avg), the minimum is the min of the per-minute minima, and the
+# maximum the max of the per-minute maxima. So this rule is about what the
+# summary CAN answer, never about accuracy — and switching a chart's lane
+# without also changing its bucket width changes nothing on screen.
+#
+# What decides how detailed a chart looks is therefore the POINT BUDGET, not
+# this rule. The Data tab spends a large one so its 24-hour view lands under
+# 60 s and reads raw; the Monitor panels spend a small one because a wall tile
+# cannot show the difference.
 #
 # Buckets served from the summary are rounded UP to a whole number of minutes.
 # That is what makes the two lanes agree exactly: bucket edges then land on
@@ -1916,23 +1929,41 @@ async def get_summary(
 
 
 # ---------------------------------------------------------------------------
-# Excel export — assembled ON THE SERVER (audit D-7)
+# CSV export — assembled ON THE SERVER (audit D-7)
 # ---------------------------------------------------------------------------
 
 MAX_EXPORT_TAGS = 20
 
 
-@router.get("/export.xlsx")
+@router.get("/export")
 @limiter.limit(READ_LIMIT)
-async def export_xlsx(
+async def export_data(
     request: Request,
     tag_ids: Annotated[list[uuid.UUID], Query(min_length=1, max_length=MAX_EXPORT_TAGS)],
     start: datetime,
     end: datetime,
+    lane: Annotated[Literal["raw", "rollup"], Query()] = "raw",
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
 ):
-    """Raw rows for [start, end), one SHEET PER SENSOR, built on the server.
+    """Rows for [start, end) as CSV, one FILE PER SENSOR, built on the server.
+
+    TWO LANES, because R-Net stores two (ARSITEKTUR-DATA §2.3):
+      lane=raw    → every reading, but only the last ~24-48 h exist.
+      lane=rollup → one row per minute (avg/min/max/n) covering 30-61 days.
+
+    This used to be raw-only, with no way to say so. Asking for last month
+    returned a file that looked complete and held a day and a half of data,
+    because the raw lane's day partitions for the rest had been dropped — the
+    export was honest about the range it was given and silent about the range
+    it could actually serve. /coverage now tells the UI what each lane really
+    holds; this parameter lets the user act on it.
+
+    One sensor comes back as a plain .csv; several come back as a .zip of
+    per-sensor CSVs. It used to be .xlsx, which was both heavier on the wire
+    and the odd format out — the monthly Drive archive has always been
+    zip-of-CSV. The route was `/export.xlsx`; a path that promises a format it
+    no longer sends is a small lie that costs someone an afternoon later.
 
     Replaces the browser-side assembly (audit D-7). That version paged
     /samples backwards from `end`, up to 400 pages of 5 000 rows PER TAG, all
@@ -1941,15 +1972,9 @@ async def export_xlsx(
     usually died first, and every one of those pages also wrote an access-log
     row and ran a COUNT.
 
-    Here it is one request. Rows stream out of Postgres in keyset-paged chunks
-    into a write_only workbook that spills to disk, so neither the server nor
-    the browser ever holds the whole export in memory — the browser just
-    receives a file.
-
-    One sheet per sensor rather than one wide sheet: sensors sample at
-    different rates, so a shared time column is mostly empty cells, and a
-    2-second sensor would blow past Excel's 1 048 576-row limit far sooner
-    when every sensor's timestamps are merged into one column.
+    Here it is one request, and it streams the whole way: rows leave Postgres
+    in keyset-paged chunks and go straight into the file on disk, so neither
+    the server nor the browser ever holds the export in memory.
     """
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
@@ -1975,16 +2000,13 @@ async def export_xlsx(
     from fastapi.responses import FileResponse
     from starlette.background import BackgroundTask
 
-    from app.services import archiver
+    from app.services import data_export
 
-    fd, path = tempfile.mkstemp(suffix=".xlsx", prefix="rnet-export-")
+    fd, path = tempfile.mkstemp(prefix="rnet-export-")
     _os.close(fd)
     try:
-        counts = await archiver.build_plant_workbook(
-            db, tags, {t.id: (start, end) for t in tags}, path,
-            # The union view, NOT the historian lane: a user exporting a
-            # ring-mode sensor must get its rows, which live in scada_raw.
-            source=ScadaSampleAll,
+        counts, mime, ext = await data_export.build_export(
+            db, tags, start, end, lane, path, tz_disp
         )
     except Exception:
         _os.unlink(path)
@@ -1997,19 +2019,158 @@ async def export_xlsx(
         start, end, sum(counts.values()),
     )
 
-    stamp = f"{start:%Y%m%d}-{end:%Y%m%d}"
-    name = f"R-Net-{stamp}.xlsx" if len(tags) > 1 else (
-        f"{_slug(tags[0].label)}-{stamp}.xlsx"
+    # The lane is in the FILENAME, not just the UI. A raw export and a summary
+    # export of the same window are different documents with similar columns in
+    # the same folder; without this the only way to tell them apart is to open
+    # both.
+    # Cap tanggal ikut zona tampilan, sama dengan isi berkasnya. Kalau tidak,
+    # rentang "30 Jul 00:00 - 31 Jul 00:00" WIB pulang bernama 20260729-20260730
+    # — berkasnya benar, namanya menyebut hari yang salah.
+    tz_disp = rnet_settings.display_tz(await rnet_settings.get_settings(db))
+    stamp = f"{start.astimezone(tz_disp):%Y%m%d}-{end.astimezone(tz_disp):%Y%m%d}"
+    suffix = "-ringkasan-1menit" if lane == "rollup" else ""
+    name = f"R-Net-{stamp}{suffix}.{ext}" if len(tags) > 1 else (
+        f"{_slug(tags[0].label)}-{stamp}{suffix}.{ext}"
     )
     return FileResponse(
         path,
-        media_type=XLSX_MIME,
+        media_type=mime,
         filename=name,
         background=BackgroundTask(_os.unlink, path),
     )
 
 
-XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+def raw_partition_bounds(m, upper: bool = False) -> datetime:
+    """[day, day+1) from a scada_raw_YYYY_MM_DD name match."""
+    d = datetime(int(m[1]), int(m[2]), int(m[3]), tzinfo=timezone.utc)
+    return d + timedelta(days=1) if upper else d
+
+
+def rollup_partition_bounds(m, upper: bool = False) -> datetime:
+    """[month, next month) from a scada_rollup_1m_YYYY_MM name match."""
+    d = datetime(int(m[1]), int(m[2]), 1, tzinfo=timezone.utc)
+    if not upper:
+        return d
+    return (
+        d.replace(year=d.year + 1, month=1) if d.month == 12 else d.replace(month=d.month + 1)
+    )
+
+
+def coverage_window(names: list[str], regex, to_dt, now: datetime) -> tuple:
+    """(from, to, count) for one lane, from its live partition names.
+
+    `to` is CLAMPED TO NOW on purpose. The newest raw partition's upper bound is
+    a week in the future — the partition manager creates RAW_AHEAD_DAYS of empty
+    drawers so a missing one can never reject an insert at midnight. Reporting
+    that as coverage would tell a caller data exists tomorrow. The frontend
+    happens to clamp it too; doing it here means the next caller does not have
+    to know that partitions are pre-created at all.
+    """
+    kept = sorted(n for n in names if regex.match(n))
+    if not kept:
+        return None, None, 0
+    lo = to_dt(regex.match(kept[0]))
+    hi = to_dt(regex.match(kept[-1]), upper=True)
+    return lo, min(hi, now), len(kept)
+
+
+@router.get("/coverage", response_model=CoverageOut)
+@limiter.limit(READ_LIMIT)
+async def get_coverage(
+    request: Request,
+    tag_ids: Annotated[
+        list[uuid.UUID] | None, Query(max_length=MAX_EXPORT_TAGS)
+    ] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    profile: Annotated[Profile, Depends(require_permission("scada:view"))] = None,
+):
+    """What each storage lane actually holds right now.
+
+    WHY THIS IS NOT A CONSTANT
+        The export drawer used to compute its own window from policy: 24 h, or
+        31 days if any selected sensor had "Simpan data" ticked. Both numbers
+        were guesses. Retention drops a day partition only once ALL of it has
+        expired, so the raw lane is 24-48 h; the summary lane is 30-61 days for
+        the same reason; and a sensor added yesterday has neither, whatever the
+        policy says. Offering a range the data cannot fill produces a file that
+        looks complete and is not.
+
+    COST
+        The lane windows come from PARTITION NAMES — pg_class only, no table
+        touched, so this is flat no matter how many rows exist. The optional
+        per-sensor part is one MIN/MAX per lane per sensor, served by
+        PK(tag_id, ts) on the raw lane and ix_scada_rollup_1m_tag_ts on the
+        summary, and capped at MAX_EXPORT_TAGS sensors.
+    """
+    from app.services import partitions
+
+    settings = await rnet_settings.get_settings(db)
+    now = datetime.now(timezone.utc)
+
+    raw_lo, raw_hi, raw_n = coverage_window(
+        await partitions._partitions(db, "scada_raw\\_%"),
+        partitions._RAW_RE,
+        raw_partition_bounds,
+        now,
+    )
+    rol_lo, rol_hi, rol_n = coverage_window(
+        await partitions._partitions(db, "scada\\_rollup\\_1m\\_%"),
+        partitions._ROLLUP_RE,
+        rollup_partition_bounds,
+        now,
+    )
+
+    lanes = [
+        {
+            "lane": "raw",
+            "from_ts": raw_lo.isoformat() if raw_lo else None,
+            "to_ts": raw_hi.isoformat() if raw_hi else None,
+            "policy_hours": int(settings.ring_window_h),
+            "partitions": raw_n,
+        },
+        {
+            "lane": "rollup",
+            "from_ts": rol_lo.isoformat() if rol_lo else None,
+            "to_ts": rol_hi.isoformat() if rol_hi else None,
+            # Months are not a fixed number of hours; 30 days per kept month is
+            # the honest approximation and it is only ever shown as "±".
+            "policy_hours": partitions.ROLLUP_KEEP_MONTHS * 30 * 24,
+            "partitions": rol_n,
+        },
+    ]
+
+    tags_out: list[dict] = []
+    if tag_ids:
+        granted = await _load_permissions(db, profile.role)
+        tag_query = select(ScadaTag.id).where(ScadaTag.id.in_(tag_ids))
+        if "scada:manage" not in granted:
+            tag_query = tag_query.where(ScadaTag.enabled.is_(True))
+        allowed = [r[0] for r in (await db.execute(tag_query)).all()]
+        for lane_name, table in (("raw", "scada_raw"), ("rollup", "scada_rollup_1m")):
+            if not allowed:
+                break
+            rows = await db.execute(
+                text(
+                    f"SELECT tag_id, min(ts), max(ts) FROM {table} "  # noqa: S608
+                    "WHERE tag_id = ANY(:ids) GROUP BY tag_id"
+                ),
+                {"ids": [str(t) for t in allowed]},
+            )
+            seen = {}
+            for tag_id, first, last in rows.all():
+                seen[str(tag_id)] = (first, last)
+            for t in allowed:
+                first, last = seen.get(str(t), (None, None))
+                tags_out.append(
+                    {
+                        "tag_id": str(t),
+                        "lane": lane_name,
+                        "first_ts": first.isoformat() if first else None,
+                        "last_ts": last.isoformat() if last else None,
+                    }
+                )
+
+    return {"lanes": lanes, "tags": tags_out}
 
 
 def _slug(label: str) -> str:
@@ -2154,6 +2315,7 @@ _SETTINGS_FIELDS = (
     "ring_window_h",
     "store_months",
     "reset_warn_days",
+    "display_timezone",
 )
 
 
@@ -2183,7 +2345,7 @@ async def update_rnet_settings(
     ] = None,
 ):
     """Update sampling-level durations / retention knobs (partial). The bridge,
-    historian, alarm engine and archiver pick up changes on their next loop."""
+    historian and alarm engine pick up changes on their next loop."""
     s = await rnet_settings.get_settings(db)
     before = scada_audit.rnet_settings_snapshot(s)
     for field, val in body.model_dump(exclude_unset=True).items():

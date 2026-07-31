@@ -9,10 +9,15 @@
 import { useCallback, useMemo, useState } from "react";
 import { Loader2, Table2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { scadaApi } from "@/lib/api/scada";
-import { useScadaStore } from "../store";
+import { useTagLiveValues } from "../store";
 import type { SummaryItem, Tag, TableColumn, TablePanelConfig } from "../types";
 import { RANGE_LABELS, RANGE_MS } from "./chart-panel";
+import {
+  PanelPlaceholder,
+  formatValue,
+  resolveDecimals,
+} from "./elements";
+import { getSummaryItems } from "./summary-batch";
 import { usePanelRefresh } from "./use-panel-refresh";
 
 /** Kolom yang tersedia + label headernya. Urutan di sini = urutan bawaan
@@ -38,8 +43,11 @@ export const TABLE_COLUMNS_DEFAULT: TableColumn[] = [
 /** Kolom teks rata kiri; sisanya angka rata kanan. */
 const TEXT_COLUMNS = new Set<TableColumn>(["tag", "device", "unit"]);
 
-function fmt(v: number | null): string {
-  return v === null ? "—" : v.toLocaleString("id");
+/** Min/Rata²/Maks datang dari SQL dengan presisi float penuh, jadi kolom ini
+ *  yang paling parah kalau desimalnya tidak dibatasi: satu rata-rata bisa
+ *  tampil sebagai "23,457" untuk sensor yang diatur 1 desimal. */
+function fmt(v: number | null, decimals: number | null): string {
+  return v === null ? "—" : formatValue(v, decimals);
 }
 
 export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: Tag[] }) {
@@ -49,10 +57,7 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
   const load = useCallback(async () => {
     if (config.tag_ids.length === 0) return;
     try {
-      const end = new Date();
-      const start = new Date(end.getTime() - RANGE_MS[config.range]);
-      const res = await scadaApi.getSummary(config.tag_ids, start, end);
-      setItems(res.items);
+      setItems(await getSummaryItems(config.tag_ids, RANGE_MS[config.range]));
       setError(false);
     } catch {
       setError(true);
@@ -63,7 +68,7 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
 
   // Live overlay: "Terkini" ticks in realtime from the store; min/rata/maks
   // stay on the summary snapshot (they're range aggregates).
-  const liveValues = useScadaStore((s) => s.liveValues);
+  const liveValues = useTagLiveValues(config.tag_ids);
 
   const tagOf = useMemo(() => {
     const map = new Map(tags.map((t) => [t.id, t]));
@@ -82,10 +87,10 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
   };
 
   if (config.tag_ids.length === 0) {
-    return <Center icon>Belum ada tag dipilih untuk tabel ini.</Center>;
+    return <PanelPlaceholder icon={Table2}>Belum ada tag dipilih untuk tabel ini.</PanelPlaceholder>;
   }
   if (error && !items) {
-    return <Center>Gagal memuat ringkasan — mencoba lagi…</Center>;
+    return <PanelPlaceholder>Gagal memuat ringkasan — mencoba lagi…</PanelPlaceholder>;
   }
   if (items === null) {
     return (
@@ -95,20 +100,23 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
     );
   }
   if (items.length === 0) {
-    return <Center>Tag tidak ditemukan (mungkin dinonaktifkan).</Center>;
+    return <PanelPlaceholder>Tag tidak ditemukan (mungkin dinonaktifkan).</PanelPlaceholder>;
   }
 
   const columns = (config.columns ?? TABLE_COLUMNS_DEFAULT).filter((c) =>
     TABLE_COLUMNS.some((t) => t.key === c)
   );
   if (columns.length === 0) {
-    return <Center icon>Semua kolom disembunyikan — pilih minimal satu.</Center>;
+    return <PanelPlaceholder icon={Table2}>Semua kolom disembunyikan — pilih minimal satu.</PanelPlaceholder>;
   }
   const showAggregate = columns.some((c) => c === "min" || c === "avg" || c === "max");
 
   const cell = (col: TableColumn, item: SummaryItem) => {
     const tag = tagOf(item);
     const unit = item.unit || tag?.unit || "";
+    // Per baris: tiap sensor boleh punya presisinya sendiri, dan setelan panel
+    // (kalau diisi) menang untuk seluruh tabel.
+    const dec = resolveDecimals(config.decimals, tag?.config);
     switch (col) {
       case "tag":
         return (
@@ -131,9 +139,9 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
       case "unit":
         return <span className="text-text-muted">{unit || "—"}</span>;
       case "value":
-        return fmt(lastOf(item));
+        return fmt(lastOf(item), dec);
       default:
-        return fmt(item[col]);
+        return fmt(item[col], dec);
     }
   };
 
@@ -188,11 +196,3 @@ export function TablePanel({ config, tags }: { config: TablePanelConfig; tags: T
   );
 }
 
-function Center({ children, icon = false }: { children: React.ReactNode; icon?: boolean }) {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg px-4 text-center">
-      {icon && <Table2 className="size-6 text-text-light opacity-60" />}
-      <span className="text-[12px] text-text-muted">{children}</span>
-    </div>
-  );
-}

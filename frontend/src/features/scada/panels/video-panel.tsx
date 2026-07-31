@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useScadaStore } from "../store";
 import { OrbitFallback } from "./orbit-fallback";
-import { attachPlayback, type PlaybackMode } from "../playback";
+import { attachPlayback, basicAuth, type PlaybackMode } from "../playback";
 import type { Stream, VideoPanelConfig } from "../types";
 
 const RETRY_BASE_MS = 2000;
@@ -25,13 +25,7 @@ const STALE_AFTER_MS = 15000;
 
 type PlayerStatus = "connecting" | "live" | "reconnecting";
 
-/** MediaMTX (>= 1.12) only accepts HLS read credentials via the
- *  `Authorization: Basic` header on every request — query params
- *  (?user=&pass=) are no longer honored for reads. */
-function basicAuthHeader(stream: Stream): string | null {
-  if (!stream.read_user) return null;
-  return "Basic " + btoa(`${stream.read_user}:${stream.read_pass ?? ""}`);
-}
+
 
 /** Turn an hls.js error into a short code + a plain-language cause so the wall
  *  operator can act without reading logs. HTTP status is the most telling
@@ -123,7 +117,7 @@ export function VideoPanel({
 
       const src = stream.hls_url;
       if (!src) return; // non-stream source (web/vnc) — nothing to attach
-      const auth = basicAuthHeader(stream);
+      const auth = basicAuth(stream);
 
       if (Hls.isSupported()) {
         // Desktop wall: aggressive low latency (~3s). Mobile: thin LL buffers

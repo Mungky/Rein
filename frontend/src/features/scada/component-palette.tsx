@@ -21,7 +21,7 @@ import { stageTransform } from "./grid/canvas-stage";
 import { channelScreen } from "./screen-box";
 import { channelSourceMeta } from "./channel-form";
 import { importImageAsDataUri, loadImage } from "./image-import";
-import { useScadaStore } from "./store";
+import { useScadaCold } from "./store";
 import type { CanvasSize, Channel, Panel } from "./types";
 import { DEFAULT_CANVAS } from "./types";
 
@@ -404,7 +404,8 @@ export function ComponentPalette({
   /** Called after a panel lands; openInspector = true for data/imported comps. */
   onPlaced: (panelId: string, openInspector: boolean) => void;
 }) {
-  const store = useScadaStore();
+  // Palet komponen hanya membaca daftar tag/channel, bukan nilainya.
+  const store = useScadaCold();
   const canvas: CanvasSize = store.draftCanvas ?? DEFAULT_CANVAS;
   const [query, setQuery] = useState("");
   const [ghost, setGhost] = useState<DragGhost | null>(null);

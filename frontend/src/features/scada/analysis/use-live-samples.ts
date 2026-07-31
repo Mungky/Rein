@@ -15,7 +15,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { getSupabaseClient } from "@/lib/supabase/client";
-import { scadaApi } from "@/lib/api/scada";
+import { fetchLatestInChunks } from "../fetch-latest";
 import { useScadaStore } from "../store";
 
 interface LatestRow {
@@ -24,34 +24,13 @@ interface LatestRow {
   value: number;
 }
 
-const LATEST_CAP = 100; // GET /latest caps at 100 tags per request
-
-/** Seed/refresh last-known values for ANY number of tags.
- *
- *  /latest caps at 100 ids per request, and this used to be handled by
- *  `.slice(0, LATEST_CAP)` — which is not a cap, it is silently dropping
- *  sensors 101 and up. On a 300-sensor plant two thirds of the table showed
- *  "—" until a Realtime event happened to arrive, and the watchdog that exists
- *  precisely for when Realtime is NOT arriving never covered them at all.
- *  Chunking asks the same question in several breaths instead of forgetting
- *  most of it. */
-async function seedLatest(
-  ids: string[],
-  apply: (tagId: string, v: { value: number; ts: string }) => void
-): Promise<void> {
-  const chunks: string[][] = [];
-  for (let i = 0; i < ids.length; i += LATEST_CAP) {
-    chunks.push(ids.slice(i, i + LATEST_CAP));
-  }
-  const results = await Promise.all(
-    chunks.map((c) => scadaApi.getLatest(c).catch(() => null))
-  );
-  for (const res of results) {
-    for (const item of res?.items ?? []) {
-      apply(item.tag_id, { value: item.value, ts: item.ts });
-    }
-  }
-}
+/** Seberapa sering pengawas MEMERIKSA (bukan seberapa sering ia mengambil data). */
+const WATCHDOG_TICK_MS = 5_000;
+/** Realtime dianggap tersendat setelah diam selama ini. */
+const REALTIME_QUIET_MS = 10_000;
+/** Realtime tidak pernah tersambung sama sekali → ini murni polling, jadi
+ *  cadensnya cadens polling. */
+const NO_REALTIME_POLL_MS = 30_000;
 
 export function useLiveSamples(enabled: boolean) {
   const setLiveValue = useScadaStore((s) => s.setLiveValue);
@@ -96,15 +75,40 @@ export function useLiveSamples(enabled: boolean) {
 
   // Watchdog: when Realtime is quiet (blocked websocket, RLS hiccup, broken
   // subscription — we've been burned before), fall back to polling /latest
-  // every 5 s until events flow again. Live events reset the timer, so the
-  // poll costs nothing while Realtime is healthy.
+  // until events flow again. Live events reset the timer, so the poll costs
+  // nothing while Realtime is healthy.
+  //
+  // TIGA SYARAT, dan dulu tidak ada satu pun:
+  //
+  //  1. Tab harus terlihat. Menyurvei sensor untuk tab yang tertimbun di
+  //     belakang jendela lain adalah kerja yang hasilnya tidak pernah dilihat.
+  //  2. Cadensnya menyesuaikan. Kalau Realtime memang TIDAK PERNAH tersambung
+  //     — env Supabase kosong, websocket diblokir jaringan pabrik — maka
+  //     `lastEventAt` tetap 0 SELAMANYA, dan syarat "sudah diam 10 detik" selalu
+  //     benar: 12 permintaan per menit, 720 per jam, tanpa henti, selama tab
+  //     terbuka. Itu bukan jaring pengaman, itu polling permanen yang menyamar.
+  //     Kalau Realtime tak pernah hidup, ini memang polling — jadi berlakukan
+  //     seperti polling: 30 detik, bukan 5.
+  //  3. Waktu tenang dihitung dari aktivitas TERAKHIR, entah itu kejadian
+  //     Realtime atau polling kita sendiri. Dulu hanya kejadian Realtime yang
+  //     dihitung, jadi polling tidak pernah memuaskan syaratnya sendiri.
   const lastEventAt = useRef(0);
+  const lastPollAt = useRef(0);
+  /** Apakah kanal Realtime pernah benar-benar tersambung. */
+  const realtimeLive = useRef(false);
   useEffect(() => {
     if (!enabled || tagIdsKey === "") return;
     const t = setInterval(() => {
-      if (Date.now() - lastEventAt.current < 10_000) return; // realtime sehat
-      void seedLatest(tagIdsKey.split(","), setLiveValue);
-    }, 5_000);
+      if (document.visibilityState !== "visible") return;
+      const quietFor =
+        Date.now() - Math.max(lastEventAt.current, lastPollAt.current);
+      const needQuiet = realtimeLive.current
+        ? REALTIME_QUIET_MS
+        : NO_REALTIME_POLL_MS;
+      if (quietFor < needQuiet) return;
+      lastPollAt.current = Date.now();
+      void fetchLatestInChunks(tagIdsKey.split(","), setLiveValue);
+    }, WATCHDOG_TICK_MS);
     return () => clearInterval(t);
   }, [enabled, tagIdsKey, setLiveValue]);
 
@@ -116,7 +120,7 @@ export function useLiveSamples(enabled: boolean) {
     if (!enabled || tagIdsKey === "") return;
     let cancelled = false;
     // best-effort — Realtime/polling still run kalau ini gagal
-    void seedLatest(tagIdsKey.split(","), (id, v) => {
+    void fetchLatestInChunks(tagIdsKey.split(","), (id, v) => {
       if (!cancelled) setLiveValue(id, v);
     });
     return () => {
@@ -165,9 +169,15 @@ export function useLiveSamples(enabled: boolean) {
         { event: "UPDATE", schema: "public", table: "scada_tag_latest" },
         handle
       )
-      .subscribe();
+      .subscribe((status: string) => {
+        // Satu-satunya bukti bahwa Realtime benar-benar berfungsi. Tanpa ini
+        // pengawas di atas tidak punya cara membedakan "Realtime sehat tapi
+        // sensornya memang diam" dari "Realtime tidak pernah ada".
+        realtimeLive.current = status === "SUBSCRIBED";
+      });
 
     return () => {
+      realtimeLive.current = false;
       void supabase.removeChannel(channel);
     };
   }, [enabled, setLiveValue]);

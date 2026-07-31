@@ -117,9 +117,6 @@ export function ImportTagsDialog({
       else if (!nilai.perangkat) galat = "kolom 'perangkat' kosong";
       else if (nilai.level && !LEVELS.includes(nilai.level.toLowerCase()))
         galat = `level '${nilai.level}' tidak dikenal (fastest/fast/slow/slowest)`;
-      else if (ya(nilai.simpan ?? "") && nilai.level &&
-               !["slow", "slowest"].includes(nilai.level.toLowerCase()))
-        galat = "saat Simpan data aktif, level hanya boleh slow atau slowest";
       out.push({ n: i + 1, nilai, galat });
     }
     return { baris: out, kolomTakDikenal: takDikenal };
@@ -142,6 +139,9 @@ export function ImportTagsDialog({
           mqtt_topic: nilai.topik,
           device_key: nilai.perangkat ?? "",
           sampling_level: nilai.level ? nilai.level.toLowerCase() : null,
+          // Kolom `simpan` masih diterima server lalu diabaikan — lajur
+          // penyimpanan kedua sudah pensiun. Tetap dikirim supaya spreadsheet
+          // operator yang sudah memuat kolom itu tidak perlu diubah.
           store_enabled: ya(nilai.simpan ?? ""),
           alarm_min: angka(nilai.alarm_min ?? ""),
           alarm_max: angka(nilai.alarm_max ?? ""),

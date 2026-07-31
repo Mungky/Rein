@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { CropRect, WebPanelConfig } from "./types";
+import { WEB_SANDBOX } from "./panels/web-panel";
 
 interface LiveSlot {
   cfg: WebPanelConfig;
@@ -236,8 +237,8 @@ export function WebLiveLayer() {
                 }}
                 // No fullscreen permission: the site's own fullscreen fills its
                 // viewport (= this panel), never the whole monitor.
-                sandbox="allow-scripts allow-same-origin allow-forms"
-                referrerPolicy="no-referrer"
+                sandbox={WEB_SANDBOX}
+                referrerPolicy="strict-origin-when-cross-origin"
               />
             </div>
           </div>

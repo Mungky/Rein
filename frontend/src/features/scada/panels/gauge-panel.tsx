@@ -17,23 +17,23 @@ import type { GaugePanelConfig, Tag } from "../types";
 import { useTagValue } from "./use-tag-value";
 import { LayoutItem, LayoutSurface } from "./layout-box";
 import {
+  PanelPlaceholder,
   STATUS_COLOR,
   StatusChip,
+  formatValue,
   layoutKindOf,
   layoutMap,
   readTagThresholds,
+  resolveDecimals,
   tagStatusOf,
 } from "./elements";
 import type { Status, TagThresholds } from "./elements";
 
-function fmt(value: number, decimals: number | null | undefined): string {
-  return value.toLocaleString(
-    "id",
-    decimals === null || decimals === undefined
-      ? undefined
-      : { minimumFractionDigits: decimals, maximumFractionDigits: decimals }
-  );
-}
+/** Gauge dulu satu-satunya panel yang punya aturan desimal sendiri. Sekarang
+ *  aturannya milik semua panel (formatValue/resolveDecimals di elements.tsx),
+ *  dan gauge ikut memakainya — bedanya cuma satu: `decimals` yang kosong kini
+ *  jatuh ke setelan sensor sebelum ke otomatis. */
+const fmt = formatValue;
 
 /** Zona [f0..f1] (fraksi skala) per status — dari ambang TAG (warn/alarm dua
  *  sisi) yang dipetakan ke skala min–max gauge. Ambang yang null dilewati, jadi
@@ -66,14 +66,14 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
 
   if (!config.tag_id) {
     return (
-      <Center icon>
+      <PanelPlaceholder icon={Gauge}>
         Gauge belum diatur — buka mode Atur Layout lalu klik dua kali panel ini
         untuk memilih sensor.
-      </Center>
+      </PanelPlaceholder>
     );
   }
   if (state.error && !state.loaded) {
-    return <Center>Gagal memuat nilai — mencoba lagi…</Center>;
+    return <PanelPlaceholder>Gagal memuat nilai — mencoba lagi…</PanelPlaceholder>;
   }
   if (!state.loaded) {
     return (
@@ -87,15 +87,16 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
   const unit = config.unit ?? state.unit;
 
   if (state.item === null && state.value === null) {
-    return <Center>Tag tidak ditemukan (mungkin dinonaktifkan).</Center>;
+    return <PanelPlaceholder>Tag tidak ditemukan (mungkin dinonaktifkan).</PanelPlaceholder>;
   }
   if (state.value === null) {
-    return <Center icon>Belum ada data untuk {label}.</Center>;
+    return <PanelPlaceholder icon={Gauge}>Belum ada data untuk {label}.</PanelPlaceholder>;
   }
 
   const value = state.value;
   const tag = tags.find((t) => t.id === config.tag_id);
   const thresholds = readTagThresholds(tag?.config);
+  const dec = resolveDecimals(config.decimals, tag?.config);
   const status = tagStatusOf(value, thresholds);
   const lastTs = state.valueTs ? new Date(state.valueTs) : null;
   const style = config.style ?? "stat";
@@ -125,8 +126,8 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
               f={f}
               zones={zonesFromTag(thresholds, min, max)}
               colorOf={colorOf}
-              minText={fmt(min, config.decimals)}
-              maxText={fmt(max, config.decimals)}
+              minText={fmt(min, dec)}
+              maxText={fmt(max, dec)}
             />
           ) : (
             <DonutGauge f={f} color={colorOf(status)} />
@@ -139,7 +140,7 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
           box={el.value.box}
           className="font-bold tabular-nums text-text"
         >
-          {fmt(value, config.decimals)}
+          {fmt(value, dec)}
           {unit && (
             <span className="ml-[0.25em] text-[0.5em] font-normal text-text-muted">
               {unit}
@@ -169,8 +170,8 @@ export function GaugePanel({ config, tags }: { config: GaugePanelConfig; tags: T
             state.item.min !== null &&
             state.item.max !== null && (
               <>
-                24 jam: {fmt(state.item.min, config.decimals)}–
-                {fmt(state.item.max, config.decimals)}
+                24 jam: {fmt(state.item.min, dec)}–
+                {fmt(state.item.max, dec)}
                 {lastTs ? " · " : ""}
               </>
             )}
@@ -293,11 +294,3 @@ function DonutGauge({ f, color }: { f: number; color: string }) {
   );
 }
 
-function Center({ children, icon = false }: { children: React.ReactNode; icon?: boolean }) {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg px-4 text-center">
-      {icon && <Gauge className="size-6 text-text-light opacity-60" />}
-      <span className="text-[12px] text-text-muted">{children}</span>
-    </div>
-  );
-}

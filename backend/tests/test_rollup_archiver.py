@@ -349,11 +349,15 @@ def test_values_survive_the_round_trip_unrounded():
 class _ClaimSession:
     """Enough of an AsyncSession for archive_plant_month."""
 
-    def __init__(self, rows=None, claim=True):
+    def __init__(self, rows=None, claim=True, claim_vanishes=False):
         self._rows = rows or {}
         self._claim = claim
+        # True = our claim row is gone by the time the upload finishes, i.e.
+        # archive_claims released it as stale and another pass took over.
+        self._vanished = claim_vanishes
         self.deleted = []
         self.stored = {}
+        self.rolled_back = False
 
     async def execute(self, stmt, params=None):
         sql = str(stmt)
@@ -364,7 +368,14 @@ class _ClaimSession:
         page = [r for r in rows if r[0] >= params["lo"]][: params["lim"]]
         return SimpleNamespace(all=lambda: page)
 
-    async def get(self, _model, ident):
+    async def get(self, model, ident):
+        # Zona waktu tampilan dibaca lewat db.get(ScadaSettings, 1). Dijawab
+        # terpisah — kalau ikut masuk `stored`, baris setelan itu akan menyamar
+        # jadi baris buku induk dan asersi di bawah memeriksa objek yang salah.
+        if getattr(model, "__name__", "") == "ScadaSettings":
+            return SimpleNamespace(display_timezone="UTC")
+        if self._vanished:
+            return None
         return self.stored.setdefault(
             ident,
             SimpleNamespace(
@@ -378,6 +389,9 @@ class _ClaimSession:
 
     async def commit(self):
         pass
+
+    async def rollback(self):
+        self.rolled_back = True
 
 
 def _stub_drive(monkeypatch, upload):
@@ -412,6 +426,32 @@ def test_a_bucket_is_marked_done_when_drive_returns_an_id(monkeypatch):
     assert db.deleted == []
     row = next(iter(db.stored.values()))
     assert row.drive_file_id == "drive-123" and row.row_count == 4
+
+
+def test_a_claim_released_mid_upload_is_not_written_back(monkeypatch):
+    """Audit B1, the losing side of the race.
+
+    Our claim sat unfinished long enough to be released as stale, and another
+    pass re-claimed the bucket while we were still uploading. Writing our
+    ledger row now would resurrect a claim nobody is tracking — and, worse,
+    would mark the bucket done on the strength of an upload the owning pass
+    knows nothing about. The correct move is to walk away: our file is a
+    duplicate on Drive, and this function deletes nothing anyway."""
+    lo = datetime(2026, 5, 1, tzinfo=UTC)
+    t = _tag("S")
+    db = _ClaimSession({t.id: _minutes(lo, 4)}, claim_vanishes=True)
+
+    async def upload(_content, name, _mime, _folder):
+        return {"id": "drive-123", "webViewLink": "https://x/" + name}
+
+    _stub_drive(monkeypatch, upload)
+
+    res = run(ra.archive_plant_month(db, uuid.uuid4(), "Lombok", [t], date(2026, 5, 1)))
+
+    assert res is None
+    assert db.stored == {}       # no ledger row invented
+    assert db.deleted == []      # and the peer's claim left alone
+    assert db.rolled_back
 
 
 def test_an_upload_that_returns_no_id_is_not_treated_as_archived(monkeypatch):

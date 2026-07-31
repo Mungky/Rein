@@ -11,21 +11,26 @@ import { cn } from "@/lib/utils";
 import type { LedPanelConfig, Tag } from "../types";
 import { useTagValue } from "./use-tag-value";
 import { LayoutItem, LayoutSurface } from "./layout-box";
-import { layoutMap } from "./elements";
+import {
+  PanelPlaceholder,
+  formatValue,
+  layoutMap,
+  resolveDecimals,
+} from "./elements";
 
 export function LedPanel({ config, tags }: { config: LedPanelConfig; tags: Tag[] }) {
   const state = useTagValue(config.tag_id ?? null, tags);
 
   if (!config.tag_id) {
     return (
-      <Center icon>
+      <PanelPlaceholder icon={Lightbulb}>
         LED belum diatur — buka mode Atur Layout lalu klik dua kali panel ini
         untuk memilih sensor.
-      </Center>
+      </PanelPlaceholder>
     );
   }
   if (state.error && !state.loaded) {
-    return <Center>Gagal memuat nilai — mencoba lagi…</Center>;
+    return <PanelPlaceholder>Gagal memuat nilai — mencoba lagi…</PanelPlaceholder>;
   }
   if (!state.loaded) {
     return (
@@ -38,7 +43,7 @@ export function LedPanel({ config, tags }: { config: LedPanelConfig; tags: Tag[]
   const label = config.label || state.label;
 
   if (state.value === null) {
-    return <Center icon>Belum ada data untuk {label}.</Center>;
+    return <PanelPlaceholder icon={Lightbulb}>Belum ada data untuk {label}.</PanelPlaceholder>;
   }
 
   const value = state.value;
@@ -54,7 +59,9 @@ export function LedPanel({ config, tags }: { config: LedPanelConfig; tags: Tag[]
   const showValue = config.elements
     ? el.value?.visible === true
     : config.show_value !== false;
-  const device = tags.find((t) => t.id === config.tag_id)?.device_key ?? "";
+  const tag = tags.find((t) => t.id === config.tag_id);
+  const device = tag?.device_key ?? "";
+  const dec = resolveDecimals(config.decimals, tag?.config);
 
   return (
     <LayoutSurface>
@@ -89,7 +96,7 @@ export function LedPanel({ config, tags }: { config: LedPanelConfig; tags: Tag[]
 
       {showValue && el.value && (
         <LayoutItem box={el.value.box} className="tabular-nums text-text-muted">
-          {value.toLocaleString("id")}
+          {formatValue(value, dec)}
           {state.unit ? ` ${state.unit}` : ""}
         </LayoutItem>
       )}
@@ -116,11 +123,3 @@ export function LedPanel({ config, tags }: { config: LedPanelConfig; tags: Tag[]
   );
 }
 
-function Center({ children, icon = false }: { children: React.ReactNode; icon?: boolean }) {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg px-4 text-center">
-      {icon && <Lightbulb className="size-6 text-text-light opacity-60" />}
-      <span className="text-[12px] text-text-muted">{children}</span>
-    </div>
-  );
-}

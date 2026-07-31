@@ -267,6 +267,44 @@ function RangeSelect({
   );
 }
 
+/** "Angka di Belakang Koma" — dipakai SEMUA panel bernilai angka.
+ *
+ *  Dulu kontrol ini hanya ada di form Gauge, dan gauge juga satu-satunya panel
+ *  yang mematuhinya. Level, LED, Tabel, Bar, Grafik, dan panel Alarm memanggil
+ *  `toLocaleString("id")` polos — bawaannya maksimum 3 desimal — jadi sensor
+ *  yang diatur 1 desimal tetap muncul sebagai "23,457" di mana-mana.
+ *
+ *  "Otomatis" tidak berarti tanpa aturan: nilainya jatuh ke setelan Desimal
+ *  sensor itu sendiri (tab Data) sebelum ke bawaan. Jadi mengisi satu tempat
+ *  sudah cukup untuk seluruh dinding. */
+function DecimalsSelect({
+  value,
+  patch,
+}: {
+  value: number | null | undefined;
+  patch: (p: object) => void;
+}) {
+  return (
+    <div>
+      <label className={labelCls}>Angka di Belakang Koma</label>
+      <select
+        className="field-select cursor-pointer"
+        value={value ?? ""}
+        onChange={(e) =>
+          patch({ decimals: e.target.value === "" ? null : Number(e.target.value) })
+        }
+      >
+        <option value="">Otomatis (ikut setelan sensor)</option>
+        {[0, 1, 2, 3, 4].map((d) => (
+          <option key={d} value={d}>
+            {d}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 function OptionButtons<T extends string>({
   label,
   value,
@@ -445,6 +483,10 @@ export function PanelInspector({
               value={(panel.config as TablePanelConfig).range}
               onChange={(range) => patchCfg({ range })}
             />
+            <DecimalsSelect
+              value={(panel.config as TablePanelConfig).decimals}
+              patch={patchCfg}
+            />
             <ColumnEditor<TableColumn>
               label="Kolom Tabel"
               hint="Geser chip untuk menukar urutan. Kolom yang dibuang tidak dirender sama sekali."
@@ -477,7 +519,7 @@ export function PanelInspector({
         {panel.type === "alarm" && (
           <>
             <TagMultiPick
-              hint="ambang alarm diatur per sensor di tab Data"
+              hint="KOSONGKAN untuk menampilkan semua sensor yang beralarm — termasuk sensor yang ditambahkan nanti. Mencentang berarti hanya sensor itu yang dipantau panel ini. Ambang alarm sendiri diatur per sensor di tab Data."
               value={(panel.config as AlarmPanelConfig).tag_ids}
               max={8}
               tags={enabledTags}
@@ -486,6 +528,10 @@ export function PanelInspector({
             <RangeSelect
               value={(panel.config as AlarmPanelConfig).range}
               onChange={(range) => patchCfg({ range })}
+            />
+            <DecimalsSelect
+              value={(panel.config as AlarmPanelConfig).decimals}
+              patch={patchCfg}
             />
             <ColumnEditor<AlarmColumn>
               label="Kolom Alarm"
@@ -669,23 +715,7 @@ function GaugeForm({
           noneLabel="Hijau tema"
         />
       </div>
-      <div>
-        <label className={labelCls}>Angka di Belakang Koma</label>
-        <select
-          className="field-select cursor-pointer"
-          value={config.decimals ?? ""}
-          onChange={(e) =>
-            patch({ decimals: e.target.value === "" ? null : Number(e.target.value) })
-          }
-        >
-          <option value="">Otomatis</option>
-          {[0, 1, 2, 3].map((d) => (
-            <option key={d} value={d}>
-              {d}
-            </option>
-          ))}
-        </select>
-      </div>
+      <DecimalsSelect value={config.decimals} patch={patch} />
     </>
   );
 }
@@ -722,6 +752,7 @@ function LevelForm({
         </p>
       )}
       <ThresholdNote />
+      <DecimalsSelect value={config.decimals} patch={patch} />
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className={labelCls}>Label (opsional)</label>
@@ -808,6 +839,7 @@ function LedForm({
           />
         </div>
       </div>
+      <DecimalsSelect value={config.decimals} patch={patch} />
       <div>
         <label className={labelCls}>Warna Saat Menyala</label>
         <ColorPicker
@@ -903,6 +935,7 @@ function ChartForm({
         ]}
         onChange={(v) => patch({ line_style: v })}
       />
+      <DecimalsSelect value={config.decimals} patch={patch} />
       <div className="grid grid-cols-2 gap-3">
         <NumField
           label="Sumbu Y Min"
@@ -987,6 +1020,7 @@ function BarForm({
         ]}
         onChange={(v) => patch({ orientation: v })}
       />
+      <DecimalsSelect value={config.decimals} patch={patch} />
       <div>
         <label className={labelCls}>Warna Batang</label>
         <ColorPicker

@@ -34,7 +34,6 @@ from app.schemas.scada import (
     TopicProbeListOut,
 )
 from app.services import (
-    archiver,
     email_notifier,
     notifier,
     rollup_archiver,
@@ -107,7 +106,10 @@ async def list_alarm_history(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
     tag_id: uuid.UUID | None = None,
-    kind: Annotated[str | None, Query(pattern="^(high|low|silent|expiring)$")] = None,
+    kind: Annotated[
+        str | None,
+        Query(pattern="^(high|low|warn_high|warn_low|silent|expiring)$"),
+    ] = None,
     start: datetime | None = None,
     end: datetime | None = None,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
@@ -238,19 +240,6 @@ async def list_archives(
     }
 
 
-@router.post("/archives/run")
-@limiter.limit(WRITE_LIMIT)
-async def run_archiver_now(
-    request: Request,
-    db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("scada:view", "scada:manage"))] = None,
-):
-    """Run the archive+reset pass immediately (normally it runs itself). Only
-    tags whose 1-month cycle has fully elapsed are archived and reset."""
-    results = await archiver.archive_once(db)
-    return {"archived": results}
-
-
 @router.get("/rollup-archives", response_model=RollupArchiveListOut)
 @limiter.limit(READ_LIMIT)
 async def list_rollup_archives(
@@ -262,7 +251,7 @@ async def list_rollup_archives(
 
     This is the receipt for the 1-minute lane: a month only leaves the database
     after every plant appears here for it. If this list is empty while months
-    are ageing out, retention is not running — check the archiver logs and the
+    are ageing out, retention is not running — check the rollup archiver logs and the
     Drive credentials rather than assuming the data was tidied away."""
     result = await db.execute(
         select(ScadaRollupArchive)

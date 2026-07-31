@@ -3,7 +3,8 @@
 /** Admin panel — root page: hero header, stat cards, tab switching.
  *  Tab contents live in `features/admin/` (one file per tab). */
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Shield,
   Users,
@@ -25,7 +26,8 @@ import { DocTypesTab, type FileTypeRow } from "@/features/admin/file-types-tab";
 import { PermissionsTab } from "@/features/admin/permissions-tab";
 import { RnetTab } from "@/features/admin/rnet-tab";
 
-type AdminTab = "users" | "sequences" | "doctypes" | "permissions" | "rnet";
+const ADMIN_TABS = ["users", "sequences", "doctypes", "permissions", "rnet"] as const;
+type AdminTab = (typeof ADMIN_TABS)[number];
 
 interface AdminStats {
   users: number | null;
@@ -34,9 +36,23 @@ interface AdminStats {
   sequences: number | null;
 }
 
-export default function AdminPage() {
+function AdminPageInner() {
   const { profile } = useAuth();
-  const [tab, setTab] = useState<AdminTab>("users");
+  // Tab awal boleh ditentukan lewat URL (?tab=rnet). Dipakai tautan "durasi
+  // level diatur di Panel Administrasi → R-Net" di dropdown sensor R-Net:
+  // tanpa ini tautannya mendarat di tab Pengguna dan orang tetap harus
+  // mencari — persis keluhan yang membuatnya ditambahkan.
+  //
+  // useSearchParams, bukan window.location: halaman ini di-prerender statis,
+  // jadi membaca window saat inisialisasi state akan membuat render pertama di
+  // klien berbeda dari HTML server (hydration mismatch). Konsekuensinya
+  // halaman harus berada di bawah <Suspense> — lihat export default di bawah;
+  // tanpa itu `next build` gagal, bukan sekadar memperingatkan.
+  const searchParams = useSearchParams();
+  const want = searchParams.get("tab");
+  const [tab, setTab] = useState<AdminTab>(
+    ADMIN_TABS.includes(want as AdminTab) ? (want as AdminTab) : "users"
+  );
   const [stats, setStats] = useState<AdminStats>({ users: null, fileTypes: null, folders: null, sequences: null });
 
   // Fetch summary stats in parallel — pure read, doesn't block tab rendering
@@ -201,5 +217,18 @@ function TabButton({
       {icon}
       {children}
     </button>
+  );
+}
+
+
+/** Suspense di sini bukan hiasan: AdminPageInner memanggil useSearchParams, dan
+ *  di rute yang di-prerender Next mewajibkan batas Suspense — tanpa itu
+ *  `next build` gagal dengan "Missing Suspense boundary with useSearchParams".
+ *  Efeknya isi panel dirender di klien, yang memang wajar untuk halaman admin. */
+export default function AdminPage() {
+  return (
+    <Suspense fallback={null}>
+      <AdminPageInner />
+    </Suspense>
   );
 }

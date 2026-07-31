@@ -3,11 +3,12 @@
 /** Analisis (tab "Data") — Table Editor ala Supabase.
  *  Rail kiri = daftar "Tabel" (sheet); kanan = grid: satu baris per sensor
  *  dengan nilai live, status Online, grafik mini 100 data terakhir, dan baris
- *  detail (expand) berisi pengaturan penyimpanan + daftar data mentah.
+ *  detail (expand) berisi grafik penuh yang bisa ditunjuk + seluruh pengaturan
+ *  sensor itu.
  *  Seleksi baris melahirkan panel Grafik/Gauge/Bar di mode Monitor, plus
  *  Export Data berjangka (hari/minggu/bulan/semua). */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -29,21 +30,49 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { apiErrorText } from "@/lib/api/client";
 import { scadaApi } from "@/lib/api/scada";
-import type { ChartRange, Panel, RecentSample, Sheet, Tag } from "../types";
+import type {
+  Panel,
+  RecentSample,
+  RnetSettings,
+  Sheet,
+  Tag,
+} from "../types";
 import { useScadaStore } from "../store";
+import { useNowMs } from "../use-now";
 import { samplingIntervalMs } from "../sampling";
 import { RANGE_LABELS, RANGE_MS } from "../panels/chart-panel";
 import { usePanelRefresh } from "../panels/use-panel-refresh";
 import { RiwayatView } from "./riwayat-view";
-import { SourceDialog } from "./source-dialog";
 import { ManageSitesDialog } from "../manage-sites-dialog";
 import { AlarmSettingsDialog } from "./alarm-settings-dialog";
 import { ExportRangeDialog } from "./export-range-dialog";
 import { ImportTagsDialog } from "./import-tags-dialog";
 import { TopicMonitorDialog } from "./topic-monitor-dialog";
 import { TagDetailRow } from "./tag-detail-row";
-import { TagSparkline, type SparkStatus } from "./tag-sparkline";
+import type { SparkStatus } from "./tag-sparkline";
+import { TagSparkCell, buildSeries } from "./tag-spark-cell";
+import {
+  formatValue,
+  readTagThresholds,
+  resolveDecimals,
+  tagStatusOf,
+} from "../panels/elements";
+
+/** Rentang yang boleh dipilih di tab Data. Sengaja berhenti di 24 jam.
+ *
+ *  Bukan batas tampilan — batas DATA. Nilai mentah hanya hidup selama
+ *  `ring_window_h` (laci harian scada_raw dibuang utuh setelahnya), jadi
+ *  rentang 7 atau 30 hari di halaman ini hanya bisa menggambar ringkasan
+ *  per menit sambil berpura-pura itu hal yang sama. Halaman ini tentang data
+ *  mentah; kalau yang dicari jangka panjang, tempatnya panel Monitor — yang
+ *  memang membaca ringkasan dan tidak menyamar jadi sesuatu yang lain.
+ *
+ *  ChartRange (types.ts) tetap punya "7d"/"30d" untuk Monitor; yang dipersempit
+ *  cuma pilihan di sini. */
+const DATA_RANGES = ["1h", "6h", "24h"] as const;
+type DataRange = (typeof DATA_RANGES)[number];
 
 type SortKey = "label" | "device_key" | "unit" | "terkini";
 
@@ -56,35 +85,36 @@ interface Row {
   lastSeenMs: number | null;
   online: boolean;
   sparkStatus: SparkStatus;
-  /** Ascending series for the sparkline (stored samples + live point). */
-  series: RecentSample[];
 }
 
-function bounds(tag: Tag): { min: number | null; max: number | null } {
+/** Status baris dari ambang tersimpan sensornya.
+ *
+ *  Memakai readTagThresholds + tagStatusOf dari panels/elements.tsx — logika
+ *  yang sudah dipakai panel Monitor. Sebelumnya berkas ini punya salinan
+ *  sendiri yang HANYA membaca alarm_min/alarm_max, jadi warn_min/warn_max yang
+ *  diisi operator tidak berpengaruh apa pun di tab Data: diisi, tersimpan,
+ *  tidak terlihat, dan wajar dilaporkan sebagai "ambang tidak berfungsi". */
+function statusOf(tag: Tag, value: number | null, online: boolean): SparkStatus {
+  if (!online) return "offline";
+  if (value === null) return "normal";
+  const s = tagStatusOf(value, readTagThresholds(tag.config as Record<string, unknown>));
+  return s === "kritis" ? "alarm" : s === "waspada" ? "waspada" : "normal";
+}
+
+/** Same silence window as the backend alarm engine (_silent_after_s): 3× the
+ *  tag's own sampling interval, with a 60 s floor, for every tag.
+ *
+ *  Must stay in step with the backend. It briefly did not: both sides gave
+ *  non-store tags a flat 60 s, which meant a `slowest` sensor reporting once a
+ *  minute flipped offline between every pair of readings.
+ *
+ *  `settings` carries the ADMIN-TUNED durations. Passing them matters: with the
+ *  old hardcoded table, retuning a level in Panel Administrasi left this
+ *  function computing a window from the wrong seconds and painting healthy
+ *  sensors as offline. */
+function offlineAfterMs(tag: Tag, settings: RnetSettings | null): number {
   const cfg = tag.config as Record<string, unknown>;
-  const num = (v: unknown) =>
-    v === undefined || v === null || v === "" || !Number.isFinite(Number(v))
-      ? null
-      : Number(v);
-  return { min: num(cfg.alarm_min), max: num(cfg.alarm_max) };
-}
-
-/** Sambung ekor live (titik lebih baru dari bucket historis terakhir) ke deret
- *  jendela waktu, supaya ujung sparkline bergerak tiap detik. Kedua argumen
- *  urut menaik (ascending). */
-function withLiveTail(base: RecentSample[], live: RecentSample[]): RecentSample[] {
-  if (base.length === 0) return live;
-  const lastT = new Date(base[base.length - 1].ts).getTime();
-  const tail = live.filter((s) => new Date(s.ts).getTime() > lastT);
-  return tail.length ? base.concat(tail) : base;
-}
-
-/** Same silence window as the backend alarm engine: ring tags 60 s flat,
- *  store tags 3× their sampling interval with a 60 s floor. */
-function offlineAfterMs(tag: Tag): number {
-  const cfg = tag.config as Record<string, unknown>;
-  if (!cfg.store_enabled) return 60_000;
-  return Math.max(3 * (samplingIntervalMs(cfg) / 1000), 60) * 1000;
+  return Math.max(3 * (samplingIntervalMs(cfg, settings) / 1000), 60) * 1000;
 }
 
 export function AnalysisView({
@@ -105,7 +135,7 @@ export function AnalysisView({
     [store.tags, activeSheet?.id]
   );
 
-  const [range, setRange] = useState<ChartRange>("24h");
+  const [range, setRange] = useState<DataRange>("24h");
   const [sortKey, setSortKey] = useState<SortKey>("label");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -116,7 +146,11 @@ export function AnalysisView({
     value: string;
   } | null>(null);
   const [drawerTag, setDrawerTag] = useState<Tag | null>(null);
-  const [sourceTag, setSourceTag] = useState<Tag | null>(null);
+  // Stabil, bukan arrow inline: RiwayatView mendorong satu entri riwayat
+  // browser saat dibuka (supaya tombol Back HP menutupnya, bukan keluar dari
+  // R-Net). Kalau callback ini berganti identitas setiap render, effect itu
+  // ikut dipasang ulang dan mendorong satu entri palsu per render.
+  const closeRiwayat = useCallback(() => setDrawerTag(null), []);
   // Drawer Export terbuka untuk kumpulan tag ini (null = tertutup). Dipakai
   // baik oleh tombol "Export Data" di action-bar seleksi maupun tombol Export
   // di dropdown detail (satu tag) — keduanya membuka drawer kalender yang sama.
@@ -153,16 +187,7 @@ export function AnalysisView({
 
   // Wall-clock for Online/last-online aging: held in STATE (never Date.now()
   // in render — purity rule) and refreshed every 10 s.
-  const [nowMs, setNowMs] = useState<number | null>(null);
-  useEffect(() => {
-    const update = () => setNowMs(Date.now());
-    const first = setTimeout(update, 0);
-    const t = setInterval(update, 10_000);
-    return () => {
-      clearTimeout(first);
-      clearInterval(t);
-    };
-  }, []);
+  const nowMs = useNowMs(10_000);
 
   /* ── Rows ── */
 
@@ -183,27 +208,19 @@ export function AnalysisView({
           ? live!.value
           : stored[0]?.value ?? null;
       const online =
-        lastSeenMs !== null && now - lastSeenMs < offlineAfterMs(tag);
+        lastSeenMs !== null &&
+        now - lastSeenMs < offlineAfterMs(tag, store.rnetSettings);
 
-      // Series = stored samples (asc) + every SESSION-buffered live point
-      // newer than the newest stored row → the chart & data list tick in
-      // realtime between refetches, no refresh needed.
-      const series = [...stored].reverse();
-      const buffer = store.liveBuffers[tag.id] ?? [];
-      for (const p of buffer) {
-        if (newestStoredMs === null || new Date(p.ts).getTime() > newestStoredMs) {
-          series.push({ ts: p.ts, value: p.value });
-        }
-      }
-      if (series.length > 100) series.splice(0, series.length - 100);
+      const sparkStatus = statusOf(tag, last, online);
 
-      const b = bounds(tag);
-      let sparkStatus: SparkStatus = "normal";
-      if (!online) sparkStatus = "offline";
-      else if (last !== null && b.max !== null && last > b.max) sparkStatus = "high";
-      else if (last !== null && b.min !== null && last < b.min) sparkStatus = "low";
-
-      return { tag, last, lastSeenMs, online, sparkStatus, series };
+      // Deret sparkline TIDAK dibangun di sini — lihat TagSparkCell. Dulu
+      // dibangun untuk SETIAP sensor di lembar ini pada setiap sampel masuk,
+      // karena `store.liveBuffers` ikut jadi dependensi memo ini dan berganti
+      // identitas tiap kali sensor mana pun berdetak. Menyalin 100 baris lalu
+      // memparse hingga 400 timestamp, dikali jumlah sensor, beberapa kali per
+      // detik — untuk menghasilkan gambar yang hampir semuanya sama persis
+      // dengan sebelumnya. Sekarang tiap sel mengurus ekornya sendiri.
+      return { tag, last, lastSeenMs, online, sparkStatus };
     });
 
     const dir = sortDir === "asc" ? 1 : -1;
@@ -225,7 +242,18 @@ export function AnalysisView({
         return va.localeCompare(vb, "id") * dir;
       return (Number(va) - Number(vb)) * dir;
     });
-  }, [tags, store.liveValues, store.liveBuffers, recent, sortKey, sortDir, nowMs]);
+    // store.rnetSettings: the Online column is computed from the admin-tuned
+    // sampling durations, so the rows must recompute once they arrive (they
+    // land one tick after the first paint) and again if an admin retunes them.
+  }, [
+    tags,
+    store.liveValues,
+    store.rnetSettings,
+    recent,
+    sortKey,
+    sortDir,
+    nowMs,
+  ]);
 
   /* ── Halaman ── */
 
@@ -291,12 +319,23 @@ export function AnalysisView({
 
   usePanelRefresh(loadPage);
 
-  // Manual refresh (tombol di samping lonceng) re-pulls the raw lists too
+  // Manual refresh (tombol di samping lonceng) re-pulls the raw lists too.
+  //
+  // Bergantung pada NONCE-nya saja. Dulu `loadPage` ikut jadi dependensi — dan
+  // loadPage berganti identitas setiap kali `expandedTagId` berubah, jadi
+  // begitu tombol refresh manual ditekan SEKALI (nonce ≠ 0 selamanya sesudah
+  // itu), setiap buka/tutup baris sensor menembakkan pasangan permintaan
+  // /sparklines + /recent DUA KALI: sekali dari usePanelRefresh yang memang
+  // sudah menanganinya, sekali lagi dari sini.
+  const loadPageRef = useRef(loadPage);
+  useEffect(() => {
+    loadPageRef.current = loadPage;
+  }, [loadPage]);
   useEffect(() => {
     if (store.dataRefreshNonce === 0) return;
-    const t = setTimeout(() => void loadPage(), 0);
+    const t = setTimeout(() => void loadPageRef.current(), 0);
     return () => clearTimeout(t);
-  }, [store.dataRefreshNonce, loadPage]);
+  }, [store.dataRefreshNonce]);
 
   /* ── Sheet actions ── */
 
@@ -327,7 +366,7 @@ export function AnalysisView({
     if (!window.confirm(`Hapus tabel "${sheet.name}"?`)) return;
     try {
       await scadaApi.deleteSheet(sheet.id);
-      await Promise.all([store.refreshSheets(), store.refreshColumns()]);
+      await store.refreshSheets();
       toast.success("Tabel dihapus");
     } catch (e) {
       const msg = e instanceof Error && e.message.includes("berisi tag")
@@ -449,11 +488,18 @@ export function AnalysisView({
     }
 
     try {
-      await store.addPanelToActive(panel);
-      toast.success(`Panel ditambahkan ke "${active.name}" — lihat di mode Monitor`);
+      const { pageName, forked } = await store.addPanelToActive(panel);
+      toast.success(
+        forked
+          ? `Panel ditambahkan ke halaman baru "${pageName}" — halaman bawaan admin tidak bisa diubah, jadi dibuatkan salinan milik Anda. Lihat di mode Monitor.`
+          : `Panel ditambahkan ke "${pageName}" — lihat di mode Monitor`
+      );
       setSelected(new Set());
-    } catch {
-      toast.error("Gagal menambahkan panel");
+    } catch (e) {
+      // Pesan asli dari server, bukan "Gagal menambahkan panel" untuk segala
+      // sebab. Toast buta itulah yang menyembunyikan 404 read-only selama ini:
+      // tombolnya gagal setiap kali dan tidak ada yang tahu kenapa.
+      toast.error(apiErrorText(e, "Gagal menambahkan panel"));
     }
   }
 
@@ -505,6 +551,19 @@ export function AnalysisView({
       minute: "2-digit",
     });
   }
+
+  /** Deret lengkap untuk baris yang SEDANG DIBUKA saja.
+   *
+   *  Baris detail butuh daftar mentah; ke-49 baris lain tidak. Dulu deret ini
+   *  dibangun untuk semua baris di memo `rows` supaya satu baris bisa
+   *  memakainya. */
+  const expandedBuffer = useScadaStore((s) =>
+    expandedTagId ? s.liveBuffers[expandedTagId] : undefined
+  );
+  const expandedSeriesNewestFirst = useMemo(() => {
+    if (!expandedTagId) return [];
+    return buildSeries(recent[expandedTagId] ?? [], expandedBuffer).reverse();
+  }, [expandedTagId, recent, expandedBuffer]);
 
   const selectedTags = tags.filter((t) => selected.has(t.id));
 
@@ -586,10 +645,10 @@ export function AnalysisView({
           <select
             className="field-select h-7 w-auto cursor-pointer text-[12px]"
             value={range}
-            onChange={(e) => setRange(e.target.value as ChartRange)}
-            title="Rentang waktu untuk grafik, sparkline, statistik Min/Rata/Maks, dan panel yang dibuat dari seleksi"
+            onChange={(e) => setRange(e.target.value as DataRange)}
+            title="Rentang waktu untuk grafik, sparkline, statistik Min/Rata/Maks, dan panel yang dibuat dari seleksi. Maksimal 24 jam — di atas itu nilai mentahnya sudah dibuang."
           >
-            {(Object.keys(RANGE_LABELS) as ChartRange[]).map((r) => (
+            {DATA_RANGES.map((r) => (
               <option key={r} value={r}>
                 {RANGE_LABELS[r]} terakhir
               </option>
@@ -673,7 +732,7 @@ export function AnalysisView({
             <button
               onClick={() => setExportTags(selectedTags)}
               className="btn btn-secondary btn-sm gap-1.5"
-              title="Unduh data sensor terpilih sebagai Excel"
+              title="Unduh data sensor terpilih sebagai CSV"
             >
               <Download className="size-3.5" /> Export Data
             </button>
@@ -723,7 +782,7 @@ export function AnalysisView({
               </tr>
             </thead>
             <tbody>
-              {pageRows.map(({ tag, last, lastSeenMs, online, sparkStatus, series }) => (
+              {pageRows.map(({ tag, last, lastSeenMs, online, sparkStatus }) => (
                 <Fragment key={tag.id}>
                   <tr
                     className={cn(
@@ -778,18 +837,25 @@ export function AnalysisView({
                       {...cellEditorProps(tag, "device_key", tag.device_key)}
                       className="font-mono text-[11px] text-text-muted"
                     />
-                    {/* Sumber: "data diambil melalui apa" — klik untuk mengatur */}
+                    {/* Sumber: "data diambil melalui apa" — klik untuk mengatur.
+                        Dulu ini membuka drawer terpisah yang justru menutupi
+                        baris yang sedang diatur; sekarang ia membuka baris
+                        detailnya, tempat Sumber sekarang tinggal. */}
                     <td className="px-2 py-1.5">
                       {canManage ? (
                         <button
-                          onClick={() => setSourceTag(tag)}
+                          onClick={() =>
+                            setExpandedTagId((cur) =>
+                              cur === tag.id ? null : tag.id
+                            )
+                          }
                           className={cn(
                             "flex max-w-[190px] cursor-pointer items-center gap-1 rounded-[var(--r-sm)] border px-1.5 py-0.5 text-[11px] font-medium",
                             tag.source === "mqtt"
                               ? "border-primary/40 bg-primary/5 text-text"
                               : "border-border-soft text-text-muted hover:border-border hover:text-text"
                           )}
-                          title="Atur sumber data (Node-RED)"
+                          title="Atur sumber data (Node-RED) — membuka baris detail"
                         >
                           <span className="truncate">{sourceLabel(tag)}</span>
                         </button>
@@ -805,7 +871,9 @@ export function AnalysisView({
                       className="text-text-muted"
                     />
                     <td className="px-2 py-1.5 text-right font-semibold tabular-nums text-text">
-                      {last === null ? "—" : last.toLocaleString("id")}
+                      {last === null
+                        ? "—"
+                        : formatValue(last, resolveDecimals(null, tag.config))}
                     </td>
                     {/* Online / last online — pendamping teks untuk warna grafik */}
                     <td className="whitespace-nowrap px-2 py-1.5">
@@ -829,13 +897,11 @@ export function AnalysisView({
                           ini supaya ujungnya bergerak. Selama jendela itu belum
                           tiba → placeholder diam. Sesudah tiba tapi sensornya
                           memang baru (< 2 bucket) → pakai data live saja. */}
-                      <TagSparkline
+                      <TagSparkCell
+                        tagId={tag.id}
+                        stored={recent[tag.id]}
+                        base={sparkMap[tag.id]}
                         pending={sparkLoadedFor !== sparkWindow}
-                        samples={
-                          (sparkMap[tag.id]?.length ?? 0) >= 2
-                            ? withLiveTail(sparkMap[tag.id], series)
-                            : series.slice(-50)
-                        }
                         status={sparkStatus}
                       />
                     </td>
@@ -869,15 +935,16 @@ export function AnalysisView({
                   {expandedTagId === tag.id && (
                     <TagDetailRow
                       tag={tag}
+                      sites={store.sites}
+                      settings={store.rnetSettings}
                       range={range}
-                      samples={[...series].reverse()}
+                      samples={expandedSeriesNewestFirst}
                       sparkStatus={sparkStatus}
                       online={online}
                       loading={recentLoading}
                       canManage={canManage}
                       colSpan={colSpan}
                       onChanged={store.refreshTags}
-                      onOpenSource={canManage ? () => setSourceTag(tag) : undefined}
                       onOpenHistory={() => setDrawerTag(tag)}
                       onExport={() => setExportTags([tag])}
                     />
@@ -963,15 +1030,7 @@ export function AnalysisView({
         )}
       </div>
 
-      {drawerTag && <RiwayatView tag={drawerTag} onClose={() => setDrawerTag(null)} />}
-      {sourceTag && (
-        <SourceDialog
-          tag={sourceTag}
-          sites={store.sites}
-          onSaved={store.refreshTags}
-          onClose={() => setSourceTag(null)}
-        />
-      )}
+      {drawerTag && <RiwayatView tag={drawerTag} onClose={closeRiwayat} />}
       {store.showManageSites && (
         <ManageSitesDialog
           sites={store.sites}

@@ -1,12 +1,18 @@
 """R-Net server-side alarm engine — detects breaches with nobody watching.
 
 Every ALARM_INTERVAL_S the engine reads scada_tag_latest (one cheap SELECT for
-all tags) and evaluates three conditions per enabled tag:
+all tags) and evaluates these conditions per enabled tag:
 
-  high    latest.value > config.alarm_max
-  low     latest.value < config.alarm_min
-  silent  automatic for every MQTT tag: no data for > max(3 × interval, 60 s)
-          (ring-mode tags use the flat 60 s window)
+  high       latest.value > config.alarm_max
+  low        latest.value < config.alarm_min
+  warn_high  latest.value > config.warn_max, and not already high/low
+  warn_low   latest.value < config.warn_min, and not already high/low
+  silent     automatic for every MQTT tag: no data for > max(3 × interval, 60 s)
+
+The warn_* pair is the WASPADA band. It exists because the Data tab has always
+painted rows amber from warn_min/warn_max while the engine only knew about
+alarm_min/alarm_max — so the two screens disagreed about the same sensor, and
+nothing amber ever reached Monitor, the bell, or email.
 
 State lives in scada_alarm_events: an OPEN event is a row with cleared_at
 NULL. Opening uses INSERT .. ON CONFLICT DO NOTHING against the partial
@@ -65,15 +71,69 @@ def _bounds(config: dict | None) -> tuple[float | None, float | None]:
     return _num(cfg.get("alarm_min")), _num(cfg.get("alarm_max"))
 
 
+def _warn_bounds(config: dict | None) -> tuple[float | None, float | None]:
+    """The WASPADA band — the early-warning pair, one step inside the alarm pair.
+
+    These have always existed and the Data tab has always painted rows amber
+    from them (frontend readTagThresholds/tagStatusOf). The engine, however,
+    only ever looked at alarm_min/alarm_max — so a sensor sitting in its warn
+    band showed amber in the Data tab and "Normal" on Monitor at the same time,
+    with nothing in the bell and nothing emailed. Two screens disagreeing about
+    the same sensor is worse than either answer alone: it teaches the operator
+    that neither can be trusted."""
+    cfg = config or {}
+    return _num(cfg.get("warn_min")), _num(cfg.get("warn_max"))
+
+
 def _silent_after_s(settings, config: dict | None) -> int:
     """No data for longer than this ⇒ the sensor is considered silent.
-    Ring-mode tags (store_enabled off) sample fast, so the 60 s floor is their
-    whole window; historian tags get 3× their sampling interval."""
-    cfg = config or {}
-    if not cfg.get("store_enabled"):
-        return SILENT_FLOOR_S
-    interval = rnet_settings.resolve_interval(settings, cfg, floor_s=1)
+
+    Always 3× the tag's own sampling interval, with a 60 s floor.
+
+    This used to branch on store_enabled: ring tags got the flat 60 s floor on
+    the reasoning that they "sample fast". That reasoning only held while ring
+    meant fastest/fast — nothing enforced it, and once the store lane was
+    retired EVERY tag took that branch. A slowest tag reports once every 60 s,
+    so a 60 s window makes it silent between every pair of readings: the engine
+    would open a `silent` event, the next reading would clear it, forever. At
+    300 sensors that is a steady drip of false alarms; at 15 000 it is a storm
+    that buries the real ones.
+
+    Deriving the window from the interval is also just correct — the question
+    "has this sensor gone quiet?" only means anything relative to how often it
+    is supposed to speak."""
+    interval = rnet_settings.resolve_interval(settings, config or {}, floor_s=1)
     return max(SILENT_FACTOR * interval, SILENT_FLOOR_S)
+
+
+def value_conditions(
+    value: float, config: dict | None
+) -> list[tuple[str, bool, float | None]]:
+    """Which value-alarm kinds should be OPEN for this reading?
+
+    Returns (kind, should_be_open, threshold) for every kind this engine can
+    open from a value — always all four, so the caller clears the ones that no
+    longer apply instead of only touching the ones that do.
+
+    ONE SEVERITY AT A TIME. A value past alarm_max is also past warn_max, but
+    opening both would put the same sensor on the wall twice, once red and once
+    amber. The Data tab has always resolved this the same way (tagStatusOf:
+    kritis wins over waspada), so the engine matches it rather than inventing a
+    second rule for the same question.
+
+    Pure on purpose: this is the whole decision, and it is the part worth
+    pinning down in tests without a database."""
+    alarm_min, alarm_max = _bounds(config)
+    warn_min, warn_max = _warn_bounds(config)
+    is_high = alarm_max is not None and value > alarm_max
+    is_low = alarm_min is not None and value < alarm_min
+    in_alarm = is_high or is_low
+    return [
+        ("high", is_high, alarm_max),
+        ("low", is_low, alarm_min),
+        ("warn_high", not in_alarm and warn_max is not None and value > warn_max, warn_max),
+        ("warn_low", not in_alarm and warn_min is not None and value < warn_min, warn_min),
+    ]
 
 
 def _wants_silent(tag: ScadaTag) -> bool:
@@ -218,26 +278,24 @@ async def evaluate_once(db: AsyncSession) -> None:
 
     for tag in tags:
         try:
-            alarm_min, alarm_max = _bounds(tag.config)
             latest = latest_by_tag.get(tag.id)
 
             # --- value alarms (need a last-known value) ------------------- #
             if latest is not None:
-                value = latest.value
-                if alarm_max is not None:
-                    is_high = value > alarm_max
-                    open_high = open_events.get((tag.id, "high"))
-                    if is_high and open_high is None:
-                        await _open_event(db, tag, "high", value, alarm_max)
-                    elif not is_high and open_high is not None:
-                        await _clear_event(db, tag, open_high)
-                if alarm_min is not None:
-                    is_low = value < alarm_min
-                    open_low = open_events.get((tag.id, "low"))
-                    if is_low and open_low is None:
-                        await _open_event(db, tag, "low", value, alarm_min)
-                    elif not is_low and open_low is not None:
-                        await _clear_event(db, tag, open_low)
+                # Note the clear path is NOT gated on the bound still being set.
+                # It used to be (`if alarm_max is not None:` wrapped both the
+                # open and the clear), so deleting a threshold while its event
+                # was open stranded that event open forever — the sensor stayed
+                # red on Monitor with no threshold left to explain why, and only
+                # disabling the tag could ever clear it.
+                for kind, breached, threshold in value_conditions(
+                    latest.value, tag.config
+                ):
+                    open_event = open_events.get((tag.id, kind))
+                    if breached and open_event is None:
+                        await _open_event(db, tag, kind, latest.value, threshold)
+                    elif not breached and open_event is not None:
+                        await _clear_event(db, tag, open_event)
 
             # --- silence alarm -------------------------------------------- #
             if _wants_silent(tag):
@@ -253,25 +311,16 @@ async def evaluate_once(db: AsyncSession) -> None:
                 elif not is_silent and last_seen is not None and open_silent is not None:
                     await _clear_event(db, tag, open_silent)
 
-            # --- reset-reminder alarm (historian tags only) --------------- #
-            # H-`reset_warn_days` before a store tag's 1-month archive+reset, so
-            # the operator can export/verify before its data resets from 0.
+            # --- reset-reminder alarm: RETIRED with the store lane -------- #
+            # It warned that a sensor's 1-month cycle was about to be archived
+            # and wiped from 0. Nothing gets wiped any more: raw ages out by the
+            # day, the per-minute summary is archived per plant per month, and
+            # no sensor has a cycle clock. A warning about an event that cannot
+            # happen is worse than no warning. Any event still open from before
+            # the retirement is closed here, once, rather than left hanging in
+            # the active list forever.
             open_expiring = open_events.get((tag.id, "expiring"))
-            cycle_start = (
-                None
-                if rnet_settings.is_ring(tag.config)
-                else rnet_settings.parse_cycle_start(tag.config)
-            )
-            if cycle_start is not None:
-                reset_at = rnet_settings.cycle_reset_at(settings, cycle_start)
-                warn_at = reset_at - timedelta(days=settings.reset_warn_days)
-                is_expiring = now >= warn_at
-                if is_expiring and open_expiring is None:
-                    await _open_event(db, tag, "expiring", None, None)
-                elif not is_expiring and open_expiring is not None:
-                    await _clear_event(db, tag, open_expiring)
-            elif open_expiring is not None:
-                # Store turned off / cycle cleared → the reminder no longer holds.
+            if open_expiring is not None:
                 await _clear_event(db, tag, open_expiring)
         except Exception:
             logger.exception("Alarm evaluation failed for tag %s", tag.id)

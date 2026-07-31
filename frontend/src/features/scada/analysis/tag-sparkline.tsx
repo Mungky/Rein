@@ -5,26 +5,46 @@
  *  user: garis ketebalan 1.5px, glow dihapus). Color is a STATUS encoding
  *  (reserved status tokens, theme-aware), never a series identity:
  *    hijau  = normal
- *    merah  = nilai terkini menembus batas atas (alarm_max)
- *    kuning = nilai terkini di bawah batas bawah (alarm_min)
+ *    kuning = nilai terkini melewati batas WASPADA (warn_min / warn_max)
+ *    merah  = nilai terkini melewati batas ALARM (alarm_min / alarm_max)
  *    abu    = sensor offline (tidak ada data baru)
  *  Color is never the only signal: the Online column + alarm badges carry the
  *  same state in text, and the row's dropdown holds the full data table. */
 
-import { useId, useMemo } from "react";
+import { memo, useId, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import type { RecentSample } from "../types";
 
-export type SparkStatus = "normal" | "high" | "low" | "offline";
+/** Status yang bisa digambar sparkline/grafik di tab Data.
+ *
+ *  Dulu `normal | high | low | offline`, dan `low` — menembus batas ALARM
+ *  bawah — dirender KUNING, warna yang di legenda zona Ambang berarti
+ *  "waspada". Jadi alarm bawah tampil seperti peringatan biasa. Sekarang
+ *  sejajar dengan Status di panels/elements.tsx: waspada kuning, alarm merah,
+ *  arah atas atau bawah tidak lagi mengubah tingkat keparahannya. */
+export type SparkStatus = "normal" | "waspada" | "alarm" | "offline";
 
-const COLOR: Record<SparkStatus, string> = {
+/** Status → warna. Diekspor supaya grafik besar di baris detail
+ *  (analysis/tag-chart.tsx) memakai kode warna yang persis sama: sensor yang
+ *  merah di sparkline harus merah juga saat barisnya dibuka. */
+export const STATUS_COLOR: Record<SparkStatus, string> = {
   normal: "var(--rein-green)",
-  high: "var(--rein-red)",
-  low: "var(--rein-amber)",
+  waspada: "var(--rein-amber)",
+  alarm: "var(--rein-red)",
   offline: "var(--rein-text-light, #9ca3af)",
 };
 
-export function TagSparkline({
+/** React.memo bukan hiasan di sini. Satu halaman tab Data memasang sampai 50
+ *  sparkline sekaligus, dan setiap gambarnya butuh dua sebaran `Math.min`/
+ *  `Math.max` atas ~100 nilai plus satu string path 100 titik. Tanpa memo,
+ *  ke-50-nya dihitung ulang setiap kali komponen tabel digambar ulang — dan
+ *  tabel itu digambar ulang setiap kali satu sensor mana pun berdetak.
+ *
+ *  Ini bekerja karena TagSparkCell memberi array `samples` yang identitasnya
+ *  stabil selama ekor live tag itu tidak berubah. Menyusun array baru saat
+ *  render (persis yang dilakukan versi lama) akan membuat memo ini tidak pernah
+ *  kena sama sekali. */
+export const TagSparkline = memo(function TagSparkline({
   samples,
   status,
   pending = false,
@@ -112,7 +132,7 @@ export function TagSparkline({
     );
   }
 
-  const color = COLOR[status];
+  const color = STATUS_COLOR[status];
   const dim = status === "offline";
 
   return (
@@ -146,4 +166,4 @@ export function TagSparkline({
           chart is stretched to full width */}
     </svg>
   );
-}
+});

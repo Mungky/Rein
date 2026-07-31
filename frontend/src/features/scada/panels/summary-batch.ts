@@ -53,6 +53,25 @@ export function getSummaryItem(
   });
 }
 
+/** Same, for a whole set of tags at once (table/bar panels).
+ *
+ *  Order follows `tagIds`, and tags with no row are dropped. Going through the
+ *  coalescer instead of calling /summary directly is the whole point: a wall
+ *  holding a table panel, a bar panel and four gauges at the same range used to
+ *  issue three requests per refresh — one for the table, one for the bar, one
+ *  coalesced for the gauges — asking overlapping questions about the same
+ *  sensors. Now the batch window catches all of them and one request answers
+ *  the lot. */
+export async function getSummaryItems(
+  tagIds: string[],
+  spanMs: number
+): Promise<SummaryItem[]> {
+  const items = await Promise.all(
+    tagIds.map((id) => getSummaryItem(id, spanMs))
+  );
+  return items.filter((it): it is SummaryItem => it !== null);
+}
+
 function flush(spanMs: number): void {
   const batch = batches.get(spanMs);
   if (!batch) return;

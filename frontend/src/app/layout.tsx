@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/providers/theme-provider";
-import { SupabaseProvider } from "@/components/providers/supabase-provider";
 import { PermissionsProvider } from "@/components/providers/permissions-provider";
 import "./globals.css";
 
@@ -37,9 +36,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <ThemeProvider>
-          <SupabaseProvider>
-            <PermissionsProvider>{children}</PermissionsProvider>
-          </SupabaseProvider>
+          <PermissionsProvider>{children}</PermissionsProvider>
         </ThemeProvider>
         <Toaster richColors position="top-center" />
       </body>

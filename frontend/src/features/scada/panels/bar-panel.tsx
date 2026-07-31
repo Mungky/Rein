@@ -17,13 +17,18 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { scadaApi } from "@/lib/api/scada";
-import { useScadaStore } from "../store";
+import { useTagLiveValues } from "../store";
 import type { BarMetric, BarPanelConfig, SummaryItem, Tag } from "../types";
 import { RANGE_LABELS, RANGE_MS } from "./chart-panel";
+import { getSummaryItems } from "./summary-batch";
 import { usePanelRefresh } from "./use-panel-refresh";
 import { LayoutItem, LayoutSurface } from "./layout-box";
-import { layoutMap } from "./elements";
+import {
+  PanelPlaceholder,
+  formatValue,
+  layoutMap,
+  resolveDecimals,
+} from "./elements";
 
 export const METRIC_LABELS: Record<BarMetric, string> = {
   avg: "Rata-rata",
@@ -36,6 +41,8 @@ interface Row {
   label: string;
   unit: string;
   value: number;
+  /** Angka di belakang koma sensor ini — tiap batang boleh beda presisi. */
+  decimals: number | null;
 }
 
 export function BarPanel({
@@ -54,10 +61,7 @@ export function BarPanel({
   const load = useCallback(async () => {
     if (config.tag_ids.length === 0) return;
     try {
-      const end = new Date();
-      const start = new Date(end.getTime() - RANGE_MS[config.range]);
-      const res = await scadaApi.getSummary(config.tag_ids, start, end);
-      setItems(res.items);
+      setItems(await getSummaryItems(config.tag_ids, RANGE_MS[config.range]));
       setError(false);
     } catch {
       setError(true);
@@ -69,7 +73,7 @@ export function BarPanel({
   // "Terkini" harus benar-benar terkini: nilai realtime dari store menimpa
   // snapshot ringkasan (yang hanya disegarkan tiap satu putaran refresh).
   // Min/rata²/maks tetap dari snapshot — itu memang agregat rentang.
-  const liveValues = useScadaStore((s) => s.liveValues);
+  const liveValues = useTagLiveValues(config.tag_ids);
 
   const unconfigured = config.tag_ids.length === 0;
 
@@ -83,26 +87,28 @@ export function BarPanel({
           live &&
           (!item.last_ts ||
             new Date(live.ts).getTime() > new Date(item.last_ts).getTime());
+        const tag = tags.find((t) => t.id === item.tag_id);
         return {
           label: item.label,
-          unit: item.unit || tags.find((t) => t.id === item.tag_id)?.unit || "",
+          unit: item.unit || tag?.unit || "",
           value: liveNewer ? live!.value : item[config.metric],
+          decimals: resolveDecimals(config.decimals, tag?.config),
         };
       })
       .filter((r): r is Row => r.value !== null)
       .sort((a, b) => b.value - a.value);
-  }, [items, tags, config.metric, liveValues]);
+  }, [items, tags, config.metric, config.decimals, liveValues]);
 
   if (unconfigured) {
     return (
-      <Center icon>
+      <PanelPlaceholder icon={BarChart3}>
         Bar belum diatur — buka mode Atur Layout lalu klik dua kali panel ini
         untuk memilih sensor.
-      </Center>
+      </PanelPlaceholder>
     );
   }
   if (error && !items) {
-    return <Center>Gagal memuat perbandingan — mencoba lagi…</Center>;
+    return <PanelPlaceholder>Gagal memuat perbandingan — mencoba lagi…</PanelPlaceholder>;
   }
   if (items === null) {
     return (
@@ -112,7 +118,7 @@ export function BarPanel({
     );
   }
   if (rows.length === 0) {
-    return <Center icon>Belum ada data pada rentang {RANGE_LABELS[config.range]}.</Center>;
+    return <PanelPlaceholder icon={BarChart3}>Belum ada data pada rentang {RANGE_LABELS[config.range]}.</PanelPlaceholder>;
   }
 
   const top = rows[0].value;
@@ -120,6 +126,9 @@ export function BarPanel({
   // "vertical" = batang tegak (recharts layout "horizontal"); bawaan mendatar
   const upright = config.orientation === "vertical";
   const barFill = config.color ?? "var(--rnet-chart-1)";
+  // Sumbu dan label batang berbagi satu skala, jadi satu presisi: setelan panel
+  // dulu, kalau kosong ikut sensor teratas.
+  const axisDec = resolveDecimals(config.decimals, undefined) ?? rows[0].decimals;
   const el = layoutMap("bar", config.elements, config.layout);
 
   return (
@@ -162,9 +171,7 @@ export function BarPanel({
               }}
               tickLine={false}
               axisLine={{ stroke: "var(--rein-border)" }}
-              tickFormatter={
-                upright ? undefined : (v: number) => v.toLocaleString("id")
-              }
+              tickFormatter={upright ? undefined : (v: number) => formatValue(v, axisDec)}
               interval={upright ? 0 : undefined}
             />
             <YAxis
@@ -177,9 +184,7 @@ export function BarPanel({
               }}
               tickLine={false}
               axisLine={false}
-              tickFormatter={
-                upright ? (v: number) => v.toLocaleString("id") : undefined
-              }
+              tickFormatter={upright ? (v: number) => formatValue(v, axisDec) : undefined}
             />
             <Tooltip
               cursor={{ fill: "var(--rein-bg-hover)" }}
@@ -194,7 +199,7 @@ export function BarPanel({
                 const v = typeof value === "number" ? value : Number(value);
                 const row = entry?.payload as Row | undefined;
                 const parts = [
-                  `${v.toLocaleString("id")}${row?.unit ? ` ${row.unit}` : ""}`,
+                  `${formatValue(v, row?.decimals ?? axisDec)}${row?.unit ? ` ${row.unit}` : ""}`,
                 ];
                 if (top > 0 && v !== top)
                   parts.push(`${(((v - top) / top) * 100).toFixed(1)}% vs teratas`);
@@ -216,7 +221,7 @@ export function BarPanel({
                 dataKey="value"
                 position={upright ? "top" : "right"}
                 formatter={(v) =>
-                  typeof v === "number" ? v.toLocaleString("id") : String(v ?? "")
+                  typeof v === "number" ? formatValue(v, axisDec) : String(v ?? "")
                 }
                 style={{ fontSize: 10.5, fill: "var(--rein-text-muted)" }}
               />
@@ -229,11 +234,3 @@ export function BarPanel({
   );
 }
 
-function Center({ children, icon = false }: { children: React.ReactNode; icon?: boolean }) {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg px-4 text-center">
-      {icon && <BarChart3 className="size-6 text-text-light opacity-60" />}
-      <span className="text-[12px] text-text-muted">{children}</span>
-    </div>
-  );
-}

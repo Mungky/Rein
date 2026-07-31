@@ -17,6 +17,7 @@ import type { CropRect, Stream } from "./types";
 import { useScadaStore } from "./store";
 import { acquireStreamVideo } from "./stream-pool";
 import { VncPanel } from "./panels/vnc-panel";
+import { WEB_SANDBOX } from "./panels/web-panel";
 
 const GRID_CHOICES = [
   { label: "2×2", r: 2, c: 2 },
@@ -187,8 +188,8 @@ export function CropEditor({
             src={source.url}
             title={source.url}
             className="pointer-events-none absolute inset-0 h-full w-full border-0"
-            sandbox="allow-scripts allow-same-origin allow-forms"
-            referrerPolicy="no-referrer"
+            sandbox={WEB_SANDBOX}
+            referrerPolicy="strict-origin-when-cross-origin"
           />
         )}
         {isVnc && source.url && (

@@ -55,6 +55,12 @@ WHY GROUPING IS BY THE TAG'S CURRENT PLANT
 DOUBLE-RUN SAFETY (laptop dev + server sharing one DB)
     The unique (plant, month) index is claimed by INSERT first; the loser skips
     that bucket. A failed upload deletes its own claim so a later pass retries.
+
+    "A failed upload" means one that raised and was caught. A process KILLED
+    mid-upload never reaches that code, and the claim it left behind would
+    block this bucket in both directions forever — see
+    app/services/archive_claims.py, which releases such claims at the top of
+    every pass.
 """
 
 import asyncio
@@ -69,7 +75,8 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services import partitions
+from app.services import archive_claims, partitions
+from app.services import rnet_settings as rnet_settings_mod
 from db.models.scada import ScadaRollupArchive, ScadaSite, ScadaTag
 
 logger = logging.getLogger(__name__)
@@ -224,9 +231,23 @@ async def stream_tag_month(
 
 
 async def build_plant_zip(
-    db: AsyncSession, tags: list[ScadaTag], lo: datetime, hi: datetime, path: str
+    db: AsyncSession,
+    tags: list[ScadaTag],
+    lo: datetime,
+    hi: datetime,
+    path: str,
+    tz=timezone.utc,
 ) -> dict:
     """One .zip per plant-month, one CSV per sensor, written to `path`.
+
+    TIMESTAMPS ARE LABELLED IN THE DISPLAY ZONE (scada_settings.display_timezone),
+    matching the on-demand export in app/services/data_export.py so files from
+    the two sources stack. The MONTH BOUNDARIES stay UTC: `lo`/`hi` come from
+    month_bounds(), which mirrors the UTC partition boundaries this archive
+    exists to make droppable. So a "July" archive read in WIB opens at
+    `2026-07-01 07:00` and closes at `2026-08-01 06:59`. Deliberate — shifting
+    those boundaries means shifting the partitions underneath them, a real
+    migration for a cosmetic gain.
 
     Returns {tag_id: row_count}. A sensor that reported nothing still gets a CSV
     containing only its header — an empty file is information ("this sensor was
@@ -236,6 +257,13 @@ async def build_plant_zip(
     shortest text that round-trips exactly, so the archive is lossless and still
     compact. Rounding here would quietly make the archive disagree with the
     database it replaces."""
+    # Imported here, not at module level: data_export imports THIS module for
+    # stream_tag_month, so a top-level import back would be a cycle.
+    from app.services import rnet_settings
+    from app.services.data_export import _field
+
+    waktu = rnet_settings.tz_column_label(tz)
+
     counts: dict = {}
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         for tag, name in zip(tags, unique_names([t.label for t in tags])):
@@ -243,12 +271,27 @@ async def build_plant_zip(
             n = 0
             with zf.open(f"{name}.csv", "w") as raw:
                 out = io.TextIOWrapper(raw, encoding="utf-8", newline="")
+                # _field, same as the on-demand export: a unit containing a
+                # comma shifts every column to its right, and the file still
+                # parses, so nobody notices. This header used to be a bare
+                # f-string while the export quoted properly — two files that
+                # were supposed to stack.
                 out.write(
-                    f"waktu_utc,rata{unit},min{unit},maks{unit},jumlah_data\n"
+                    ",".join(
+                        _field(c)
+                        for c in (
+                            waktu,
+                            f"rata{unit}",
+                            f"min{unit}",
+                            f"maks{unit}",
+                            "jumlah_data",
+                        )
+                    )
+                    + "\n"
                 )
                 async for ts, avg, mn, mx, cnt in stream_tag_month(db, tag.id, lo, hi):
                     out.write(
-                        f"{ts:%Y-%m-%d %H:%M},{avg},{mn},{mx},{cnt}\n"
+                        f"{ts.astimezone(tz):%Y-%m-%d %H:%M},{avg},{mn},{mx},{cnt}\n"
                     )
                     n += 1
                 out.flush()
@@ -376,7 +419,8 @@ async def archive_plant_month(
     try:
         fd, tmp_path = tempfile.mkstemp(suffix=".zip", prefix="rnet-ringkasan-")
         _os.close(fd)
-        counts = await build_plant_zip(db, tags, lo, hi, tmp_path)
+        tz = rnet_settings_mod.display_tz(await rnet_settings_mod.get_settings(db))
+        counts = await build_plant_zip(db, tags, lo, hi, tmp_path, tz)
         total_rows = sum(counts.values())
 
         if total_rows > 0:
@@ -410,6 +454,21 @@ async def archive_plant_month(
             content, drive_id, web_link = b"", "(kosong)", None
 
         row = await db.get(ScadaRollupArchive, archive_id)
+        if row is None:
+            # Our claim was released as stale while we were uploading and
+            # another pass took the bucket over (archive_claims.py). That pass
+            # is authoritative: writing a ledger row now would resurrect a
+            # claim nobody is tracking. Our upload is a harmless duplicate on
+            # Drive — and this function deletes nothing, so there is nothing
+            # else to undo.
+            logger.error(
+                "Arsip ringkasan %s %s: klaim sudah dilepas dan diambil proses "
+                "lain saat upload berjalan. Berkas Drive %s jadi duplikat; "
+                "buku induk TIDAK disentuh dan tidak ada data yang hilang.",
+                plant, month, drive_id,
+            )
+            await db.rollback()
+            return None
         row.drive_file_id = drive_id
         row.web_link = web_link
         row.row_count = total_rows
@@ -459,6 +518,11 @@ async def archive_once(db: AsyncSession, now: datetime | None = None) -> list[di
     take several passes — that is fine, the check is idempotent and cheap.
     """
     now = now or datetime.now(timezone.utc)
+    # Before anything else: hand back buckets whose claim outlived the process
+    # that took it. Without this a single kill mid-upload blocks that
+    # plant-month — and therefore its whole month partition — permanently.
+    await archive_claims.release_stale(db, "scada_rollup_archives", now)
+
     months = (await eligible_months(db, now))[:MAX_MONTHS_PER_RUN]
     if not months:
         return []

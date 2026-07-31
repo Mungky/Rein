@@ -6,9 +6,9 @@
  *  DB load and no pooler connections. "Sudah berapa lama" comes from each
  *  user's earliest still-open session. */
 
-import { useEffect, useState } from "react";
 import { Users2 } from "lucide-react";
 import { usePresence } from "@/components/providers/presence-provider";
+import { useNowMs } from "../use-now";
 import { ROLE_LABELS, getInitials } from "@/lib/utils/roles";
 
 function formatDuration(ms: number): string {
@@ -23,12 +23,8 @@ function formatDuration(ms: number): string {
 
 export function ActivityPanel() {
   const online = usePresence();
-  // Tick every second so durations update live.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
+  // Tick every second so durations update live — jam bersama, lihat use-now.ts.
+  const now = useNowMs(1000) ?? 0;
 
   return (
     <div className="flex h-full w-full flex-col bg-bg">

@@ -6,7 +6,9 @@
  */
 
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { scadaApi } from "@/lib/api/scada";
+import { fetchLatestInChunks } from "./fetch-latest";
 import type {
   AlarmEvent,
   CanvasSize,
@@ -14,11 +16,11 @@ import type {
   Panel,
   PanelRect,
   Perspective,
+  RnetSettings,
   Sheet,
   Site,
   Stream,
   Tag,
-  WorkbenchColumn,
 } from "./types";
 import { DEFAULT_CANVAS } from "./types";
 import { samplingIntervalMs } from "./sampling";
@@ -42,6 +44,10 @@ interface ScadaState {
   channels: Channel[];
   sites: Site[];
   tags: Tag[];
+  /** Admin-tunable sampling-level durations + retention knobs, fetched once at
+   *  bootstrap. NULL while loading, or if the fetch failed — every consumer
+   *  falls back to DEFAULT_LEVEL_SECONDS, so this is never load-bearing. */
+  rnetSettings: RnetSettings | null;
   loading: boolean;
   loadError: string | null;
 
@@ -53,7 +59,6 @@ interface ScadaState {
   viewMode: "monitor" | "channels" | "analysis";
   sheets: Sheet[];
   activeSheetId: string | null;
-  workbenchColumns: WorkbenchColumn[];
   /** tag_id → freshest sample, fed by the Supabase Realtime hook */
   liveValues: Record<string, LiveValue>;
   /** tag_id → rolling buffer of live points accumulated THIS session (max
@@ -130,7 +135,6 @@ interface ScadaState {
   refreshChannels: () => Promise<void>;
   refreshSites: () => Promise<void>;
   refreshTags: () => Promise<void>;
-  refreshColumns: () => Promise<void>;
   refreshSheets: () => Promise<void>;
   selectSheet: (id: string) => void;
   setViewMode: (v: "monitor" | "channels" | "analysis") => void;
@@ -142,10 +146,47 @@ interface ScadaState {
    *  latest values, and active alarms — data only, layout untouched. */
   refreshData: () => Promise<void>;
   /** Append a panel to the active perspective and persist immediately —
-   *  used by the Analisis action bar ("Buat Grafik/Gauge/Bar"). */
-  addPanelToActive: (panel: Panel) => Promise<void>;
+   *  used by the Analisis action bar ("Buat Grafik/Gauge/Bar").
+   *
+   *  Returns WHERE the panel landed, because that is not always the page the
+   *  user was looking at: the admin default is read-only, so adding to it forks
+   *  a personal copy first (same rule as save()). Telling the user "ditambahkan
+   *  ke X" and saying nothing else would leave them hunting for a panel on a
+   *  page that never got one. */
+  addPanelToActive: (
+    panel: Panel
+  ) => Promise<{ pageName: string; forked: boolean }>;
   setShowManageStreams: (v: boolean) => void;
   setShowManageSites: (v: boolean) => void;
+}
+
+/** Indeks config sensor, dibangun ulang hanya ketika daftar tag berganti.
+ *
+ *  setLiveValue memanggil `tags.find(...)` pada SETIAP sampel yang masuk untuk
+ *  membaca satu hal: interval sampling sensornya. Di 300 sensor ber-interval
+ *  3 detik itu ~100 pemindaian linear per detik atas array 300 elemen — 30.000
+ *  perbandingan per detik untuk pertanyaan yang jawabannya tidak berubah sampai
+ *  ada sensor ditambah atau dihapus.
+ *
+ *  Cache modul, bukan state: isinya murni turunan dari `tags`, jadi menaruhnya
+ *  di store hanya akan menambah satu bidang lagi yang harus dijaga tetap sinkron. */
+let tagConfigCache: {
+  tags: Tag[];
+  map: Map<string, Record<string, unknown>>;
+} | null = null;
+
+const EMPTY_CONFIG: Record<string, unknown> = {};
+
+function tagConfigOf(tags: Tag[], tagId: string): Record<string, unknown> {
+  if (!tagConfigCache || tagConfigCache.tags !== tags) {
+    tagConfigCache = {
+      tags,
+      map: new Map(
+        tags.map((t) => [t.id, (t.config ?? {}) as Record<string, unknown>])
+      ),
+    };
+  }
+  return tagConfigCache.map.get(tagId) ?? EMPTY_CONFIG;
 }
 
 function pickActive(perspectives: Perspective[]): string | null {
@@ -180,6 +221,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   channels: [],
   sites: [],
   tags: [],
+  rnetSettings: null,
   loading: true,
   loadError: null,
   maximizedPanelId: null,
@@ -187,7 +229,6 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   viewMode: "monitor",
   sheets: [],
   activeSheetId: null,
-  workbenchColumns: [],
   liveValues: {},
   liveBuffers: {},
   activeAlarms: [],
@@ -212,18 +253,23 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
         channelsRes,
         sitesRes,
         tagsRes,
-        columnsRes,
         sheetsRes,
         publishedRes,
+        settingsRes,
       ] = await Promise.all([
         scadaApi.listPerspectives(),
         scadaApi.listStreams(),
         scadaApi.listChannels(),
         scadaApi.listSites(),
         scadaApi.listTags(),
-        scadaApi.listColumns(),
         scadaApi.listSheets(),
         scadaApi.getPublishedLayout(),
+        // Caught here, not in the outer try: the sampling durations only feed
+        // visual heuristics (offline window, live throttle, level labels), and
+        // every consumer already falls back to DEFAULT_LEVEL_SECONDS. Letting
+        // this one reject would blank the entire R-Net page over a cosmetic
+        // detail.
+        scadaApi.getRnetSettings().catch(() => null),
       ]);
       const perspectives = perspectivesRes.items;
       set({
@@ -232,7 +278,7 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
         channels: channelsRes.items,
         sites: sitesRes.items,
         tags: tagsRes.items,
-        workbenchColumns: columnsRes.items,
+        rnetSettings: settingsRes,
         sheets: sheetsRes.items,
         activeSheetId: pickActiveSheet(sheetsRes.items),
         activePerspectiveId: pickActive(perspectives),
@@ -516,11 +562,6 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     set({ tags: res.items });
   },
 
-  refreshColumns: async () => {
-    const res = await scadaApi.listColumns();
-    set({ workbenchColumns: res.items });
-  },
-
   refreshSheets: async () => {
     const res = await scadaApi.listSheets();
     const { activeSheetId } = get();
@@ -541,24 +582,23 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   setMaximizedPanel: (id) => set({ maximizedPanelId: id }),
 
   setLiveValue: (tagId, value) => {
-    // Interval sinkron: saat "Simpan data ke riwayat" aktif, TAMPILAN ikut
-    // interval penyimpanan — nilai di layar berganti sekali per jendela
-    // interval, persis seperti data yang tersimpan (interval 30 dtk = angka
-    // berganti tiap 30 dtk). Jendelanya dipatok ke jam dinding (bukan jarak
-    // antar-sampel) supaya jitter kedatangan tidak menggeser iramanya.
-    // Tag mode ring (simpan OFF) tetap live ~1 dtk.
-    const cfg = (get().tags.find((t) => t.id === tagId)?.config ?? {}) as Record<
-      string,
-      unknown
-    >;
-    if (cfg.store_enabled) {
-      const intervalMs = samplingIntervalMs(cfg);
-      const shown = get().liveValues[tagId];
-      if (shown) {
-        const windowOf = (ts: string) =>
-          Math.floor(new Date(ts).getTime() / intervalMs);
-        if (windowOf(value.ts) <= windowOf(shown.ts)) return;
-      }
+    // Gerbang interval-sinkron: angka di layar berganti sekali per jendela
+    // interval sensornya, sama persis dengan irama data yang tersimpan
+    // (interval 30 dtk = angka berganti tiap 30 dtk). Jendelanya dipatok ke jam
+    // dinding, bukan ke jarak antar-sampel, supaya jitter kedatangan tidak
+    // menggeser iramanya.
+    //
+    // Dulu gerbang ini hanya berlaku untuk tag bercentang "Simpan data"; sisanya
+    // berkedip ~1 dtk. Centang itu sudah tidak ada, dan alasan aslinya tidak
+    // pernah tentang lajur penyimpanan — melainkan supaya angka di layar tidak
+    // bergerak lebih cepat daripada data yang sebenarnya direkam. Itu berlaku
+    // untuk semua sensor.
+    const cfg = tagConfigOf(get().tags, tagId);
+    const intervalMs = samplingIntervalMs(cfg, get().rnetSettings);
+    const shown = get().liveValues[tagId];
+    if (shown) {
+      const windowOf = (ts: string) => Math.floor(new Date(ts).getTime() / intervalMs);
+      if (windowOf(value.ts) <= windowOf(shown.ts)) return;
     }
     const prev = get().dataUpdatedAt;
     const now = Date.now();
@@ -594,22 +634,12 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
     await Promise.all([refreshTags(), refreshActiveAlarms()]);
     // Re-seed latest values so quiet sensors update their "last known" too
     try {
-      // Dipotong 100 per permintaan (batas endpoint), BUKAN dibuang di atas
-      // 100: `.slice(0, 100)` dulu membuat tombol refresh manual diam-diam
-      // melewatkan sensor ke-101 dan seterusnya.
-      const ids = get().tags.map((t) => t.id);
-      const chunks: string[][] = [];
-      for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100));
-      const pages = await Promise.all(
-        chunks.map((c) => scadaApi.getLatest(c).catch(() => null))
+      // Lewat setLiveValue agar gerbang interval-sinkron ikut berlaku di
+      // refresh manual — nilai tag tersimpan tetap berganti per interval.
+      await fetchLatestInChunks(
+        get().tags.map((t) => t.id),
+        (tagId, v) => get().setLiveValue(tagId, v)
       );
-      for (const res of pages) {
-        // Lewat setLiveValue agar gerbang interval-sinkron ikut berlaku di
-        // refresh manual — nilai tag tersimpan tetap berganti per interval.
-        for (const item of res?.items ?? []) {
-          get().setLiveValue(item.tag_id, { value: item.value, ts: item.ts });
-        }
-      }
     } catch {
       /* best-effort */
     }
@@ -622,9 +652,28 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
   addPanelToActive: async (panel) => {
     const { activePerspectiveId, perspectives } = get();
     const active = perspectives.find((p) => p.id === activePerspectiveId);
-    if (!active) throw new Error("Tidak ada perspective aktif");
-    const canvas = active.layout.canvas ?? DEFAULT_CANVAS;
-    const existing = active.layout.panels.filter((p) => p.rect);
+    if (!active) throw new Error("Tidak ada halaman Monitor aktif");
+
+    // The admin default is not the caller's row to PATCH: the endpoint resolves
+    // it through _get_own_perspective and answers 404. This function had no
+    // read_only guard at all (unlike save() and updateActivePanelPersist), and
+    // pickActive deliberately lands EVERY user on the admin default — so the
+    // 404 path was the normal path. "Buat Grafik/Gauge/Bar" in the Data tab
+    // therefore failed essentially always, reported only as a generic toast,
+    // and no panel ever appeared on Monitor.
+    //
+    // Fork into the user's own copy instead, and reuse that copy on later adds
+    // so pressing the button three times gives three panels on one page rather
+    // than three pages named "(salinan)".
+    const forkName = `${active.name} (salinan)`;
+    const target = active.read_only
+      ? (perspectives.find((p) => !p.read_only && p.name === forkName) ?? null)
+      : active;
+
+    // First fork starts from what the user is currently looking at.
+    const base = target ?? active;
+    const canvas = base.layout.canvas ?? DEFAULT_CANVAS;
+    const existing = base.layout.panels.filter((p) => p.rect);
     // Cascade new panels at half-canvas size so they never hide each other.
     const n = existing.length;
     const placed: Panel = {
@@ -637,14 +686,126 @@ export const useScadaStore = create<ScadaState>((set, get) => ({
       },
     };
     const panels = [...existing, placed];
-    const updated = await scadaApi.updatePerspective(active.id, {
+
+    if (target === null) {
+      const created = await scadaApi.createPerspective(forkName, {
+        version: 2,
+        canvas,
+        panels,
+      });
+      window.localStorage.setItem(LAST_PERSPECTIVE_KEY, created.id);
+      set({
+        perspectives: [...perspectives, created],
+        activePerspectiveId: created.id,
+      });
+      return { pageName: created.name, forked: true };
+    }
+
+    const updated = await scadaApi.updatePerspective(target.id, {
       layout: { version: 2, canvas, panels },
     });
+    window.localStorage.setItem(LAST_PERSPECTIVE_KEY, updated.id);
     set({
       perspectives: perspectives.map((p) => (p.id === updated.id ? updated : p)),
+      activePerspectiveId: updated.id,
     });
+    return { pageName: updated.name, forked: target.id !== active.id };
   },
 
   setShowManageStreams: (v) => set({ showManageStreams: v }),
   setShowManageSites: (v) => set({ showManageSites: v }),
 }));
+
+/** Bidang yang berubah pada SETIAP sampel sensor masuk.
+ *
+ *  Di plant 300 sensor ber-interval 3 detik itu ~100 pembaruan per detik, dan
+ *  setiap pembaruan mengganti identitas ketiga objek ini. */
+const HOT_FIELDS = new Set<keyof ScadaState>([
+  "liveValues",
+  "liveBuffers",
+  "dataUpdatedAt",
+]);
+
+/** Seluruh store KECUALI bidang yang berdetak realtime.
+ *
+ *  Ini obat untuk penyakit utama R-Net. `useScadaStore()` tanpa selector
+ *  berlangganan SELURUH state, dan zustand membuat objek state baru pada setiap
+ *  `set()` — jadi komponen yang memakainya digambar ulang pada setiap sampel
+ *  sensor, entah ia menampilkan nilai sensor atau tidak.
+ *
+ *  Yang memakainya bukan komponen kecil: ScadaView (dinding Monitor lengkap
+ *  dengan setiap gauge, grafik, tabel, dan iframe di dalamnya), ChannelsView,
+ *  dan ComponentPalette. Tak satu pun dari ketiganya membaca liveValues,
+ *  liveBuffers, atau dataUpdatedAt. Mereka digambar ulang ~100 kali per detik
+ *  untuk data yang tidak pernah mereka sentuh — dan dinding Monitor melakukannya
+ *  bahkan saat user sedang berada di tab Data, karena dinding itu tidak pernah
+ *  dilepas dari DOM.
+ *
+ *  `useShallow` membandingkan objek hasilnya per-bidang, jadi perubahan yang
+ *  hanya menyentuh bidang panas menghasilkan objek yang SAMA dan React tidak
+ *  menggambar ulang apa pun.
+ *
+ *  Komponen yang memang menampilkan nilai live (AnalysisView, panel gauge/
+ *  chart/tabel) tetap berlangganan bidang panasnya secara eksplisit — dengan
+ *  selector sempit, bukan seluruh store. */
+export function useScadaCold(): ScadaState {
+  return useScadaStore(
+    useShallow((s) => {
+      const cold = {} as Record<string, unknown>;
+      for (const key of Object.keys(s) as (keyof ScadaState)[]) {
+        if (!HOT_FIELDS.has(key)) cold[key] = s[key];
+      }
+      return cold as unknown as ScadaState;
+    })
+  );
+}
+
+/** Nilai live untuk SEKUMPULAN tag saja — bukan seluruh peta.
+ *
+ *  `useScadaStore((s) => s.liveValues)` terlihat seperti selector yang sempit,
+ *  padahal tidak: peta itu diganti identitasnya setiap kali sensor MANA PUN
+ *  mengirim nilai. Jadi panel tabel berisi 4 sensor tetap digambar ulang setiap
+ *  kali salah satu dari 300 sensor lain berdetak — 99% pekerjaannya untuk baris
+ *  yang tidak berubah.
+ *
+ *  Di sini `useShallow` membandingkan per-tag, jadi panel hanya bangun ketika
+ *  salah satu tag MILIKNYA benar-benar berubah. Pola benarnya sebetulnya sudah
+ *  ada sejak awal di use-tag-value.ts (`s.liveValues[tagId]`) — ini hanya
+ *  memperluasnya dari satu tag ke sekumpulan tag. */
+export function useTagLiveValues(tagIds: string[]): Record<string, LiveValue> {
+  // Kunci string: array baru pada tiap render tidak boleh dianggap perubahan.
+  const key = tagIds.join(",");
+  return useScadaStore(
+    useShallow((s) => {
+      const out: Record<string, LiveValue> = {};
+      if (key === "") return out;
+      for (const id of key.split(",")) {
+        const v = s.liveValues[id];
+        if (v) out[id] = v;
+      }
+      return out;
+    })
+  );
+}
+
+/** Ekor live per tag, untuk sekumpulan tag saja — lihat useTagLiveValues. */
+export function useTagLiveBuffers(tagIds: string[]): Record<string, LiveValue[]> {
+  const key = tagIds.join(",");
+  return useScadaStore(
+    useShallow((s) => {
+      const out: Record<string, LiveValue[]> = {};
+      if (key === "") return out;
+      for (const id of key.split(",")) {
+        const buf = s.liveBuffers[id];
+        if (buf) out[id] = buf;
+      }
+      return out;
+    })
+  );
+}
+
+/** Ekor live SATU tag. Selector paling sempit yang mungkin: baris yang tagnya
+ *  tidak berdetak tidak ikut bangun sama sekali. */
+export function useTagLiveBuffer(tagId: string): LiveValue[] | undefined {
+  return useScadaStore((s) => s.liveBuffers[tagId]);
+}

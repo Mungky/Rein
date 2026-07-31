@@ -178,7 +178,7 @@ def test_a_reconfigure_lets_the_warning_fire_again(tmp_path):
     br._on_message(None, SITE, FakeMsg(TOPIC, REAL_PACKET))
     assert br._missing_warned
 
-    br.load_config = lambda: ({}, {}, {}, set(), {})
+    br.load_config = lambda: ({}, {}, {}, {})
     br.reconcile()
     assert br._missing_warned == set()
 

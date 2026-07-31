@@ -8,7 +8,7 @@
  *  KANAN = grafik rentang terpilih (dari data mentah yang sudah dimuat) +
  *          ringkasan min/rata²/maks. Tanpa pilihan: grafik 24 jam terakhir. */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { ArrowLeft, Download, Loader2, RefreshCw, X, XCircle } from "lucide-react";
@@ -25,7 +25,8 @@ import {
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
 import type { HistoryPoint, RecentSample, Tag } from "../types";
-import { exportTagToExcel } from "./export-excel";
+import { formatValue, resolveDecimals } from "../panels/elements";
+import { exportTagToCsv } from "./export-data";
 
 const ROW_H = 28; // px per baris tabel (virtualisasi butuh tinggi tetap)
 const PAGE = 2000; // baris per potongan muat
@@ -35,6 +36,8 @@ const MAX_CHART_POINTS = 1500;
 type ChartRow = { t: number; v: number };
 
 export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void }) {
+  // Riwayat tidak punya setelan panel, jadi presisinya dari sensor.
+  const dec = resolveDecimals(null, tag.config as Record<string, unknown>);
   const [samples, setSamples] = useState<RecentSample[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -46,6 +49,13 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
   const [defaultPoints, setDefaultPoints] = useState<HistoryPoint[] | null>(null);
 
   const loadingRef = useRef(false);
+  /** Timestamp baris tertua yang sudah dimuat = kursor "muat lebih lama".
+   *
+   *  Dulu diambil dari `samples[samples.length - 1]`, yang memaksa `samples`
+   *  masuk dependensi loadMore — jadi identitas loadMore berganti setiap kali
+   *  satu potongan (2000 baris) ditambahkan. Di ref ini kursornya tidak lagi
+   *  ikut menggerakkan apa pun. */
+  const oldestTsRef = useRef<string | undefined>(undefined);
   const dragAnchor = useRef<number | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -53,31 +63,37 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
 
   /* ── data mentah: potongan pertama + muat-lebih-lama ── */
 
-  const loadMore = useCallback(
-    async (reset = false) => {
-      if (loadingRef.current) return;
-      loadingRef.current = true;
-      setLoading(true);
-      try {
-        const before = reset ? undefined : samples[samples.length - 1]?.ts;
-        const res = await scadaApi.getSamplesPage(tag.id, { before, limit: PAGE });
-        setSamples((prev) => (reset ? res.items : [...prev, ...res.items]));
-        setHasMore(res.has_more);
-        if (reset) {
-          setSel(null);
-          setScrollTop(0);
-          scrollerRef.current?.scrollTo({ top: 0 });
-        }
-      } catch {
-        toast.error("Gagal memuat riwayat — coba lagi");
-      } finally {
-        loadingRef.current = false;
-        setLoading(false);
-        setInitialLoaded(true);
+  // Fungsi biasa, BUKAN useCallback — memoisasinya memang tidak dibutuhkan:
+  // tidak ada apa pun yang bergantung pada identitas fungsi ini. Effect di
+  // bawah sengaja berkunci pada tag.id, dan onScroll memanggilnya langsung.
+  // (useCallback di sini juga memicu react-hooks/preserve-manual-memoization:
+  // aturan itu ikut menyimpulkan `setSel` sebagai dependensi. Kebetulan sejalan
+  // — tapi alasan sebenarnya tetap yang di atas, bukan lint-nya.)
+  async function loadMore(reset = false) {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setLoading(true);
+    try {
+      const before = reset ? undefined : oldestTsRef.current;
+      const res = await scadaApi.getSamplesPage(tag.id, { before, limit: PAGE });
+      setSamples((prev) => (reset ? res.items : [...prev, ...res.items]));
+      oldestTsRef.current =
+        res.items[res.items.length - 1]?.ts ??
+        (reset ? undefined : oldestTsRef.current);
+      setHasMore(res.has_more);
+      if (reset) {
+        setSel(null);
+        setScrollTop(0);
+        scrollerRef.current?.scrollTo({ top: 0 });
       }
-    },
-    [tag.id, samples]
-  );
+    } catch {
+      toast.error("Gagal memuat riwayat — coba lagi");
+    } finally {
+      loadingRef.current = false;
+      setLoading(false);
+      setInitialLoaded(true);
+    }
+  }
 
   useEffect(() => {
     // Ditunda satu tick supaya setState muat-awal tidak sinkron di dalam
@@ -102,6 +118,41 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
       cancelled = true;
     };
   }, [tag.id]);
+
+  /* ── jalan keluar ── */
+
+  // Esc menutup. Ini overlay layar penuh (fixed inset-0), dan setiap overlay
+  // layar penuh yang tidak menanggapi Esc terasa seperti jebakan.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // CATATAN: tombol Back perangkat TIDAK diintegrasikan di sini, dan itu
+  // disengaja setelah percobaan yang gagal.
+  //
+  // Percobaan itu mendorong satu entri history saat overlay dibuka lalu memakai
+  // `popstate` berikutnya sebagai perintah tutup, dan membuang entrinya kembali
+  // saat ditutup dari dalam. Hasilnya: Riwayat TIDAK PERNAH TERBUKA. Strict Mode
+  // (bawaan App Router) menjalankan effect dua kali —
+  //
+  //   1. mount   → pushState(entri)
+  //   2. cleanup → entri kita masih teratas → history.back()  [ASINKRON]
+  //   3. mount   → pushState lagi, listener baru dipasang
+  //   4. popstate dari langkah 2 akhirnya tiba → listener BARU menangkapnya
+  //      → onClose() → overlay tertutup seketika
+  //
+  // — dan tidak ada penanda unik atau pengecekan `history.state` yang bisa
+  // menyelamatkannya, karena masalahnya bukan "entri siapa ini" melainkan
+  // sebuah popstate nyasar yang tiba setelah instance penerimanya berganti.
+  //
+  // Cara yang benar untuk membuat Back perangkat bekerja adalah menjadikan
+  // Riwayat ALAMAT sungguhan (mis. ?riwayat=<tagId>) dan membiarkan router yang
+  // mengurus riwayat browser — bukan menyetir history API dengan tangan. Itu
+  // pekerjaan tersendiri. Sampai saat itu: tombol Kembali yang jelas + Esc.
 
   /* ── virtualisasi ── */
 
@@ -221,9 +272,9 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
   async function handleExport() {
     setExporting(true);
     try {
-      await exportTagToExcel(tag);
+      await exportTagToCsv(tag);
     } catch {
-      toast.error("Gagal membuat file Excel");
+      toast.error("Gagal membuat berkas CSV");
     } finally {
       setExporting(false);
     }
@@ -231,12 +282,19 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-bg">
-      {/* ── Header ── */}
-      <div className="flex shrink-0 items-start gap-3 border-b border-border-soft px-5 pb-3 pt-4">
+      {/* ── Header ──
+          Boleh turun ke baris kedua. Dulu satu baris flex tanpa flex-wrap
+          dengan 4 tombol + judul: di layar ≤360 px isinya melimpah keluar
+          layar tanpa scroll, dan tombol keluarnya ikut terbawa. */}
+      <div className="flex shrink-0 flex-wrap items-start gap-x-3 gap-y-2 border-b border-border-soft px-5 pb-3 pt-4">
+        {/* Tombol keluar utama. Sebelumnya btn-ghost: latar transparan, teks abu
+            samar, tinggi 28 px, berdampingan dengan tiga tombol lain — ADA, tapi
+            tidak terbaca sebagai jalan keluar. Dilaporkan sebagai "tidak ada
+            tombol back". btn-secondary memberinya batas dan bidang sendiri. */}
         <button
           onClick={onClose}
-          className="btn btn-ghost btn-sm shrink-0 gap-1.5"
-          title="Kembali ke daftar sensor"
+          className="btn btn-secondary btn-sm shrink-0 gap-1.5"
+          title="Kembali ke daftar sensor (Esc)"
         >
           <ArrowLeft className="size-4" /> Kembali
         </button>
@@ -271,7 +329,7 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
           ) : (
             <Download className="size-3.5" />
           )}
-          Excel
+          CSV
         </button>
         <button onClick={onClose} className="btn btn-ghost btn-icon btn-sm">
           <X className="size-4" />
@@ -326,7 +384,7 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
                         })}
                       </span>
                       <span className="font-medium tabular-nums text-text">
-                        {s.value.toLocaleString("id")}
+                        {formatValue(s.value, dec)}
                       </span>
                     </div>
                   );
@@ -390,7 +448,7 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
                     width={54}
                     tick={{ fontSize: 10, fill: "var(--rein-text-light)" }}
                     stroke="var(--rein-border)"
-                    tickFormatter={(v: number) => v.toLocaleString("id")}
+                    tickFormatter={(v: number) => formatValue(v, dec)}
                   />
                   <Tooltip
                     labelFormatter={(t) =>
@@ -399,7 +457,7 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
                       })
                     }
                     formatter={(v) => [
-                      `${Number(v).toLocaleString("id")}${tag.unit ? ` ${tag.unit}` : ""}`,
+                      `${formatValue(Number(v), dec)}${tag.unit ? ` ${tag.unit}` : ""}`,
                       tag.label,
                     ]}
                     contentStyle={{
@@ -432,19 +490,19 @@ export function RiwayatView({ tag, onClose }: { tag: Tag; onClose: () => void })
               <span>
                 Min:{" "}
                 <span className="font-semibold tabular-nums text-text">
-                  {chart.stats.min.toLocaleString("id")}
+                  {formatValue(chart.stats.min, dec)}
                 </span>
               </span>
               <span>
                 Rata²:{" "}
                 <span className="font-semibold tabular-nums text-text">
-                  {chart.stats.avg.toLocaleString("id", { maximumFractionDigits: 2 })}
+                  {formatValue(chart.stats.avg, dec)}
                 </span>
               </span>
               <span>
                 Maks:{" "}
                 <span className="font-semibold tabular-nums text-text">
-                  {chart.stats.max.toLocaleString("id")}
+                  {formatValue(chart.stats.max, dec)}
                 </span>
               </span>
             </div>

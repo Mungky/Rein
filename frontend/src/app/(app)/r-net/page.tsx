@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { Loader2 } from "lucide-react";
 import { PageGuard } from "@/components/guards/page-guard";
 
-// react-grid-layout + hls.js measure the DOM — client-only, no prerender
+// CanvasStage + hls.js measure the DOM — client-only, no prerender
 const ScadaView = dynamic(
   () => import("@/features/scada/scada-view").then((m) => m.ScadaView),
   {

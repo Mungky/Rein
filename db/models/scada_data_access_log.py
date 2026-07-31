@@ -22,7 +22,7 @@ from .base import Base, TimestampMixin
 ACCESS_RECENT = "recent"      # /tags/{id}/recent (drawer Riwayat)
 ACCESS_SAMPLES = "samples"    # /tags/{id}/samples (scroll/ekspor Excel)
 ACCESS_HISTORY = "history"    # /history (chart bucket multi-tag)
-ACCESS_EXPORT = "export"      # /export.xlsx (rakit file di server, Fase 6)
+ACCESS_EXPORT = "export"      # /export (rakit berkas CSV di server, Fase 6)
 
 
 class ScadaDataAccessLog(TimestampMixin, Base):

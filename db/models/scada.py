@@ -522,6 +522,13 @@ class ScadaSettings(Base):
     reset_warn_days: Mapped[int] = mapped_column(
         Integer, server_default="7", nullable=False
     )
+    # IANA zone used to LABEL timestamps in anything a human reads: CSV exports,
+    # the monthly Drive archive, export filenames, alarm emails. Storage stays
+    # UTC — this changes presentation only. Configured rather than inferred
+    # because a server process has no meaningful local time (Railway is UTC).
+    display_timezone: Mapped[str] = mapped_column(
+        String(64), server_default="Asia/Jakarta", nullable=False
+    )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )

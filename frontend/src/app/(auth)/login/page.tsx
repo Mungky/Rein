@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { usernameToEmail } from "@/lib/auth/username";
+import { safeNextPath } from "@/lib/auth/next-path";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -48,7 +49,10 @@ export default function LoginPage() {
         return;
       }
 
-      router.push("/dcc");
+      // Dibaca di sini, bukan saat render: useSearchParams() akan memaksa
+      // halaman ini keluar dari prerender statis, dan pada titik ini kita sudah
+      // pasti di browser.
+      router.push(safeNextPath(window.location.search));
       router.refresh();
     } catch {
       setError("Terjadi kesalahan jaringan. Silakan coba lagi.");

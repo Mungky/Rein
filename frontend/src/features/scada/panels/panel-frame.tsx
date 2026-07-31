@@ -88,7 +88,7 @@ export function PanelFrame({
       )}
 
       {/* Edit-mode affordance: visible resize grip at the bottom-right corner
-          (react-grid-layout's actual handle sits on top of it) */}
+          (CanvasStage's actual resize handle sits on top of it) */}
       {editMode && (
         <svg
           className="pointer-events-none absolute bottom-1 right-1 z-10 text-primary"

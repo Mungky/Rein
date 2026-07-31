@@ -17,12 +17,13 @@
  *  SEKARANG, dan menyimpan tiap pesan di 300 sensor berarti gigabyte per hari
  *  untuk jawaban yang sama. Satu baris per (topik, gateway), ditimpa terus. */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Check, Copy, RadioTower, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Drawer } from "@/components/ui/drawer";
 import { scadaApi } from "@/lib/api/scada";
 import { usePanelRefresh } from "../panels/use-panel-refresh";
+import { useNowMs } from "../use-now";
 import { cn } from "@/lib/utils";
 
 interface Probe {
@@ -53,19 +54,8 @@ export function TopicMonitorDialog({ onClose }: { onClose: () => void }) {
   const [items, setItems] = useState<Probe[] | null>(null);
   const [buka, setBuka] = useState<Set<string>>(new Set());
   const [disalin, setDisalin] = useState<string | null>(null);
-  const [nowMs, setNowMs] = useState<number | null>(null);
+  const nowMs = useNowMs(1000);
 
-  // Jam dinding di STATE, tidak pernah Date.now() saat render (aturan kemurnian).
-  // Tick pertama lewat setTimeout(0), bukan setState langsung di badan efek —
-  // sama seperti tabel Analisis; satu frame pertama merender "—" lalu terkoreksi.
-  useEffect(() => {
-    const first = setTimeout(() => setNowMs(Date.now()), 0);
-    const t = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => {
-      clearTimeout(first);
-      clearInterval(t);
-    };
-  }, []);
 
   const muat = useCallback(async () => {
     try {

@@ -208,7 +208,11 @@
       "Bash(xargs echo \"  penyebutan scada_ring di bridge laptop:\")",
       "Bash(kill %1)",
       "Bash(grep -E \"^[A-Za-z]:\\\\\\\\\\\\\\\\|^/\")",
-      "Bash(grep -n \"slot\\\\[key\\\\]\\\\|slot = site.routes\\\\|setdefault\\(topic, {}\\)\\\\|set\\(slot\\) == \\\\|_qos_for\" deploy/data/bridge.py)"
+      "Bash(grep -n \"slot\\\\[key\\\\]\\\\|slot = site.routes\\\\|setdefault\\(topic, {}\\)\\\\|set\\(slot\\) == \\\\|_qos_for\" deploy/data/bridge.py)",
+      "Bash(rm -f db/sql/bridge-role.sql backend/tests/test_bridge_role_sql.py backend/tests/test_bridge_site_scope.py backend/tests/test_anon_grants.py db/alembic/versions/p6q7r8s9t0u1_revoke_anon_grants.py)",
+      "Bash(rmdir db/sql)",
+      "Bash(echo \"typecheck exit=$?\")",
+      "Bash(PYTHONPATH='.;..' python -c ' *)"
     ]
   }
 }

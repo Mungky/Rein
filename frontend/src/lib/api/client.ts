@@ -32,7 +32,7 @@ class ApiClient {
     return res.json();
   }
 
-  /** Download a file the server generated (e.g. the R-Net Excel export).
+  /** Download a file the server generated (e.g. the R-Net CSV export).
    *  `rawQuery` is appended verbatim so repeated keys (tag_ids=a&tag_ids=b)
    *  survive — URLSearchParams-in-an-object would collapse them. Returns the
    *  blob plus the filename the server chose in Content-Disposition. */
@@ -129,3 +129,46 @@ class ApiError extends Error {
 }
 
 export const apiClient = new ApiClient(API_URL);
+
+export { ApiError };
+
+/** Alasan sebenarnya sebuah permintaan gagal, siap ditampilkan ke user.
+ *
+ *  ApiError.message berisi BODY MENTAH dari FastAPI, jadi menampilkannya
+ *  langsung memberi `{"detail":"..."}` kepada operator. Karena itu hampir semua
+ *  pemanggil menulis `catch { toast.error("Gagal ...") }` dan membuang
+ *  penjelasan yang sudah dikirim server dengan benar. Kerugiannya nyata: 422
+ *  "URL web harus diawali http:// atau https://" muncul sebagai "Gagal
+ *  menyimpan sumber", dan 404 read-only pada perspective muncul sebagai "Gagal
+ *  menambahkan panel" — dua kegagalan yang bisa langsung diperbaiki user,
+ *  disembunyikan sebagai kegagalan misterius.
+ *
+ *  Menangani dua bentuk FastAPI: `detail` berupa string (HTTPException) dan
+ *  `detail` berupa daftar galat validasi. */
+export function apiErrorText(error: unknown, fallback: string): string {
+  if (!(error instanceof Error) || !error.message) return fallback;
+  const raw = error.message.trim();
+
+  let detail: unknown;
+  try {
+    detail = (JSON.parse(raw) as { detail?: unknown }).detail;
+  } catch {
+    // Bukan JSON (mis. HTML dari proxy) — teks mentah lebih menyesatkan daripada
+    // membantu, jadi pakai kalimat pemanggil.
+    return fallback;
+  }
+
+  const clean = (m: string) => m.replace(/^Value error,\s*/i, "").trim();
+
+  if (typeof detail === "string" && detail.trim() !== "") {
+    return `${fallback}: ${clean(detail)}`;
+  }
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) => (typeof d === "object" && d !== null ? (d as { msg?: unknown }).msg : null))
+      .filter((m): m is string => typeof m === "string" && m.trim() !== "")
+      .map(clean);
+    if (msgs.length > 0) return `${fallback}: ${[...new Set(msgs)].join("; ")}`;
+  }
+  return fallback;
+}

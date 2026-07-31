@@ -7,21 +7,22 @@ import type {
   Archive,
   Channel,
   ChannelKind,
-  ColumnKind,
+  Coverage,
   HistorySeries,
+  Lane,
   LatestItem,
   Perspective,
   PerspectiveLayout,
   PublishedLayout,
   RecentSample,
   RnetSettings,
+  RollupArchive,
   Sheet,
   Site,
   SparklineSeries,
   Stream,
   SummaryItem,
   Tag,
-  WorkbenchColumn,
 } from "@/features/scada/types";
 
 export const scadaApi = {
@@ -198,15 +199,30 @@ export const scadaApi = {
 
   /** Riwayat mentah berhalaman (keyset, terbaru dulu) — feed scroll tanpa
    *  batas halaman Riwayat. `before` = ts baris tertua yang sudah dimuat. */
-  /** Excel export dirakit di SERVER (audit D-7) — satu permintaan, satu file,
-   *  satu sheet per sensor. Menggantikan perakitan di browser yang bisa
+  /** Export dirakit di SERVER (audit D-7) — satu permintaan, satu berkas.
+   *  Satu sensor kembali sebagai .csv polos, beberapa sensor sebagai .zip
+   *  berisi satu CSV per sensor. Menggantikan perakitan di browser yang bisa
    *  menembak ribuan permintaan dan menyimpan jutaan baris di memori tab. */
-  exportXlsx: (tagIds: string[], start: Date, end: Date) => {
+  exportData: (tagIds: string[], start: Date, end: Date, lane: Lane = "raw") => {
     const q = new URLSearchParams();
     for (const id of tagIds) q.append("tag_ids", id);
     q.set("start", start.toISOString());
     q.set("end", end.toISOString());
-    return apiClient.getBlob("/api/scada/export.xlsx", q.toString());
+    // "raw" = setiap nilai, tapi cuma 24-48 jam terakhir yang ada.
+    // "rollup" = satu baris per menit, 30-61 hari.
+    q.set("lane", lane);
+    return apiClient.getBlob("/api/scada/export", q.toString());
+  },
+
+  /** Jendela yang BENAR-BENAR terisi di tiap lajur, dari nama partisi — bukan
+   *  dari konstanta kebijakan. Tanpa tag_ids: ringkasan lajur saja. */
+  getCoverage: (tagIds?: string[]) => {
+    const q = new URLSearchParams();
+    for (const id of tagIds ?? []) q.append("tag_ids", id);
+    const qs = q.toString();
+    return apiClient.get<Coverage>(
+      "/api/scada/coverage" + (qs ? `?${qs}` : "")
+    );
   },
 
   getSamplesPage: (id: string, opts: { before?: string; limit?: number } = {}) => {
@@ -328,8 +344,12 @@ export const scadaApi = {
   listArchives: () =>
     apiClient.get<{ items: Archive[] }>("/api/scada/archives"),
 
-  runArchiver: () =>
-    apiClient.post<{ archived: unknown[] }>("/api/scada/archives/run", {}),
+  /** Per-PLANT summary-month archives on Drive (.zip of per-sensor CSVs) —
+   *  where the 1-minute lane goes once its month partition is dropped. The
+   *  endpoint has existed since the rollup archiver shipped; nothing in the
+   *  frontend had ever called it, so those files were invisible in R-Net. */
+  listRollupArchives: () =>
+    apiClient.get<{ items: RollupArchive[] }>("/api/scada/rollup-archives"),
 
   /* ── R-Net settings (sampling-level durations + retention) ── */
   getRnetSettings: () =>
@@ -353,30 +373,4 @@ export const scadaApi = {
   sendTestAlarm: () =>
     apiClient.post<{ sent: string[] }>("/api/scada/alarm-settings/test", {}),
 
-  /* ── Workbench: shared custom formula columns (Analisis view) ── */
-  listColumns: () =>
-    apiClient.get<{ items: WorkbenchColumn[] }>("/api/scada/workbench/columns"),
-
-  createColumn: (data: {
-    sheet_id: string;
-    name: string;
-    kind: ColumnKind;
-    formula?: string;
-    unit?: string;
-    decimals?: number;
-  }) => apiClient.post<WorkbenchColumn>("/api/scada/workbench/columns", data),
-
-  updateColumn: (
-    id: string,
-    data: {
-      name?: string;
-      formula?: string;
-      unit?: string;
-      decimals?: number;
-      position?: number;
-    }
-  ) => apiClient.patch<WorkbenchColumn>(`/api/scada/workbench/columns/${id}`, data),
-
-  deleteColumn: (id: string) =>
-    apiClient.delete<{ deleted: string }>(`/api/scada/workbench/columns/${id}`),
 };

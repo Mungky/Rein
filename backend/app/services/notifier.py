@@ -28,7 +28,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.services import email_notifier
+from app.services import email_notifier, rnet_settings
 from db.models.scada import ScadaAlarmEvent, ScadaAlarmSettings, ScadaTag
 
 logger = logging.getLogger(__name__)
@@ -36,9 +36,16 @@ logger = logging.getLogger(__name__)
 KIND_LABELS = {
     "high": "di atas batas",
     "low": "di bawah batas",
+    "warn_high": "di atas batas waspada",
+    "warn_low": "di bawah batas waspada",
     "silent": "tidak mengirim data",
     "expiring": "akan direset",
 }
+
+#: Waspada is a heads-up, not a breach — so its subject line says so instead of
+#: shouting "ALARM". An operator who gets the same word for both stops reading
+#: either of them carefully.
+WARN_KINDS = frozenset({"warn_high", "warn_low"})
 
 
 async def get_settings(db: AsyncSession) -> ScadaAlarmSettings | None:
@@ -55,11 +62,18 @@ def _fmt_value(value: float | None) -> str:
 
 
 def build_message(
-    event: ScadaAlarmEvent, tag: ScadaTag, transition: str
+    event: ScadaAlarmEvent, tag: ScadaTag, transition: str, tz=timezone.utc
 ) -> tuple[str, str]:
-    """Returns (subject, body) in Bahasa Indonesia, plain text."""
+    """Returns (subject, body) in Bahasa Indonesia, plain text.
+
+    `tz` is the display zone (scada_settings.display_timezone). It defaults to
+    UTC so this stays a pure function for tests, but the real caller passes the
+    setting: someone reading "alarm 03:00" on their phone should not have to
+    add seven hours in their head to know when it happened. The zone
+    abbreviation is printed with it, so the message stays unambiguous if the
+    setting is ever changed."""
     unit = f" {tag.unit}" if tag.unit else ""
-    when = event.triggered_at.astimezone(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
+    when = event.triggered_at.astimezone(tz).strftime("%d-%m-%Y %H:%M %Z")
     if transition == "cleared":
         if event.kind == "expiring":
             subject = f"SIKLUS BARU: {tag.label}"
@@ -91,6 +105,14 @@ def build_message(
         body = (
             f"Sensor {tag.label} berhenti mengirim data (terdeteksi {when}). "
             f"Periksa alat/koneksi di lapangan."
+        )
+    elif event.kind in WARN_KINDS:
+        subject = f"WASPADA: {tag.label} = {_fmt_value(event.trigger_value)}{unit}"
+        body = (
+            f"Nilai {tag.label} = {_fmt_value(event.trigger_value)}{unit}, "
+            f"{KIND_LABELS[event.kind]} {_fmt_value(event.threshold)}{unit} "
+            f"(terdeteksi {when}). Belum melewati batas alarm — pantau dulu, "
+            f"tekan 'Ack' bila sudah diketahui."
         )
     else:
         subject = f"ALARM: {tag.label} = {_fmt_value(event.trigger_value)}{unit}"
@@ -198,7 +220,8 @@ async def notify_alarm(
             if event.notified_at is None:
                 return
 
-        subject, body = build_message(event, tag, transition)
+        tz = rnet_settings.display_tz(await rnet_settings.get_settings(db))
+        subject, body = build_message(event, tag, transition, tz)
 
         if email_on:
             await email_notifier.send_to_list(

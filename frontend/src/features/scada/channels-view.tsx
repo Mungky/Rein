@@ -23,7 +23,7 @@ import { toast } from "sonner";
 import { Drawer } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
-import { useScadaStore } from "./store";
+import { useScadaCold } from "./store";
 import { ChannelForm, channelSourceMeta } from "./channel-form";
 import { renderChannelContent } from "./panels/panel-registry";
 import { channelScreen } from "./screen-box";
@@ -36,7 +36,8 @@ const SOURCE_TYPE_LABEL: Record<SourceType, string> = {
 };
 
 export function ChannelsView({ canManage }: { canManage: boolean }) {
-  const store = useScadaStore();
+  // Halaman Channel tidak menampilkan nilai sensor sama sekali.
+  const store = useScadaCold();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
   const [refreshing, setRefreshing] = useState(false);

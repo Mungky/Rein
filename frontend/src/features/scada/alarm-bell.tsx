@@ -17,17 +17,15 @@ import { useAuthDisplay } from "@/hooks/use-auth";
 import { useCan } from "@/components/providers/permissions-provider";
 import type { AppRole } from "@/lib/utils/roles";
 import { useScadaStore } from "./store";
-import type { AlarmEvent } from "./types";
+import {
+  ALARM_KIND_LABELS,
+  WARN_ALARM_KINDS,
+  type AlarmEvent,
+} from "./types";
+import { formatValue, resolveDecimals } from "./panels/elements";
 import { AlarmHistoryDialog } from "./panels/alarm-history-dialog";
 
 const MUTE_KEY = "scada:alarm-muted";
-
-const KIND_LABELS: Record<string, string> = {
-  high: "di atas batas",
-  low: "di bawah batas",
-  silent: "sensor bisu",
-  expiring: "akan diarsip & direset",
-};
 
 function beep() {
   try {
@@ -86,6 +84,13 @@ export function AlarmBell() {
     () => activeAlarms.filter((e) => !e.ack_at),
     [activeAlarms]
   );
+
+  // Lonceng tidak punya setelan panel, jadi presisinya murni dari sensor.
+  const decimalsByTag = useMemo(
+    () => new Map(tags.map((t) => [t.id, resolveDecimals(null, t.config)])),
+    [tags]
+  );
+  const decimalsOf = (tagId: string) => decimalsByTag.get(tagId) ?? null;
 
   // Beep when the set of unacked alarms GROWS (new alarm, not on ack/clear).
   const prevIds = useRef<Set<string> | null>(null);
@@ -190,16 +195,24 @@ export function AlarmBell() {
                       <p className="truncate text-[12px] font-semibold text-text">
                         {e.tag_label}
                         {e.trigger_value !== null && (
-                          <span className="ml-1 font-normal tabular-nums text-red">
-                            {e.trigger_value.toLocaleString("id")}
+                          <span
+                            className={cn(
+                              "ml-1 font-normal tabular-nums",
+                              // Waspada itu peringatan dini, bukan pelanggaran.
+                              // Mewarnainya merah sama seperti alarm sungguhan
+                              // membuat operator berhenti membedakan keduanya.
+                              WARN_ALARM_KINDS.has(e.kind) ? "text-amber" : "text-red"
+                            )}
+                          >
+                            {formatValue(e.trigger_value, decimalsOf(e.tag_id))}
                             {e.tag_unit ? ` ${e.tag_unit}` : ""}
                           </span>
                         )}
                       </p>
                       <p className="truncate text-[10.5px] text-text-light">
-                        {KIND_LABELS[e.kind] ?? e.kind}
+                        {ALARM_KIND_LABELS[e.kind] ?? e.kind}
                         {e.threshold !== null &&
-                          ` (batas ${e.threshold.toLocaleString("id")})`}
+                          ` (batas ${formatValue(e.threshold, decimalsOf(e.tag_id))})`}
                         {e.ack_name
                           ? ` · diakui ${e.ack_name}`
                           : ""}

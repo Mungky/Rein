@@ -58,10 +58,6 @@ const SOURCE_TYPE_META: Record<
   vnc: { label: "VNC (Layar PC)", icon: ScreenShare },
 };
 
-export function channelKindLabel(kind: ChannelKind): string {
-  return CHANNEL_KINDS.find((k) => k.kind === kind)?.label ?? kind;
-}
-
 /** Ikon + label yang menyatakan SUMBER channel yang sebenarnya: channel
  *  "screen" mengikuti source_type dari Source yang dirujuknya (Video Stream /
  *  Halaman Web / VNC), bukan label generik "Video Screen"; kind data lama
@@ -118,9 +114,7 @@ export function ChannelForm({
   // --- "screen" state: a Source (any type) + optional crop ---
   const screenCfg =
     init?.kind === "screen" ? (init.config as ScreenChannelConfig) : null;
-  const [streamId, setStreamId] = useState(
-    screenCfg?.stream_id ?? enabledStreams[0]?.id ?? ""
-  );
+  const [pickedStreamId, setPickedStreamId] = useState(screenCfg?.stream_id ?? "");
   // Manual free crop (null = whole frame).
   const [crop, setCrop] = useState<CropRect | null>(screenCfg?.crop ?? null);
   const [srcW, setSrcW] = useState<number | null>(screenCfg?.src_w ?? null);
@@ -134,12 +128,27 @@ export function ChannelForm({
   const viewW = initScreen?.view_w ?? 1920;
   const viewH = initScreen?.view_h ?? 1080;
 
+  /** Sumber yang benar-benar terpilih — DITURUNKAN, bukan disimpan.
+   *
+   *  Dulu ini state yang disemai SEKALI saat mount dari `enabledStreams[0]`.
+   *  Kalau daftar sumbernya belum tiba saat itu — atau user baru
+   *  menambahkannya lewat Kelola Screen sementara formulir ini terbuka —
+   *  nilainya tetap "" selamanya. Dan "" tidak cocok dengan <option> mana pun,
+   *  jadi kotak pilihan TAMPAK berisi sumber pertama padahal sebenarnya kosong:
+   *  formulir kelihatan lengkap, canSubmit false, Simpan tidak melakukan apa-apa.
+   *
+   *  Diturunkan saat render, jadi daftar yang datang belakangan langsung
+   *  terpakai — tanpa effect, tanpa render berantai. */
+  const streamId = enabledStreams.some((s) => s.id === pickedStreamId)
+    ? pickedStreamId
+    : (enabledStreams[0]?.id ?? "");
+
   const selectedStream = enabledStreams.find((s) => s.id === streamId);
 
   // Reset the crop when the chosen source changes — a crop drawn against one
   // source's resolution is meaningless on another.
   function pickSource(id: string) {
-    setStreamId(id);
+    setPickedStreamId(id);
     setCrop(null);
     setSrcW(null);
     setSrcH(null);
@@ -181,7 +190,22 @@ export function ChannelForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit) return;
+    // Katakan APA yang kurang. Dulu di sini cuma `if (!canSubmit) return;` —
+    // dan tombol Simpan di drawer tidak pernah dinonaktifkan, jadi menekannya
+    // dalam keadaan tak valid tidak menghasilkan apa pun: tanpa toast, tanpa
+    // penanda, tanpa perubahan. Gejalanya persis "tidak bisa menambahkan".
+    if (!canSubmit) {
+      toast.error(
+        numberTaken
+          ? `Nomor ${number} sudah dipakai channel lain.`
+          : number < 1
+            ? "Nomor channel minimal 1."
+            : name.trim() === ""
+              ? "Nama channel belum diisi."
+              : "Sumber (Screen) belum dipilih — tambahkan dulu lewat Kelola Screen."
+      );
+      return;
+    }
     setSaving(true);
     try {
       const payload = {

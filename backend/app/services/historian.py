@@ -28,7 +28,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import rnet_settings
-from db.models.scada import ScadaRaw, ScadaSample, ScadaTag, ScadaTagLatest
+from db.models.scada import ScadaRaw, ScadaTag, ScadaTagLatest
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +43,10 @@ SIM_ENABLED = os.getenv("HISTORIAN_SIMULATOR", "0") not in ("0", "false", "False
 LATEST_INTERVAL_S = int(os.getenv("HISTORIAN_LATEST_INTERVAL_S", "5"))
 ENABLED = os.getenv("HISTORIAN_ENABLED", "1") not in ("0", "false", "False")
 
-# Retention/purge moved to app/services/archiver.py: rows older than the
-# 90-day window are deleted ONLY after their month is archived to Google
-# Drive — the historian itself never deletes data anymore. Ring-mode tags
-# are pruned to their last 100 rows by the bridge instead.
+# Retention belongs to app/services/partitions.py, which drops whole day
+# partitions of scada_raw once they age out of ring_window_h. Nothing in this
+# module has ever deleted data, and since the store lane was retired nothing
+# anywhere deletes sensor rows outside that partition drop.
 
 BACKFILL_DAYS = 7  # history seeded automatically when a simulator tag is created
 _BATCH = 5000  # rows per INSERT during backfill
@@ -98,9 +98,9 @@ def _compute_value(tag: ScadaTag, at: datetime) -> float:
 
 async def sample_once(db: AsyncSession) -> int:
     """Write one sample per enabled *in-process* tag whose storage interval
-    lands on the current aligned minute. Ring tags (store off) go to scada_raw,
-    historian tags (store on) to scada_samples. Source "mqtt" tags are skipped
-    here — the standalone bridge writes those from broker messages.
+    lands on the current aligned minute. Everything goes to scada_raw — the
+    second lane (scada_samples, "Simpan data") is retired. Source "mqtt" tags
+    are skipped here — the standalone bridge writes those from broker messages.
 
     In-process cadence is 60 s, so intervals are floored to 60 s (sub-minute is
     an MQTT-bridge-only feature)."""
@@ -115,7 +115,6 @@ async def sample_once(db: AsyncSession) -> int:
         )
     )
     ring_rows: list[dict] = []
-    hist_rows: list[dict] = []
     for tag in result.scalars().all():
         interval = rnet_settings.resolve_interval(settings, tag.config, floor_s=60)
         if epoch % interval != 0:
@@ -128,14 +127,11 @@ async def sample_once(db: AsyncSession) -> int:
         except Exception:
             logger.exception("Tag %s: value computation failed", tag.id)
             continue
-        (ring_rows if rnet_settings.is_ring(tag.config) else hist_rows).append(row)
+        ring_rows.append(row)
     if ring_rows:
         await db.execute(pg_insert(ScadaRaw).values(ring_rows).on_conflict_do_nothing())
-    if hist_rows:
-        await db.execute(pg_insert(ScadaSample).values(hist_rows).on_conflict_do_nothing())
-    if ring_rows or hist_rows:
         await db.commit()
-    return len(ring_rows) + len(hist_rows)
+    return len(ring_rows)
 
 
 async def latest_once(db: AsyncSession) -> int:
@@ -174,30 +170,18 @@ async def latest_once(db: AsyncSession) -> int:
 
 async def backfill(db: AsyncSession, tag: ScadaTag, days: int = BACKFILL_DAYS) -> int:
     """Seed one-minute history for a simulator tag (instant demo-ready charts).
-    No-op unless HISTORIAN_SIMULATOR is on — fresh tags must start EMPTY."""
-    if not SIM_ENABLED or tag.source != "simulator":
-        return 0
-    # Ring tags keep only a 24h window, so seeding 7 days there is pointless —
-    # backfill only makes sense for historian (store on) tags.
-    if rnet_settings.is_ring(tag.config):
-        return 0
-    model = ScadaSample
-    end = _aligned_minute()
-    ts = end - timedelta(days=days)
-    total = 0
-    batch: list[dict] = []
-    while ts < end:
-        batch.append({"tag_id": tag.id, "ts": ts, "value": sim_value(tag, ts)})
-        if len(batch) >= _BATCH:
-            await db.execute(pg_insert(model).values(batch).on_conflict_do_nothing())
-            total += len(batch)
-            batch = []
-        ts += timedelta(minutes=1)
-    if batch:
-        await db.execute(pg_insert(model).values(batch).on_conflict_do_nothing())
-        total += len(batch)
-    await db.commit()
-    return total
+
+    RETIRED, and deliberately left as a no-op rather than deleted. It wrote
+    `days` of backdated rows into scada_samples, which no longer receives
+    anything. Pointing it at scada_raw instead would not work either: that
+    table is partitioned by day and only has drawers for roughly the retention
+    window, so a 7-day backfill would be REJECTED by Postgres row by row ("no
+    partition of relation found"), and the simulator would look broken for a
+    reason nobody would guess.
+
+    The signature stays so callers (routers/scada.py on tag create) need no
+    change, and so the intent is documented where someone would look for it."""
+    return 0
 
 
 async def historian_loop() -> None:

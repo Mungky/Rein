@@ -5,10 +5,11 @@
  *  via dataRefreshNonce — every open recent-samples list); layout, streams,
  *  and video players are untouched. */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useScadaStore } from "./store";
+import { useNowMs } from "./use-now";
 
 export function DataRefresh() {
   const dataUpdatedAt = useScadaStore((s) => s.dataUpdatedAt);
@@ -17,16 +18,7 @@ export function DataRefresh() {
 
   // Wall-clock in STATE (never Date.now() in render — purity rule),
   // refreshed every 10 s so a stale "Diperbarui" timestamp visibly ages
-  const [nowMs, setNowMs] = useState<number | null>(null);
-  useEffect(() => {
-    const update = () => setNowMs(Date.now());
-    const first = setTimeout(update, 0);
-    const t = setInterval(update, 10_000);
-    return () => {
-      clearTimeout(first);
-      clearInterval(t);
-    };
-  }, []);
+  const nowMs = useNowMs(10_000);
 
   async function refresh() {
     setBusy(true);

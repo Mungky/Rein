@@ -8,16 +8,10 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, History, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { scadaApi } from "@/lib/api/scada";
-import type { AlarmEvent, Tag } from "../types";
+import { ALARM_KIND_LABELS, type AlarmEvent, type Tag } from "../types";
+import { formatValue, resolveDecimals } from "./elements";
 
 const PAGE_SIZE = 25;
-
-const KIND_LABELS: Record<string, string> = {
-  high: "Di atas batas",
-  low: "Di bawah batas",
-  silent: "Sensor bisu",
-  expiring: "Pengingat reset",
-};
 
 function fmt(iso: string | null): string {
   if (!iso) return "—";
@@ -71,6 +65,10 @@ export function AlarmHistoryDialog({
   }, [load]);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // Riwayat tidak punya setelan panel, jadi presisinya murni dari sensor.
+  const decimalsOf = (tagId: string) =>
+    resolveDecimals(null, tags.find((t) => t.id === tagId)?.config);
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -126,10 +124,11 @@ export function AlarmHistoryDialog({
             }}
           >
             <option value="">Semua jenis</option>
-            <option value="high">Di atas batas</option>
-            <option value="low">Di bawah batas</option>
-            <option value="silent">Sensor bisu</option>
-            <option value="expiring">Pengingat reset</option>
+            {Object.entries(ALARM_KIND_LABELS).map(([k, label]) => (
+              <option key={k} value={k}>
+                {label}
+              </option>
+            ))}
           </select>
           {loading && <Loader2 className="size-4 animate-spin text-text-light" />}
         </div>
@@ -171,19 +170,19 @@ export function AlarmHistoryDialog({
                             : "bg-bg-sidebar text-text-muted"
                         )}
                       >
-                        {KIND_LABELS[e.kind] ?? e.kind}
+                        {ALARM_KIND_LABELS[e.kind] ?? e.kind}
                         {e.cleared_at === null && " · aktif"}
                       </span>
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums text-text">
                       {e.trigger_value === null
                         ? "—"
-                        : `${e.trigger_value.toLocaleString("id")}${
+                        : `${formatValue(e.trigger_value, decimalsOf(e.tag_id))}${
                             e.tag_unit ? ` ${e.tag_unit}` : ""
                           }`}
                       {e.threshold !== null && (
                         <span className="ml-1 text-[10px] text-text-light">
-                          (batas {e.threshold.toLocaleString("id")})
+                          (batas {formatValue(e.threshold, decimalsOf(e.tag_id))})
                         </span>
                       )}
                     </td>

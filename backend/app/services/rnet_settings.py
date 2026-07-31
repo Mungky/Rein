@@ -1,24 +1,32 @@
-"""Shared R-Net storage helpers — sampling-level resolution + cycle clock.
+"""Shared R-Net storage helpers — sampling-level resolution.
 
-One place for the logic every backend R-Net component needs after the storage
-redesign (historian sampler, alarm engine, archiver, tag router):
-  - resolve a tag's `config.sampling_level` → seconds via the admin-tunable
-    scada_settings row,
-  - tell ring (store off) from historian (store on) tags,
-  - read/stamp the per-tag `config.store_cycle_start` (ISO 8601 'Z') that the
-    1-month reset clock runs on.
+One place for the logic every backend R-Net component needs (historian sampler,
+alarm engine, tag router): resolve a tag's `config.sampling_level` → seconds via
+the admin-tunable scada_settings row.
+
+WHAT LEFT THIS FILE
+    `is_ring`, `now_iso`, `parse_cycle_start`, `add_months` and `cycle_reset_at`
+    all existed to serve ONE thing: the per-tag "Simpan data" cycle clock that
+    drove the monthly archive-and-wipe of `scada_samples`. That lane is retired
+    (docs/ARSITEKTUR-DATA.md §2.3) — every sensor now takes one path, so there
+    is no second mode to tell apart and no clock to read. Keeping the helpers
+    "just in case" would have left five functions whose only remaining purpose
+    was to make a removed feature look like it still existed.
 
 The standalone MQTT bridge (deploy/data/bridge.py) is a separate process and
-keeps its OWN copy of this logic — keep the two in sync.
+keeps its OWN copy of the level→seconds logic — keep the two in sync.
 """
 
-import calendar
-from datetime import datetime, timezone
+import logging
+from datetime import timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.scada import ScadaSettings
+
+logger = logging.getLogger(__name__)
 
 # Fallback level when a tag has none (matches the bridge default).
 DEFAULT_LEVEL = "fast"
@@ -53,39 +61,40 @@ def resolve_interval(settings: ScadaSettings, config: dict | None, floor_s: int 
     return max(floor_s, level_seconds(settings, cfg.get("sampling_level")))
 
 
-def is_ring(config: dict | None) -> bool:
-    """Ring mode = "Simpan data" NOT ticked (short 24h buffer, not historian)."""
-    return not (config or {}).get("store_enabled")
+def display_tz(settings: ScadaSettings) -> ZoneInfo | timezone:
+    """The zone used to LABEL timestamps for humans — never to store them.
 
-
-def now_iso() -> str:
-    """Canonical UTC ISO 8601 with 'Z', the format store_cycle_start is stored in."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def parse_cycle_start(config: dict | None) -> datetime | None:
-    """Parse config.store_cycle_start → aware UTC datetime, or None if unset/bad."""
-    raw = (config or {}).get("store_cycle_start")
-    if not raw:
-        return None
+    Falls back to UTC and logs instead of raising. A zone name is validated at
+    the API when it is saved, so reaching the fallback means something already
+    went wrong (a hand-edited row, a restored backup, a container missing
+    tzdata) — and at that point failing every export and every monthly archive
+    is a far worse outcome than labelling them UTC for an afternoon.
+    """
+    name = (getattr(settings, "display_timezone", None) or "").strip()
+    if not name:
+        return timezone.utc
     try:
-        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.error(
+            "Zona waktu tampilan '%s' tidak dikenal — memakai UTC. Perbaiki di "
+            "Panel Administrasi → R-Net, atau pastikan paket `tzdata` terpasang.",
+            name,
+        )
+        return timezone.utc
 
 
-def add_months(dt: datetime, months: int) -> datetime:
-    """Calendar-correct month addition (no dateutil dependency)."""
-    m = dt.month - 1 + months
-    year = dt.year + m // 12
-    month = m % 12 + 1
-    day = min(dt.day, calendar.monthrange(year, month)[1])
-    return dt.replace(year=year, month=month, day=day)
+def tz_column_label(tz) -> str:
+    """CSV header for the timestamp column, e.g. "waktu_wib".
 
+    Derived from the zone's own abbreviation rather than hardcoded, so the
+    header stops saying WIB the moment somebody changes the setting — a column
+    labelled with the wrong zone is worse than one labelled generically.
 
-def cycle_reset_at(settings: ScadaSettings, cycle_start: datetime) -> datetime:
-    """When a historian tag's current cycle is due for archive + reset.
-    Shared by the alarm engine (reminder) and archiver (the actual reset) so the
-    two never disagree on the boundary."""
-    return add_months(cycle_start, settings.store_months)
+    Zones without a letter abbreviation report a numeric offset ("+07"), which
+    reads badly in a column name; those get "waktu_lokal".
+    """
+    from datetime import datetime
+
+    abbr = datetime.now(tz).strftime("%Z")
+    return f"waktu_{abbr.lower()}" if abbr.isalpha() else "waktu_lokal"

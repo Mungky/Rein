@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { Drawer } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
+import { apiErrorText } from "@/lib/api/client";
 import { scadaApi } from "@/lib/api/scada";
 import type { SourceType, Stream } from "./types";
 
@@ -35,6 +36,26 @@ interface ScreenForm {
   url: string;
   secret: string; // vnc view-only password
   enabled: boolean;
+}
+
+/** Lengkapi skema yang hilang, jangan menolaknya.
+ *
+ *  Server menuntut alamat web diawali http:// atau https:// dan menjawab 422
+ *  bila tidak — dan formulir ini hanya memeriksa "tidak kosong", lalu menelan
+ *  detail 422-nya menjadi "Gagal menyimpan sumber". Jadi menempelkan alamat
+ *  V-Net apa adanya (orang menyalinnya tanpa skema sepanjang waktu) gagal
+ *  selamanya tanpa satu pun petunjuk kenapa. Itulah "saya tidak bisa
+ *  menambahkan halaman web".
+ *
+ *  Menambahkan https:// bukan menebak-nebak: itu satu-satunya bacaan yang masuk
+ *  akal untuk "vnet.wecon.com.cn/...", dan hasilnya dituliskan kembali ke kotak
+ *  isian supaya user melihat apa yang benar-benar disimpan. */
+function normalizeAddress(raw: string): string {
+  const v = raw.trim();
+  if (v === "") return v;
+  // VNC juga menerima ws:// dan wss:// — jangan disentuh kalau sudah bersekema.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) return v;
+  return `https://${v}`;
 }
 
 const EMPTY_FORM: ScreenForm = {
@@ -129,19 +150,29 @@ export function ManageStreamsDialog({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim() || !addressOk) return;
+
+    // Skema dilengkapi SEBELUM dikirim, dan hasilnya dipantulkan kembali ke
+    // kotak isian — user harus melihat alamat yang benar-benar tersimpan, bukan
+    // menemukannya berbeda nanti.
+    const url = normalizeAddress(form.url);
+    const hlsUrl = normalizeAddress(form.hls_url);
+    if (url !== form.url || hlsUrl !== form.hls_url) {
+      setForm((f) => ({ ...f, url, hls_url: hlsUrl }));
+    }
+
     setSaving(true);
     try {
       const payload = {
         name: form.name.trim(),
         source_type: form.source_type,
-        hls_url: form.source_type === "stream" ? form.hls_url.trim() : null,
+        hls_url: form.source_type === "stream" ? hlsUrl : null,
         webrtc_url:
           form.source_type === "stream" ? form.webrtc_url.trim() || null : null,
         read_user:
           form.source_type === "stream" ? form.read_user.trim() || null : null,
         read_pass:
           form.source_type === "stream" ? form.read_pass.trim() || null : null,
-        url: form.source_type === "stream" ? null : form.url.trim(),
+        url: form.source_type === "stream" ? null : url,
         secret: form.source_type === "vnc" ? form.secret.trim() || null : null,
         enabled: form.enabled,
       };
@@ -154,8 +185,12 @@ export function ManageStreamsDialog({
       }
       await onChanged();
       setEditingId(null);
-    } catch {
-      toast.error("Gagal menyimpan sumber");
+    } catch (e) {
+      // Pesan asli server, bukan "Gagal menyimpan sumber" untuk segala sebab.
+      // Toast buta itulah yang menyembunyikan penolakan skema URL: 422-nya
+      // sudah membawa penjelasan yang tepat ("URL web harus diawali http://"),
+      // dan penjelasan itu dibuang tepat sebelum sampai ke mata user.
+      toast.error(apiErrorText(e, "Gagal menyimpan sumber"));
     } finally {
       setSaving(false);
     }

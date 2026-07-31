@@ -169,6 +169,57 @@ export function layoutMap(
   return map;
 }
 
+/* ── Angka di belakang koma ─────────────────────────────────────────────── */
+
+/** Batas atas saat tidak ada setelan apa pun. Sama dengan bawaan
+ *  `Number.toLocaleString("id")`, jadi tag yang belum diatur tampil persis
+ *  seperti sebelum berkas ini ada. */
+export const AUTO_MAX_FRACTION_DIGITS = 3;
+
+/** Berapa angka di belakang koma untuk sebuah nilai sensor.
+ *
+ *  Urutannya: setelan panel → setelan sensor → otomatis.
+ *
+ *  Sebelum ini tidak ada aturan bersama sama sekali. HANYA panel Gauge yang
+ *  punya "Angka di Belakang Koma", dan 17 tempat lain memanggil
+ *  `value.toLocaleString("id")` polos — yang bawaannya maksimum 3 desimal. Jadi
+ *  sensor yang diatur 1 desimal tetap muncul sebagai "23,457" di Level, LED,
+ *  Tabel, Bar, Grafik, panel Alarm, dan lonceng.
+ *
+ *  Setelan "Desimal" per sensor di tab Data juga tidak ikut: itu MEMBULATKAN
+ *  YANG DISIMPAN (dipakai bridge di lapangan dan simulator), bukan yang
+ *  ditampilkan — dan tidak berlaku untuk angka Min/Rata²/Maks yang keluar dari
+ *  SQL dengan presisi float penuh. Di sini setelan itu akhirnya juga jadi
+ *  bawaan TAMPILAN, karena itulah yang orang harapkan saat mengisinya. */
+export function resolveDecimals(
+  panelDecimals: number | null | undefined,
+  tagConfig?: Record<string, unknown> | null
+): number | null {
+  const clean = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0
+      ? Math.min(6, Math.floor(v))
+      : null;
+  return clean(panelDecimals) ?? clean((tagConfig ?? {}).decimals);
+}
+
+/** Satu pemformat angka sensor untuk seluruh R-Net.
+ *
+ *  `decimals` null = otomatis (maksimum {@link AUTO_MAX_FRACTION_DIGITS}).
+ *  Angka yang ditetapkan dipakai sebagai minimum SEKALIGUS maksimum, supaya
+ *  kolom angka berbaris rata: "23,5" dan "8,0", bukan "23,5" dan "8". */
+export function formatValue(
+  value: number,
+  decimals: number | null | undefined
+): string {
+  if (!Number.isFinite(value)) return "—";
+  return value.toLocaleString(
+    "id",
+    decimals === null || decimals === undefined
+      ? { maximumFractionDigits: AUTO_MAX_FRACTION_DIGITS }
+      : { minimumFractionDigits: decimals, maximumFractionDigits: decimals }
+  );
+}
+
 /* ── Status ambang ── */
 
 export type Status = "normal" | "waspada" | "kritis";
@@ -253,5 +304,30 @@ export function StatusChip({ status }: { status: Status }) {
       <StatusIcon style={{ width: "1.1em", height: "1.1em" }} />
       {ui.label}
     </span>
+  );
+}
+
+/* ── Keadaan kosong panel ──────────────────────────────────────────────── */
+
+/** Pesan yang memenuhi panel: "belum diatur", "belum ada data", "gagal memuat".
+ *
+ *  SATU komponen, menggantikan TUJUH salinan yang identik byte-per-byte —
+ *  `Center` di alarm/bar/gauge/led/level/table dan `Empty` di chart — yang
+ *  hanya berbeda pada ikon yang dipilih masing-masing berkas. Tujuh salinan
+ *  berarti setiap penyesuaian jarak atau warna teks harus diingat tujuh kali,
+ *  dan yang terlewat baru ketahuan ketika panelnya kebetulan kosong. */
+export function PanelPlaceholder({
+  children,
+  icon: Icon,
+}: {
+  children: React.ReactNode;
+  /** Ikon jenis panel; dihilangkan untuk pesan sesaat seperti "mencoba lagi…". */
+  icon?: React.ComponentType<{ className?: string }>;
+}) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-bg px-4 text-center">
+      {Icon && <Icon className="size-6 text-text-light opacity-60" />}
+      <span className="text-[12px] text-text-muted">{children}</span>
+    </div>
   );
 }

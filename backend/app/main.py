@@ -41,7 +41,6 @@ from app.routers import (
 from app.services.task_queue import task_queue, TaskType
 from app.services import (
     alarm_engine,
-    archiver,
     health_monitor,
     historian,
     partitions,
@@ -152,9 +151,6 @@ async def lifespan(app: FastAPI):
     alarm_task = (
         asyncio.create_task(alarm_engine.alarm_loop()) if alarm_engine.ENABLED else None
     )
-    archiver_task = (
-        asyncio.create_task(archiver.archiver_loop()) if archiver.ENABLED else None
-    )
     health_task = (
         asyncio.create_task(health_monitor.health_loop())
         if health_monitor.ENABLED
@@ -208,8 +204,6 @@ async def lifespan(app: FastAPI):
         latest_task.cancel()
     if alarm_task:
         alarm_task.cancel()
-    if archiver_task:
-        archiver_task.cancel()
     if health_task:
         health_task.cancel()
     if partition_task:

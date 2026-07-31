@@ -101,24 +101,27 @@ def test_crash_recovery_replays_unflushed_value(tmp_path):
 
     # --- process B: restart on the same buffer file, recover ---
     b = Bridge("", buffer_path=buf)
-    b._interval = {tag: 60}  # store tag → scada_samples
-    b._ring = set()
+    b._interval = {tag: 60}
     sink = []
     b._db = lambda: FakeConn(sink)
 
     b.recover_buffer()
 
-    sent = _inserts(sink, "scada_samples")
+    sent = _inserts(sink, "scada_raw")
     assert len(sent) == 1
-    tag_id, ts, value = sent[0]
+    tag_id, ts, _site, value = sent[0]
     assert tag_id == tag and value == 72.5  # the exact value reached Supabase
     assert b._buffer_all() == []  # buffer cleared after confirmed store
 
 
-def test_recovery_routes_ring_tag_to_scada_raw(tmp_path):
-    """Recovered ring values land in scada_raw (phase 5), not scada_samples,
-    and carry the tag's plant so the row is complete — a recovered row must be
-    indistinguishable from one written live."""
+def test_recovery_writes_to_scada_raw_with_the_plant_stamped(tmp_path):
+    """A recovered row must be indistinguishable from one written live: same
+    table, and carrying the tag's plant.
+
+    The assertions on the retired lanes stay: scada_samples and scada_ring were
+    both once valid destinations here, and re-routing to either would be a
+    silent regression — the value would still be "stored", just somewhere
+    nothing reads."""
     buf = str(tmp_path / "buf.db")
     tag = str(uuid.uuid4())
     site = str(uuid.uuid4())
@@ -128,7 +131,6 @@ def test_recovery_routes_ring_tag_to_scada_raw(tmp_path):
 
     b = Bridge("", buffer_path=buf)
     b._interval = {tag: 5}
-    b._ring = {tag}  # ring tag → scada_raw, not scada_samples
     b._site_of = {tag: site}
     sink = []
     b._db = lambda: FakeConn(sink)
@@ -152,7 +154,6 @@ def test_recovery_without_site_mapping_still_stores(tmp_path):
 
     b = Bridge("", buffer_path=buf)
     b._interval = {tag: 5}
-    b._ring = {tag}
     sink = []
     b._db = lambda: FakeConn(sink)
     b.recover_buffer()
@@ -171,7 +172,6 @@ def test_recovery_keeps_rows_when_db_still_down(tmp_path):
 
     b = Bridge("", buffer_path=buf)
     b._interval = {tag: 60}
-    b._ring = set()
     b._db = lambda: FakeConn([], fail=True)  # Supabase still unreachable
 
     b.recover_buffer()
@@ -195,7 +195,7 @@ def test_flush_success_clears_buffer(tmp_path):
     br._db = lambda: FakeConn(sink)
     br.flush()
 
-    assert len(_inserts(sink, "scada_samples")) == 1
+    assert len(_inserts(sink, "scada_raw")) == 1
     assert br._buffer_all() == []  # deleted only after Supabase confirmed
 
 
@@ -253,7 +253,6 @@ def test_outage_keeps_every_bucket_not_just_the_last(tmp_path):
     tag = str(uuid.uuid4())
     br = Bridge("", buffer_path=buf)
     br._interval = {tag: 1}
-    br._ring = set()
     br._db = lambda: FakeConn([], fail=True)  # Supabase down for the whole test
 
     base = datetime(2026, 7, 27, 10, 0, tzinfo=timezone.utc)
@@ -302,12 +301,11 @@ def test_queue_survives_restart_and_replays_all_of_it(tmp_path):
 
     b = Bridge("", buffer_path=buf)
     b._interval = {tag: 1}
-    b._ring = set()
     sink = []
     b._db = lambda: FakeConn(sink)
     b.recover_buffer()
 
-    assert len(_inserts(sink, "scada_samples")) == 4
+    assert len(_inserts(sink, "scada_raw")) == 4
     assert b._buffer_all() == []  # cleared only after confirmed storage
 
 

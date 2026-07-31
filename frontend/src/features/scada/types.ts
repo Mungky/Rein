@@ -90,6 +90,9 @@ export interface ChartPanelConfig {
   y_min?: number | null;
   y_max?: number | null;
   line_style?: "smooth" | "linear" | "step";
+  /** Angka di belakang koma; null = ikut setelan sensor, lalu otomatis.
+   *  Lihat resolveDecimals di panels/elements.tsx. */
+  decimals?: number | null;
   show_legend?: boolean;
   show_grid?: boolean;
 }
@@ -102,6 +105,9 @@ export interface TablePanelConfig {
   range: ChartRange;
   /** Urutan + isi kolom; undefined = bawaan (tag, value, min, avg, max). */
   columns?: TableColumn[];
+  /** Angka di belakang koma; null = ikut setelan sensor, lalu otomatis.
+   *  Lihat resolveDecimals di panels/elements.tsx. */
+  decimals?: number | null;
   show_header?: boolean;
   show_footer?: boolean;
 }
@@ -137,6 +143,9 @@ export interface BarPanelConfig {
   color?: string | null;
   /** "horizontal" = batang mendatar (bawaan), "vertical" = batang tegak. */
   orientation?: "horizontal" | "vertical";
+  /** Angka di belakang koma; null = ikut setelan sensor, lalu otomatis.
+   *  Lihat resolveDecimals di panels/elements.tsx. */
+  decimals?: number | null;
   elements?: PanelElements;
   layout?: PanelLayout;
 }
@@ -151,6 +160,9 @@ export interface LevelPanelConfig {
   color?: string | null;
   label?: string | null;
   unit?: string | null;
+  /** Angka di belakang koma; null = ikut setelan sensor, lalu otomatis.
+   *  Lihat resolveDecimals di panels/elements.tsx. */
+  decimals?: number | null;
   elements?: PanelElements;
   layout?: PanelLayout;
 }
@@ -166,6 +178,9 @@ export interface LedPanelConfig {
   off_label?: string;
   label?: string | null;
   show_value?: boolean;
+  /** Angka di belakang koma; null = ikut setelan sensor, lalu otomatis.
+   *  Lihat resolveDecimals di panels/elements.tsx. */
+  decimals?: number | null;
   elements?: PanelElements;
   layout?: PanelLayout;
 }
@@ -185,6 +200,9 @@ export interface AlarmPanelConfig {
   range: ChartRange; // window for the min/avg context (status uses latest)
   /** Urutan + isi kolom; undefined = bawaan (tag, bounds, value, status, ack). */
   columns?: AlarmColumn[];
+  /** Angka di belakang koma; null = ikut setelan sensor, lalu otomatis.
+   *  Lihat resolveDecimals di panels/elements.tsx. */
+  decimals?: number | null;
   /** Strip "Semua normal / N alarm aktif" + tombol Riwayat. */
   show_header?: boolean;
 }
@@ -470,21 +488,6 @@ export interface SummaryItem {
   avg: number | null;
 }
 
-export type ColumnKind = "formula" | "text" | "number";
-
-export interface WorkbenchColumn {
-  id: string;
-  sheet_id: string;
-  name: string;
-  kind: ColumnKind;
-  formula: string | null; // set only for kind "formula"
-  unit: string;
-  decimals: number;
-  position: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
 export interface RecentSample {
   ts: string;
   value: number;
@@ -493,9 +496,42 @@ export interface RecentSample {
 /* ── Alarms (server-side engine) ─────────────────────────────────────── */
 
 /** "high" = di atas alarm_max, "low" = di bawah alarm_min,
+ *  "warn_high" = di atas warn_max, "warn_low" = di bawah warn_min (tingkat
+ *      WASPADA — hanya terbuka selama belum kritis, jadi satu sensor tidak
+ *      pernah muncul dua kali dengan dua tingkat sekaligus),
  *  "silent" = sensor berhenti mengirim data,
- *  "expiring" = data akan diarsip & direset dari 0 dalam beberapa hari. */
-export type AlarmKind = "high" | "low" | "silent" | "expiring";
+ *  "expiring" = data akan diarsip & direset dari 0 dalam beberapa hari
+ *      (sudah dipensiunkan bersama lajur store — tinggal menutup sisa lama). */
+export type AlarmKind =
+  | "high"
+  | "low"
+  | "warn_high"
+  | "warn_low"
+  | "silent"
+  | "expiring";
+
+/** Kejadian tingkat waspada — kuning, bukan merah. */
+export const WARN_ALARM_KINDS: ReadonlySet<AlarmKind> = new Set<AlarmKind>([
+  "warn_high",
+  "warn_low",
+]);
+
+/** Label jenis alarm untuk dibaca manusia.
+ *
+ *  SATU sumber. Dulu ada dua salinan terpisah — alarm-bell.tsx dan
+ *  panels/alarm-history-dialog.tsx — dengan kapitalisasi berbeda, jadi setiap
+ *  jenis baru harus diingat di dua tempat. Keduanya, tentu saja, tidak pernah
+ *  mengenal jenis waspada. Record bertipe AlarmKind: menambah jenis tanpa
+ *  labelnya sekarang gagal saat typecheck, bukan muncul sebagai "warn_high"
+ *  mentah di layar operator. */
+export const ALARM_KIND_LABELS: Record<AlarmKind, string> = {
+  high: "Di atas batas",
+  low: "Di bawah batas",
+  warn_high: "Di atas batas waspada",
+  warn_low: "Di bawah batas waspada",
+  silent: "Sensor bisu",
+  expiring: "Pengingat reset",
+};
 
 /** One alarm occurrence from scada_alarm_events. Open (active) while
  *  cleared_at is null; the row itself is permanent history. */
@@ -544,6 +580,46 @@ export interface Archive {
   created_at: string | null;
 }
 
+/** One archived SUMMARY month for one plant (.zip of per-sensor CSVs).
+ *  Different unit from Archive above: that one is per SENSOR per cycle. */
+export interface RollupArchive {
+  site_id: string | null;
+  plant: string;
+  month: string;
+  file_name: string;
+  web_link: string | null;
+  row_count: number;
+  tag_count: number;
+  created_at: string | null;
+}
+
+/** Which storage lane an export reads. R-Net keeps two with very different
+ *  lifetimes — see CoverageOut on the backend. */
+export type Lane = "raw" | "rollup";
+
+export interface LaneCoverage {
+  lane: Lane;
+  /** Derived from live partition names = what the database can REALLY answer,
+   *  which is routinely wider than the policy (a day partition survives until
+   *  all of it has aged out). */
+  from_ts: string | null;
+  to_ts: string | null;
+  policy_hours: number | null;
+  partitions: number;
+}
+
+export interface TagCoverage {
+  tag_id: string;
+  lane: Lane;
+  first_ts: string | null;
+  last_ts: string | null;
+}
+
+export interface Coverage {
+  lanes: LaneCoverage[];
+  tags: TagCoverage[];
+}
+
 /** The 4 sampling levels a tag can pick; seconds are admin-tunable. */
 export type SamplingLevel = "fastest" | "fast" | "slow" | "slowest";
 
@@ -556,6 +632,9 @@ export interface RnetSettings {
   ring_window_h: number;
   store_months: number;
   reset_warn_days: number;
+  /** Zona IANA untuk MENAMAI waktu di berkas (export CSV, arsip Drive, email
+   *  alarm). Penyimpanan tetap UTC — ini presentasi saja. */
+  display_timezone: string;
 }
 
 /** One bucketed mini-series point (avg over the bucket). */
