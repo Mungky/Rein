@@ -72,8 +72,10 @@ function SidebarItem({
       type="button"
       onClick={onClick}
       title={item.label}
+      aria-label={collapsed ? item.label : undefined}
+      aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex h-[38px] items-center",
+        "relative flex h-11 sm:h-[38px] items-center",
         "border-none text-left font-medium whitespace-nowrap",
         "font-sans text-[13px] cursor-pointer",
         "transition-all duration-[var(--tr)]",

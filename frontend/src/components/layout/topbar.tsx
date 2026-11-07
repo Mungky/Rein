@@ -78,9 +78,18 @@ export function Topbar({
         setUserMenuOpen(false);
       }
     }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setUserMenuOpen(false);
+      }
+    }
     if (userMenuOpen) {
       document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleKeyDown);
+      return () => {
+        document.removeEventListener("mousedown", handleClickOutside);
+        document.removeEventListener("keydown", handleKeyDown);
+      };
     }
   }, [userMenuOpen]);
 
@@ -153,6 +162,9 @@ export function Topbar({
           <button
             type="button"
             onClick={() => setUserMenuOpen((prev) => !prev)}
+            aria-haspopup="menu"
+            aria-expanded={userMenuOpen}
+            aria-label={`Menu pengguna untuk ${userName}`}
             className={cn(
               "flex cursor-pointer items-center gap-2 rounded-[var(--r)] p-1 pr-2",
               "transition-[background] duration-[var(--tr)]",
@@ -187,6 +199,8 @@ export function Topbar({
           {/* Dropdown */}
           {userMenuOpen && (
             <div
+              role="menu"
+              aria-label="Opsi Pengguna"
               className={cn(
                 "absolute right-0 top-full mt-1.5 min-w-[220px]",
                 "rounded-[var(--r-lg)] border border-border bg-bg",
@@ -218,6 +232,7 @@ export function Topbar({
               </div>
               <button
                 type="button"
+                role="menuitem"
                 onClick={() => {
                   setUserMenuOpen(false);
                   setSettingsOpen(true);
@@ -235,6 +250,7 @@ export function Topbar({
               </button>
               <button
                 type="button"
+                role="menuitem"
                 onClick={() => { setUserMenuOpen(false); onLogout?.(); }}
                 className={cn(
                   "flex w-full items-center gap-2.5 px-3 py-2",

@@ -5,12 +5,12 @@ import {
   FileText, FolderInput, Loader2, MoreVertical, Pencil, Presentation, Trash2, X,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentType } from "react";
+import { toast } from "sonner";
 import { deleteFile, moveFile, pollViewLink, renameFile, requestViewAccess } from "@/lib/api/library";
 import type { FolderMyPerms } from "@/lib/api/library";
 import { DropdownMenu, DropdownItem } from "./dropdown-menu";
 import { MoveModal } from "./move-modal";
 import type { FolderNode, LibraryFileMeta, ViewRequestResponse } from "./types";
-
 /** Colored icon + tinted background per file extension — kills the all-gray monotony. */
 function fileVisual(fileName: string): { Icon: ComponentType<{ className?: string }>; cls: string } {
   const dot = fileName.lastIndexOf(".");
@@ -182,6 +182,7 @@ function FileRow({
   const [accessState, setAccessState] = useState<ViewRequestResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(file.file_name);
   const [saving, setSaving] = useState(false);
@@ -225,14 +226,15 @@ function FileRow({
   };
 
   const handleDelete = async () => {
-    if (!confirm(`Hapus "${file.file_name}"? File akan dipindahkan ke Trash Google Drive (dapat dipulihkan 30 hari).`)) return;
     setDeleting(true);
     try {
       await deleteFile(file.id);
+      setConfirmDelete(false);
       onDeleted?.(file.id);
     } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Gagal menghapus file");
+    } finally {
       setDeleting(false);
-      alert(e instanceof Error ? e.message : "Gagal menghapus file");
     }
   };
 
@@ -264,7 +266,7 @@ function FileRow({
       await moveFile(file.id, targetFolderId);
       onMoved?.(file.id);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Gagal memindahkan file");
+      toast.error(e instanceof Error ? e.message : "Gagal memindahkan file");
     }
   };
 
@@ -373,7 +375,7 @@ function FileRow({
                   <DropdownItem icon={<FolderInput className="w-3.5 h-3.5 text-text-muted" />} label="Pindahkan" onClick={() => { close(); setShowMoveModal(true); }} />
                 )}
                 {canDelete && (
-                  <DropdownItem icon={deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} label="Hapus" danger disabled={deleting} onClick={() => { close(); handleDelete(); }} />
+                  <DropdownItem icon={deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} label="Hapus" danger disabled={deleting} onClick={() => { close(); setConfirmDelete(true); }} />
                 )}
               </>
             )}
@@ -390,6 +392,40 @@ function FileRow({
           title="Pindahkan File"
           subtitle={file.file_name}
         />
+      )}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-bg border border-border rounded-xl shadow-2xl w-full max-w-sm flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b border-border bg-bg-ctrl">
+              <h3 className="text-sm font-semibold text-text">Hapus File?</h3>
+              <p className="text-xs text-text-muted mt-1 truncate" title={file.file_name}>
+                {file.file_name}
+              </p>
+            </div>
+            <div className="p-5 text-xs text-text-muted">
+              File akan dipindahkan ke Trash Google Drive (dapat dipulihkan dalam 30 hari).
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border bg-bg-ctrl">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => setConfirmDelete(false)}
+                className="btn btn-ghost btn-sm"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={handleDelete}
+                className="btn btn-sm bg-red text-white hover:bg-red/90"
+              >
+                {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />}
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

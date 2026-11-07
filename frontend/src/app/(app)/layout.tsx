@@ -100,6 +100,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[999] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-text-inv focus:shadow-md"
+      >
+        Lewati ke konten utama
+      </a>
       {/* Topbar */}
       <Topbar
         screen={screen}
@@ -133,7 +139,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         )}
 
         {/* Main content */}
-        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex min-w-0 flex-1 flex-col overflow-hidden outline-none"
+        >
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {children}
           </div>

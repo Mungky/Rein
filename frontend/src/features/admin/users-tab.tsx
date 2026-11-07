@@ -56,7 +56,7 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
   const [editingUsernameFor, setEditingUsernameFor] = useState<string | null>(null);
   const [usernameDraft, setUsernameDraft] = useState("");
   const [resetTarget, setResetTarget] = useState<UserProfile | null>(null);
-
+  const [deleteTarget, setDeleteTarget] = useState<UserProfile | null>(null);
   const fetchUsers = useCallback(async () => {
     try {
       const headers = await authHeaders();
@@ -159,9 +159,6 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
   };
 
   const deleteUser = async (target: UserProfile) => {
-    if (!window.confirm(`Hapus akun "${target.full_name}" (@${target.username})?\n\nAkun ini tidak akan bisa login lagi dan akan dihapus dari daftar pengguna, tetapi namanya tetap dipertahankan di riwayat Project dengan penanda merah (Sudah tidak bekerja).`)) {
-      return;
-    }
     setUpdatingId(target.id); setError(null);
     try {
       const headers = await authHeaders();
@@ -169,7 +166,12 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
         method: "DELETE",
         headers,
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal menghapus pengguna"); }
+      if (!res.ok) {
+        const errPayload: unknown = await res.json().catch(() => null);
+        const detail = errPayload && typeof errPayload === "object" && "detail" in errPayload && typeof errPayload.detail === "string" ? errPayload.detail : "Gagal menghapus pengguna";
+        throw new Error(detail);
+      }
+      setDeleteTarget(null);
       fetchUsers();
     } catch (err) { setError(err instanceof Error ? err.message : "Terjadi kesalahan"); }
     finally { setUpdatingId(null); }
@@ -218,6 +220,45 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
       {resetTarget && (
         <ResetPasswordModal target={resetTarget} onClose={() => setResetTarget(null)} onSuccess={() => setResetTarget(null)} onError={(msg) => setError(msg)} />
       )}
+      {deleteTarget && (
+        <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setDeleteTarget(null); }}>
+          <div className="modal-panel max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-border-soft flex items-center justify-between">
+              <h3 className="text-[15px] font-bold text-text">Hapus Pengguna</h3>
+              <button onClick={() => setDeleteTarget(null)} aria-label="Tutup dialog" className="btn btn-ghost btn-icon btn-sm">
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="p-5 text-[13px] text-text-muted space-y-2">
+              <p>
+                Hapus akun <strong className="text-text font-semibold">{deleteTarget.full_name}</strong> (@{deleteTarget.username})?
+              </p>
+              <p className="text-[12px] text-text-light">
+                Akun ini tidak akan bisa login lagi dan akan dihapus dari daftar pengguna, tetapi namanya tetap dipertahankan di riwayat Project dengan penanda merah (Sudah tidak bekerja).
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border-soft bg-bg-ctrl/40">
+              <button
+                type="button"
+                disabled={updatingId === deleteTarget.id}
+                onClick={() => setDeleteTarget(null)}
+                className="btn btn-default btn-sm"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={updatingId === deleteTarget.id}
+                onClick={() => deleteUser(deleteTarget)}
+                className="btn btn-sm bg-red text-white hover:bg-red/90"
+              >
+                {updatingId === deleteTarget.id && <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />}
+                Hapus Akun
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Desktop table */}
       <div className="hidden md:block surface overflow-hidden">
@@ -261,7 +302,7 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
                       ) : (
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span className="text-[13.5px] font-semibold text-text truncate">{u.full_name}</span>
-                          <button className="opacity-0 group-hover:opacity-100 transition-opacity text-text-light hover:text-primary p-0.5" onClick={() => { setEditingNameFor(u.id); setNameDraft(u.full_name); }}>
+                          <button className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-text-light hover:text-primary p-0.5" aria-label={`Ubah nama ${u.full_name}`} onClick={() => { setEditingNameFor(u.id); setNameDraft(u.full_name); }}>
                             <Pencil className="w-3 h-3" />
                           </button>
                         </div>
@@ -284,7 +325,8 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
                       <div className="flex items-center gap-1.5">
                         <span>{u.username}</span>
                         <button
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-text-light hover:text-primary p-0.5"
+                          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-text-light hover:text-primary p-0.5"
+                          aria-label={`Ubah username ${u.username}`}
                           title="Ubah username (Admin)"
                           onClick={() => { setEditingUsernameFor(u.id); setUsernameDraft(u.username); }}
                         >
@@ -333,7 +375,7 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
                           className="btn btn-default btn-sm gap-1.5 text-red hover:bg-red-bg hover:border-red/30 disabled:opacity-40 disabled:cursor-not-allowed"
                           disabled={isSelf}
                           title={isSelf ? "Tidak dapat menghapus akun sendiri" : `Hapus pengguna ${u.full_name}`}
-                          onClick={() => deleteUser(u)}
+                          onClick={() => setDeleteTarget(u)}
                         >
                           <Trash2 className="w-3.5 h-3.5" /> Hapus
                         </button>
@@ -395,7 +437,7 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
                 <button
                   className="btn btn-default btn-sm gap-1 text-red hover:bg-red-bg hover:border-red/30 disabled:opacity-40"
                   disabled={isSelf || updatingId === u.id}
-                  onClick={() => deleteUser(u)}
+                  onClick={() => setDeleteTarget(u)}
                 >
                   <Trash2 className="w-3.5 h-3.5" /> Hapus
                 </button>

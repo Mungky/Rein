@@ -18,7 +18,7 @@ import { ProjectActions } from "./project-actions";
 import "./workspace-mobile.css";
 import { calendarDate } from "./weekly-schedule";
 const Timeline=dynamic(()=>import("./work-timeline").then(m=>m.WorkTimeline));
-const Drawer=dynamic(()=>import("./work-order-detail").then(m=>m.WorkOrderDetail));
+const WorkOrderDetailView=dynamic(()=>import("./work-order-detail").then(m=>m.WorkOrderDetail));
 const WorkOrderFormFull=dynamic(()=>import("./work-order-form").then(m=>m.WorkOrderForm));
 const Creator=dynamic(()=>import("./project-task-creator").then(m=>m.ProjectTaskCreator));
 const Documents=dynamic(()=>import("./project-documents").then(m=>m.ProjectDocuments));
@@ -78,9 +78,9 @@ export function ProjectHub({project,api=workspaceApi,permissions:p,userId,onBack
       {tab==="blockers"&&<Issues api={api} projectId={project.id} data={data} tasks={tasks} kind="blocker" userId={userId} canVerify={p.verify} readOnly={readOnly} onOpenTask={setTaskId} onChanged={changed}/>}
       {tab==="team"&&<Team api={api} projectId={project.id} data={data} canManage={p.manage&&!readOnly} onChanged={changed} onOpenTask={setTaskId}/>}
       {tab==="history"&&<div className="space-y-3"><Activity api={api} projectId={project.id} revision={board.version} onOpenTask={setTaskId}/><details className="rounded-lg border border-border bg-bg" onToggle={event=>setToolsOpen(event.currentTarget.open)}><summary className="cursor-pointer px-3 py-2 text-xs font-medium">Alat proyek & laporan</summary>{toolsOpen&&<Tools api={api} projectId={project.id} operationalMode canManage={p.manage&&!readOnly} onChanged={changed}/>}</details></div>}
-    </>}</div>{activeTask&&<Drawer key={activeTask.id} api={api} taskId={activeTask.id} onEdit={()=>{setTaskId(null);setEditingWoTask({taskId:activeTask.id});}} onNavigate={section=>{setTaskId(null);setTab(section);changed();}} onChanged={changed} onClose={()=>{setTaskId(null);changed();}}/>}{editing&&<EditProject api={api} project={project} onClose={()=>setEditing(false)} onUpdated={()=>{setEditing(false);onProjectChanged();}}/>}
-    {creatingWo&&<div className="absolute inset-0 z-40 bg-bg"><WorkOrderFormFull api={api} projectId={project.id} projectName={project.name} fullPage onClose={()=>setCreatingWo(false)} onSaved={()=>{setCreatingWo(false);setTab("work");changed();}}/></div>}
-    {editingWoTask&&loadingEditWo&&<div className="absolute inset-0 z-40 flex items-center justify-center bg-bg"><Loader2 className="size-6 animate-spin text-primary" /></div>}
-    {editingWoTask&&editingWoDetail&&<div className="absolute inset-0 z-40 bg-bg"><WorkOrderFormFull api={api} projectId={project.id} projectName={project.name} existing={editingWoDetail} fullPage onClose={()=>setEditingWoTask(null)} onSaved={()=>{setEditingWoTask(null);changed();}}/></div>}
+    </>}</div>{activeTask&&<WorkOrderDetailView key={activeTask.id} api={api} taskId={activeTask.id} onEdit={()=>{setTaskId(null);setEditingWoTask({taskId:activeTask.id});}} onNavigate={section=>{setTaskId(null);setTab(section);changed();}} onChanged={changed} onClose={()=>{setTaskId(null);changed();}}/>}{editing&&<EditProject api={api} project={project} onClose={()=>setEditing(false)} onUpdated={()=>{setEditing(false);onProjectChanged();}}/>}
+    {creatingWo&&<div className="fixed inset-0 z-[110] bg-bg"><WorkOrderFormFull api={api} projectId={project.id} projectName={project.name} fullPage onClose={()=>setCreatingWo(false)} onSaved={()=>{setCreatingWo(false);setTab("work");changed();}}/></div>}
+    {editingWoTask&&loadingEditWo&&<div className="fixed inset-0 z-[110] flex items-center justify-center bg-bg"><Loader2 className="size-6 animate-spin text-primary" /></div>}
+    {editingWoTask&&editingWoDetail&&<div className="fixed inset-0 z-[110] bg-bg"><WorkOrderFormFull api={api} projectId={project.id} projectName={project.name} existing={editingWoDetail} fullPage onClose={()=>setEditingWoTask(null)} onSaved={()=>{setEditingWoTask(null);changed();}}/></div>}
   </div>;
 }

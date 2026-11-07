@@ -1,18 +1,24 @@
 /* Mobile project views keep the same records and actions as desktop tables. */
 @media (max-width: 639px) {
+  .btn,
+  button.btn-touch { min-height: 44px; }
+  .btn-icon { min-width: 44px; min-height: 44px; }
+  .field-input,
+  .field-select,
+  select,
+  input[type="text"],
+  input[type="date"],
+  input[type="password"] {
+    min-height: 44px;
+    font-size: 16px;
+  }
   .workspace-surface .field-input,
   .workspace-surface .field-select,
   .workspace-dialog .field-input,
   .workspace-dialog .field-select {
     min-width: 0;
     max-width: 100%;
-    min-height: 44px;
-    font-size: 16px;
   }
-  .workspace-surface .btn,
-  .workspace-dialog .btn { min-height: 44px; }
-  .workspace-surface .btn-icon,
-  .workspace-dialog .btn-icon { min-width: 44px; }
   .workspace-surface .modal-panel,
   .workspace-dialog .modal-panel {
     min-width: 0;

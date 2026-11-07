@@ -60,19 +60,19 @@ interface FolderTreeProps {
 // (see db/scripts/seed_library_folders_v2.py). Curated hues that read well on
 // both light and dark sidebars. Sub-folders stay neutral — only dept roots get color.
 const DEPT_COLORS: Record<string, string> = {
-  accounting:              "text-[#14b8a6]", // teal
-  directorate:             "text-[#8b5cf6]", // violet
-  engineering:             "text-[#3b82f6]", // blue
-  field_operational:       "text-[#f97316]", // orange
-  finance:                 "text-[#22c55e]", // green
-  hse:                     "text-[#ef4444]", // red
-  human_resources:         "text-[#f59e0b]", // amber
-  management:              "text-[#6366f1]", // indigo
-  purchasing_procurement:  "text-[#ec4899]", // pink
-  warehouse:               "text-[#06b6d4]", // cyan
+  accounting:              "text-teal-600 dark:text-teal-400", // teal
+  directorate:             "text-violet-600 dark:text-violet-400", // violet
+  engineering:             "text-blue-600 dark:text-blue-400", // blue
+  field_operational:       "text-orange-600 dark:text-orange-400", // orange
+  finance:                 "text-emerald-600 dark:text-emerald-400", // green
+  hse:                     "text-red-600 dark:text-red-400", // red
+  human_resources:         "text-amber-600 dark:text-amber-400", // amber
+  management:              "text-indigo-600 dark:text-indigo-400", // indigo
+  purchasing_procurement:  "text-pink-600 dark:text-pink-400", // pink
+  warehouse:               "text-cyan-600 dark:text-cyan-400", // cyan
   // Legacy slugs (pre-v2) — kept so any lingering old folders still show color.
-  hr:         "text-[#f59e0b]",
-  purchasing: "text-[#ec4899]",
+  hr:                      "text-amber-600 dark:text-amber-400",
+  purchasing:              "text-pink-600 dark:text-pink-400",
 };
 
 export function FolderTree({ tree, selectedId, onSelect, isAdmin, canCreateFolder, canRenameFolder, canDeleteFolder, onFolderCreated }: FolderTreeProps) {

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   FolderKanban, Plus, ChevronRight, ChevronDown, CheckCircle2,
   AlertTriangle, Clock, Circle, Loader2, Wrench, ClipboardCheck, X, Pencil,
+  User, Calendar, MapPin,
 } from "lucide-react";
 import { workspaceApi } from "@/lib/api/workspace";
 import type { Project, Phase, Task } from "@/lib/api/workspace";
@@ -40,15 +41,22 @@ function TaskRow({ task, onClick }: { task: Task; onClick: () => void }) {
         </div>
         <div className="flex items-center gap-2 mt-1 flex-wrap text-[11px] text-text-muted">
           {task.assigned_name && (
-            <span>👤 {task.assigned_name}</span>
+            <span className="inline-flex items-center gap-1">
+              <User className="size-3 text-text-muted" />
+              <span>{task.assigned_name}</span>
+            </span>
           )}
           {task.deadline && (
-            <span className={task.status === "overdue" ? "text-red font-semibold" : ""}>
-              📅 {new Date(task.deadline).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
+            <span className={`inline-flex items-center gap-1 ${task.status === "overdue" ? "text-red font-semibold" : ""}`}>
+              <Calendar className="size-3 text-text-muted" />
+              <span>{new Date(task.deadline).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}</span>
             </span>
           )}
           {task.location && (
-            <span className="truncate max-w-[140px]">📍 {task.location}</span>
+            <span className="inline-flex max-w-[140px] items-center gap-1 truncate">
+              <MapPin className="size-3 text-text-muted shrink-0" />
+              <span className="truncate">{task.location}</span>
+            </span>
           )}
         </div>
       </div>

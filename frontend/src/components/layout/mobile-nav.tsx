@@ -48,6 +48,7 @@ export function MobileNav({ screen, setScreen, userRole }: MobileNavProps) {
             type="button"
             onClick={locked ? undefined : () => setScreen(id)}
             disabled={locked}
+            aria-current={active ? "page" : undefined}
             className={cn(
               "relative flex min-h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 py-1.5",
               "border-none bg-transparent",
