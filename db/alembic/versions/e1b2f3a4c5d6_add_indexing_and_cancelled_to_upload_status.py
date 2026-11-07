@@ -17,8 +17,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TYPE upload_status ADD VALUE IF NOT EXISTS 'indexing'")
-    op.execute("ALTER TYPE upload_status ADD VALUE IF NOT EXISTS 'cancelled'")
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE upload_status ADD VALUE IF NOT EXISTS 'indexing'")
+        op.execute("ALTER TYPE upload_status ADD VALUE IF NOT EXISTS 'cancelled'")
 
 
 def downgrade() -> None:

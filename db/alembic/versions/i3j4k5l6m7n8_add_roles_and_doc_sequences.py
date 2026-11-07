@@ -23,11 +23,14 @@ depends_on = None
 
 def upgrade() -> None:
     # ── New AppRole enum values ────────────────────────────────────────────────
-    # PostgreSQL requires each ADD VALUE in its own transaction-safe statement
-    op.execute("ALTER TYPE app_role ADD VALUE IF NOT EXISTS 'procurement'")
-    op.execute("ALTER TYPE app_role ADD VALUE IF NOT EXISTS 'engineer_civil'")
-    op.execute("ALTER TYPE app_role ADD VALUE IF NOT EXISTS 'safety_man'")
-    op.execute("ALTER TYPE app_role ADD VALUE IF NOT EXISTS 'warehouse_manager'")
+    # In PostgreSQL, ALTER TYPE ... ADD VALUE cannot run inside an ongoing transaction
+    # if the new enum values are used in subsequent queries within the same connection.
+    # Use autocommit_block() so the values are committed immediately to the catalog.
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE app_role ADD VALUE IF NOT EXISTS 'procurement'")
+        op.execute("ALTER TYPE app_role ADD VALUE IF NOT EXISTS 'engineer_civil'")
+        op.execute("ALTER TYPE app_role ADD VALUE IF NOT EXISTS 'safety_man'")
+        op.execute("ALTER TYPE app_role ADD VALUE IF NOT EXISTS 'warehouse_manager'")
 
     # ── document_sequences table ───────────────────────────────────────────────
     op.create_table(

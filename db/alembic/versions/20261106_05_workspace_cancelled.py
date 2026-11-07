@@ -8,7 +8,8 @@ depends_on = None
 
 
 def upgrade():
-    op.execute("ALTER TYPE task_status ADD VALUE IF NOT EXISTS 'cancelled'")
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE task_status ADD VALUE IF NOT EXISTS 'cancelled'")
 
 
 def downgrade():
