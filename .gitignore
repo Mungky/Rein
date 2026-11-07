@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+.research/
+# Full local REA evidence is reproducible and can be several MB.
+docs/research/odoo-project/rea-evidence.json
 __pycache__/
 *.pyc
 .venv/
@@ -7,6 +10,7 @@ venv/
 
 # Build outputs
 .next/
+.next-preview/
 out/
 dist/
 build/
@@ -43,10 +47,11 @@ frontend/src/types/api.d.ts
 db/alembic/versions/__pycache__/
 
 # Google credentials & tokens (NEVER commit these)
-backend/credentials/token.json
-backend/credentials/credentials.json
+backend/credentials/*
+!backend/credentials/.gitkeep
 credentials/
-
+token*.json
+*.backup
 # Misc
 design_archive.tar.gz
 rein/

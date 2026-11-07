@@ -11,7 +11,6 @@ import { Topbar } from "@/components/layout/topbar";
 import { Sidebar } from "@/components/layout/sidebar";
 import { SidebarDrawer } from "@/components/layout/sidebar-drawer";
 import { MobileNav } from "@/components/layout/mobile-nav";
-import { PresenceProvider } from "@/components/providers/presence-provider";
 import type { AppRole } from "@/lib/utils/roles";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -21,7 +20,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { mobileOpen, setMobileOpen, desktopOpen, toggleDesktopOpen } = useSidebar();
   const isMobile = useIsMobile();
   const { user, loading: authLoading, logout } = useAuth();
-  const { userName, userInitials, role: userRole } = useAuthDisplay();
+  const {
+    userName,
+    userInitials,
+    username,
+    avatarUrl,
+    role: userRole,
+    refreshProfile,
+  } = useAuthDisplay();
 
   // Session gone/expired → send to login instead of leaving the page stranded
   // on a loading spinner (Masalah G). Middleware handles this on navigation;
@@ -43,7 +49,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (pathname?.startsWith("/dcc")) return "dcc";
     if (pathname?.startsWith("/admin")) return "admin";
     if (pathname?.startsWith("/workspace")) return "workspace";
-    if (pathname?.startsWith("/r-net")) return "scada";
     return "dashboard";
   };
   const screen = getScreen();
@@ -56,11 +61,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         approvals: "/approvals",
         admin: "/admin",
         workspace: "/workspace",
-        scada: "/r-net",
-        crm: "/crm",
-        projects: "/projects",
-        finance: "/finance",
-        hr: "/hr",
       };
       router.push(routes[s] ?? "/dashboard");
       if (isMobile) setMobileOpen(false);
@@ -74,6 +74,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     userRole: userRole as AppRole,
     userName,
     userInitials,
+    userAvatarUrl: avatarUrl,
   };
 
   // Show loading state while auth is being checked
@@ -98,7 +99,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <PresenceProvider>
     <div className="flex h-full flex-col overflow-hidden">
       {/* Topbar */}
       <Topbar
@@ -106,14 +106,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         theme={theme}
         toggleTheme={toggleTheme}
         userName={userName}
+        username={username}
         userRole={userRole as AppRole}
         userInitials={userInitials}
+        userAvatarUrl={avatarUrl}
         sidebarOpen={desktopOpen}
         onMenuClick={() => {
           if (isMobile) setMobileOpen(!mobileOpen);
           else toggleDesktopOpen();
         }}
         onLogout={handleLogout}
+        onProfileUpdated={refreshProfile}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -140,6 +143,5 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       {/* Bottom nav for mobile */}
       {isMobile && <MobileNav screen={screen} setScreen={handleSetScreen} userRole={userRole as AppRole} />}
     </div>
-    </PresenceProvider>
   );
 }

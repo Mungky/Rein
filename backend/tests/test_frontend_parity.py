@@ -46,10 +46,27 @@ def test_roles_ts_union_matches_backend():
     )
 
 
+RETIRED_UI_PERMISSIONS = {
+    "dcc:manage_clients",
+    "dcc:chat",
+    "admin:manage_file_types",
+    "workspace:complete_task",
+    "workspace:close_project",
+    "workspace:release_work",
+}
+
+
 def test_admin_cards_cover_every_permission_exactly_once():
     card_perms = _admin_card_permissions()
     assert len(card_perms) == len(set(card_perms)), "Ada permission di dua kartu admin"
-    missing = set(ALL_PERMISSIONS) - set(card_perms)
+    # R-Net and retired legacy permissions have been removed from the admin cards.
+    # Keep their API permission keys for compatibility, without restoring their UI.
+    active_permissions = {
+        p
+        for p in ALL_PERMISSIONS
+        if not p.startswith("scada:") and p not in RETIRED_UI_PERMISSIONS
+    }
+    missing = active_permissions - set(card_perms)
     assert not missing, (
         f"Permission tidak muncul di kartu admin (tak bisa dicentang!): {sorted(missing)}"
     )

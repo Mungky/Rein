@@ -1,0 +1,7 @@
+# Project tools requested for the Odoo Project analysis.
+# Plugin packages are installed by Codex in the user profile.
+[plugins."ecc@ecc"]
+enabled = true
+
+[plugins."rea@rea"]
+enabled = true

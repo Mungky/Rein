@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,37 +17,24 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.config import settings
 from app.limiter import limiter
 from app.routers import (
-    auth,
-    documents,
-    upload,
-    approvals,
-    access,
-    chat,
-    queue,
-    dashboard,
     admin,
-    permissions,
+    auth,
     clients,
-    projects,
-    dcc_activity,
-    workspace,
     library,
-    scada,
-    scada_alarms,
+    permissions,
+    projects,
+    workspace,
+    workspace_board,
+    workspace_project,
+    workspace_project_factory,
+    workspace_reports,
 )
 from app.services.task_queue import task_queue, TaskType
-from app.services import (
-    alarm_engine,
-    health_monitor,
-    historian,
-    partitions,
-    rollup,
-    rollup_archiver,
-)
+from app.services import health_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -121,12 +109,10 @@ async def _flip_stuck_uploads() -> None:
 
 
 async def _periodic_cleanup() -> None:
-    """Periodically clean up expired proposals, access requests, and stuck uploads."""
+    """Periodically clean up expired view requests and stuck uploads."""
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL)
         try:
-            task_queue.enqueue(TaskType.CLEANUP_EXPIRED_PROPOSALS)
-            task_queue.enqueue(TaskType.REVOKE_EXPIRED_ACCESS)
             task_queue.enqueue(TaskType.CLEANUP_EXPIRED_VIEW_REQUESTS)
             await _flip_stuck_uploads()
         except Exception as e:
@@ -136,89 +122,29 @@ async def _periodic_cleanup() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start background workers on startup, stop on shutdown."""
+    from app.services.workspace_project import enabled as project_suite_enabled
+    from app.services.workspace_recurrence import recurrence_loop
+    from db.session import async_session_factory
+    recurrence_task = asyncio.create_task(recurrence_loop(async_session_factory)) if (
+        project_suite_enabled() and os.getenv("WORKSPACE_RECURRENCE_WORKER_ENABLED") == "1"
+    ) else None
     await task_queue.start()
     cleanup_task = asyncio.create_task(_periodic_cleanup())
-    historian_task = (
-        asyncio.create_task(historian.historian_loop()) if historian.ENABLED else None
-    )
-    # The historian live lane only serves simulator tags — skip it entirely
-    # when the simulator is off (mqtt tags get live values from the bridge).
-    latest_task = (
-        asyncio.create_task(historian.latest_loop())
-        if historian.ENABLED and historian.SIM_ENABLED
-        else None
-    )
-    alarm_task = (
-        asyncio.create_task(alarm_engine.alarm_loop()) if alarm_engine.ENABLED else None
-    )
-    health_task = (
-        asyncio.create_task(health_monitor.health_loop())
-        if health_monitor.ENABLED
-        else None
-    )
-    # Partition housekeeping (phase 5): creates day/month drawers ahead of time
-    # and drops expired ones. Creating ahead is the critical half — a day with
-    # no partition means REJECTED inserts. Single owner, same rule as the alarm
-    # engine: laptops set PARTITION_MANAGER_ENABLED=0.
-    partition_task = (
-        asyncio.create_task(partitions.maintain_loop()) if partitions.ENABLED else None
-    )
-    # Per-minute summary (ARSITEKTUR-DATA §2.5): pre-computes what the charts
-    # otherwise re-aggregate on every request. Nothing READS it until phase 4,
-    # so running it now only fills the table.
-    rollup_task = (
-        asyncio.create_task(rollup.rollup_loop()) if rollup.ENABLED else None
-    )
-    # Summary retention: exports each expired plant-month to Drive so the
-    # partition manager is allowed to drop it. Without this loop running
-    # somewhere, drop_expired_rollup finds no evidence and keeps every month —
-    # the summary lane simply grows. Safe to run alongside another backend (the
-    # per-(plant, month) claim index decides the winner).
-    rollup_archiver_task = (
-        asyncio.create_task(rollup_archiver.archiver_loop())
-        if rollup_archiver.ENABLED
-        else None
-    )
     logger.info("REIN API started — task queue active, cleanup every %ds", CLEANUP_INTERVAL)
-    if historian_task is None:
-        logger.warning("Historian sampler DISABLED via HISTORIAN_ENABLED")
-    if alarm_task is None:
-        logger.warning("Alarm engine DISABLED via ALARM_ENGINE_ENABLED")
-    if health_task is None:
-        logger.warning("Health monitor DISABLED via HEALTH_MONITOR_ENABLED")
-    if partition_task is None:
-        logger.warning("Partition manager DISABLED via PARTITION_MANAGER_ENABLED")
-    if rollup_task is None:
-        logger.warning("Rollup per-menit DISABLED via ROLLUP_ENABLED")
-    if rollup_archiver_task is None:
-        logger.warning(
-            "Arsip ringkasan DISABLED via ROLLUP_ARCHIVER_ENABLED — bulan "
-            "ringkasan yang kedaluwarsa TIDAK akan dihapus (tidak ada bukti "
-            "salinan di Drive)"
-        )
     yield
+    if recurrence_task:
+        recurrence_task.cancel()
+        await asyncio.gather(recurrence_task, return_exceptions=True)
     cleanup_task.cancel()
-    if historian_task:
-        historian_task.cancel()
-    if latest_task:
-        latest_task.cancel()
-    if alarm_task:
-        alarm_task.cancel()
-    if health_task:
-        health_task.cancel()
-    if partition_task:
-        partition_task.cancel()
-    if rollup_task:
-        rollup_task.cancel()
-    if rollup_archiver_task:
-        rollup_archiver_task.cancel()
     await task_queue.stop()
     logger.info("REIN API shutting down")
 
 
-if not settings.api_secret_key:
-    logger.warning("API_SECRET_KEY is empty — set it in .env for production deployments")
-
+# API_SECRET_KEY dicadangkan untuk integrasi masa depan / webhook internal opsional.
+# Autentikasi utama REIN menggunakan Supabase JWT (SUPABASE_JWT_SECRET / SUPABASE_ANON_KEY).
+# Tidak diperlukan untuk operasional normal, didokumentasikan agar tidak membingungkan operator.
+if settings.api_secret_key:
+    logger.debug("API_SECRET_KEY terkonfigurasi")
 app = FastAPI(
     title="REIN API",
     version="0.1.0",
@@ -227,6 +153,11 @@ app = FastAPI(
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Dukungan reverse proxy (Nginx / Cloudflare / Traefik / Docker):
+# Ekstraksi client IP asli via header X-Forwarded-For & X-Forwarded-Proto
+trusted_proxies = os.getenv("TRUSTED_PROXIES", "*")
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxies)
 
 app.add_middleware(
     CORSMiddleware,
@@ -293,19 +224,20 @@ async def health_check():
 
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
-app.include_router(upload.router, prefix="/api/upload", tags=["upload"])
-app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"])
-app.include_router(access.router, prefix="/api/access", tags=["access"])
-app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
-app.include_router(queue.router, prefix="/api/queue", tags=["queue"])
-app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(permissions.router, prefix="/api/permissions", tags=["permissions"])
 app.include_router(clients.router, prefix="/api/clients", tags=["clients"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
-app.include_router(dcc_activity.router, prefix="/api/dcc/activity", tags=["dcc"])
 app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
+from app.routers import workspace_work_orders
+app.include_router(workspace_work_orders.router, prefix="/api/workspace", tags=["workspace"])
+from app.routers import workspace_coordination
+app.include_router(workspace_coordination.router, prefix="/api/workspace", tags=["workspace"])
+from app.routers import workspace_materials
+app.include_router(workspace_materials.router, prefix="/api/workspace", tags=["workspace"])
+app.include_router(workspace_board.router, prefix="/api/workspace", tags=["workspace"])
+app.include_router(workspace_project.router, prefix="/api/workspace", tags=["workspace"])
+app.include_router(workspace_reports.router, prefix="/api/workspace", tags=["workspace"])
+app.include_router(workspace_project_factory.router, prefix="/api/workspace", tags=["workspace"])
+app.include_router(workspace_project.public_router, prefix="/api/project-portal", tags=["project-portal"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
-app.include_router(scada.router, prefix="/api/scada", tags=["scada"])
-app.include_router(scada_alarms.router, prefix="/api/scada", tags=["scada"])

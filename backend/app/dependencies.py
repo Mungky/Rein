@@ -10,6 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, ExpiredSignatureError, jwk, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import DetachedInstanceError
 
 from app.config import settings
 from db.models.profile import AppRole, Profile
@@ -22,9 +23,9 @@ security = HTTPBearer(auto_error=False)
 # TTL-bounded so a key rotation propagates without a backend restart; an
 # unknown kid additionally forces one refresh (see verify_supabase_token).
 _JWKS_TTL_S = 3600
+_JWKS_COOLDOWN_S = 30
 _jwks_cache: dict | None = None
 _jwks_fetched_at: float = 0.0
-
 
 async def _get_jwks(force_refresh: bool = False) -> dict:
     """Fetch JWKS from Supabase, cached for _JWKS_TTL_S seconds.
@@ -35,12 +36,11 @@ async def _get_jwks(force_refresh: bool = False) -> dict:
     """
     global _jwks_cache, _jwks_fetched_at
     now = time.monotonic()
-    if (
-        not force_refresh
-        and _jwks_cache is not None
-        and now - _jwks_fetched_at < _JWKS_TTL_S
-    ):
-        return _jwks_cache
+    if _jwks_cache is not None:
+        if not force_refresh and now - _jwks_fetched_at < _JWKS_TTL_S:
+            return _jwks_cache
+        if force_refresh and now - _jwks_fetched_at < _JWKS_COOLDOWN_S:
+            return _jwks_cache
 
     jwks_url = f"{settings.supabase_url}/auth/v1/.well-known/jwks.json"
     try:
@@ -151,6 +151,24 @@ async def get_current_user(
         "role": payload.get("role", "authenticated"),
     }
 
+_PROFILE_CACHE_TTL_S = 60
+_profile_cache: dict[uuid.UUID, tuple[Profile, float]] = {}
+
+_PERMISSIONS_CACHE_TTL_S = 60
+_permissions_cache: dict[AppRole, tuple[set[str], float]] = {}
+
+def invalidate_profile_cache(user_id: uuid.UUID | None = None) -> None:
+    """Invalidate cached profile for a specific user, or all users if user_id is None."""
+    if user_id is not None:
+        _profile_cache.pop(user_id, None)
+    else:
+        _profile_cache.clear()
+
+
+def invalidate_permissions_cache() -> None:
+    """Invalidate all cached role permissions."""
+    _permissions_cache.clear()
+
 
 async def get_current_profile(
     current_user: Annotated[dict, Depends(get_current_user)],
@@ -158,6 +176,21 @@ async def get_current_profile(
 ) -> Profile:
     """Get the user's Profile from the database."""
     user_id = uuid.UUID(current_user["id"])
+    now = time.monotonic()
+    cached = _profile_cache.get(user_id)
+    if cached is not None:
+        profile, fetched_at = cached
+        if now - fetched_at < _PROFILE_CACHE_TTL_S:
+            try:
+                if not profile.is_active:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Akun ini sudah dinonaktifkan oleh administrator",
+                    )
+                return profile
+            except DetachedInstanceError:
+                _profile_cache.pop(user_id, None)
+
     result = await db.execute(select(Profile).where(Profile.id == user_id))
     profile = result.scalar_one_or_none()
 
@@ -173,6 +206,7 @@ async def get_current_profile(
             detail="Akun ini sudah dinonaktifkan oleh administrator",
         )
 
+    _profile_cache[user_id] = (profile, now)
     return profile
 
 
@@ -204,10 +238,17 @@ async def _load_permissions(
 
         return set(ALL_PERMISSIONS)
 
-    result = await db.execute(
-        select(RolePermission.permission).where(RolePermission.role == role)
-    )
-    return {row[0] for row in result.all()}
+    now = time.monotonic()
+    cached = _permissions_cache.get(role)
+    if cached is not None:
+        perms, fetched_at = cached
+        if now - fetched_at < _PERMISSIONS_CACHE_TTL_S:
+            return perms
+
+    result = await db.execute(select(RolePermission.permission).where(RolePermission.role == role))
+    perms = {row[0] for row in result.all()}
+    _permissions_cache[role] = (perms, now)
+    return perms
 
 
 def require_permission(*permissions: str):
@@ -230,3 +271,11 @@ def require_permission(*permissions: str):
         return profile
 
     return perm_checker
+
+
+def require_any_permission(*permissions: str):
+    async def checker(profile: Annotated[Profile, Depends(get_current_profile)], db: Annotated[AsyncSession, Depends(get_db)]):
+        if not set(permissions) & await _load_permissions(db, profile.role):
+            raise HTTPException(403, "Permission denied: " + " / ".join(permissions))
+        return profile
+    return checker

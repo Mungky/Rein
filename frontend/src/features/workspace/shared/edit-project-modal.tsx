@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Loader2, X, Pencil } from "lucide-react";
+import { apiErrorText } from "@/lib/api/client";
 import { workspaceApi } from "@/lib/api/workspace";
 import type { Project } from "@/lib/api/workspace";
 
@@ -12,7 +13,8 @@ const STATUS_OPTIONS: readonly { value: Project["status"]; label: string }[] = [
   { value: "completed", label: "Completed — Selesai" },
 ];
 
-export function EditProjectModal({ project, onClose, onUpdated }: {
+export function EditProjectModal({ project, onClose, onUpdated, api = workspaceApi }: {
+  api?: typeof workspaceApi;
   project: Project;
   onClose: () => void;
   onUpdated: (updated: Project) => void;
@@ -33,7 +35,7 @@ export function EditProjectModal({ project, onClose, onUpdated }: {
     setLoading(true);
     setError(null);
     try {
-      const updated = await workspaceApi.updateProject(project.id, {
+      const updated = await api.updateProject(project.id, {
         name: name.trim(),
         rpo_number: rpoNumber.trim() || undefined,
         client_name: clientName.trim() || undefined,
@@ -44,7 +46,7 @@ export function EditProjectModal({ project, onClose, onUpdated }: {
       });
       onUpdated(updated);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Gagal menyimpan perubahan.";
+      const msg = apiErrorText(err, "Gagal menyimpan perubahan.");
       if (msg.toLowerCase().includes("unique") || msg.toLowerCase().includes("duplicate")) {
         setError("Nomor RPO sudah dipakai proyek lain.");
       } else {
@@ -71,7 +73,7 @@ export function EditProjectModal({ project, onClose, onUpdated }: {
             <h2 className="text-[16px] font-bold text-text leading-tight">Edit Proyek</h2>
             <p className="text-[12px] text-text-muted mt-0.5 truncate">{project.name}</p>
           </div>
-          <button type="button" onClick={onClose} className="btn btn-ghost btn-icon btn-sm -mr-1 -mt-1">
+          <button type="button" onClick={onClose} aria-label="Tutup edit proyek" className="btn btn-ghost btn-icon btn-sm -mr-1 -mt-1">
             <X className="size-4" />
           </button>
         </div>
@@ -79,7 +81,7 @@ export function EditProjectModal({ project, onClose, onUpdated }: {
         {/* Body */}
         <div className="px-6 py-5 flex flex-col gap-4 overflow-y-auto">
           {/* RPO + Name */}
-          <div className="grid grid-cols-[160px_1fr] gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[160px_1fr]">
             <div>
               <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">No. RPO</label>
               <input

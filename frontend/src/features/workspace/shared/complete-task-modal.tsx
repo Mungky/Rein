@@ -33,15 +33,15 @@ export function CompleteTaskModal({ task, onClose, onDone }: {
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
       <div className="bg-bg border border-border rounded-xl w-full max-w-sm shadow-xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <span className="text-[13px] font-bold">Tandai Selesai</span>
+          <span className="text-[13px] font-bold">Kirim untuk Review</span>
           <button onClick={onClose} className="p-1 rounded hover:bg-bg-hover">
             <X className="w-4 h-4 text-text-muted" />
           </button>
         </div>
         <div className="p-4 flex flex-col gap-3">
-          <div className="text-[12px] text-text-muted">Task: <span className="font-semibold text-text">{task.name}</span></div>
+          <div className="text-[12px] text-text-muted">Laporan akan dikirim untuk persetujuan. Task: <span className="font-semibold text-text">{task.name}</span></div>
           <div>
-            <label className="text-[11px] font-bold text-text-muted uppercase tracking-wider block mb-1">Catatan (opsional)</label>
+            <label className="text-[11px] font-bold text-text-muted uppercase tracking-wider block mb-1">Catatan laporan</label>
             <textarea
               className="w-full border border-border rounded-lg px-3 py-2 text-[12.5px] bg-bg text-text resize-none focus:outline-none focus:ring-1 focus:ring-primary"
               rows={3}
@@ -66,7 +66,7 @@ export function CompleteTaskModal({ task, onClose, onDone }: {
             className="btn btn-primary w-full flex items-center justify-center gap-2 mt-1"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-            {loading ? "Menyimpan..." : "Tandai Selesai"}
+            {loading ? "Menyimpan..." : "Kirim untuk Review"}
           </button>
         </div>
       </div>

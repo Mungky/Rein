@@ -2,17 +2,19 @@ import { create } from "zustand";
 import { workspaceApi } from "@/lib/api/workspace";
 import type { Project, Phase, Task, ProjectTemplate } from "@/lib/api/workspace";
 import type { WorkspaceView } from "./types";
+import { apiErrorText } from "@/lib/api/client";
 
 interface WorkspaceState {
   projects: Project[];
   templates: ProjectTemplate[];
   loading: boolean;
+  error: string | null;
   selectedProjectId: string | null;
   view: WorkspaceView;
   phasesByProject: Record<string, Phase[]>;
   tasksByPhase: Record<string, Task[]>;
 
-  loadProjects: () => Promise<void>;
+  loadProjects: (archived?: boolean) => Promise<void>;
   loadTemplates: () => Promise<void>;
   selectProject: (id: string | null) => void;
   setView: (view: WorkspaceView) => void;
@@ -34,7 +36,7 @@ const savedView = (): WorkspaceView => {
     sessionStorage.setItem("ws-view", "calendar");
     return "calendar";
   }
-  if (v === "list" || v === "kanban" || v === "calendar") return v;
+  if (v === "list" || v === "calendar") return v;
   return "list";
 };
 
@@ -42,6 +44,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   projects: [],
   templates: [],
   loading: true,
+  error: null,
   selectedProjectId: null,
   view: savedView(),
   phasesByProject: {},
@@ -49,16 +52,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   showCreate: false,
   setShowCreate: (v) => set({ showCreate: v }),
 
-  loadProjects: async () => {
+  loadProjects: async (archived = false) => {
     set({ loading: true });
     try {
-      const projects = await workspaceApi.listProjects();
-      set({ projects });
+      const projects = await workspaceApi.listProjects(archived);
+      set({ projects, error: null });
     } catch (err) {
       // Auth not ready or network error — will retry after auth resolves.
       // Log so dev-time bugs (e.g. 404 from a renamed endpoint, RLS denial)
       // aren't silently swallowed.
       console.warn("loadProjects failed:", err);
+      set({ error: apiErrorText(err, "Daftar proyek belum dapat diperbarui") });
     } finally {
       set({ loading: false });
     }

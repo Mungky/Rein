@@ -1,7 +1,6 @@
 """Shared rate-limit instance — import from main.py and routers."""
 
-from fastapi import Request
-from jose import jwt
+from starlette.requests import Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -15,24 +14,20 @@ READ_LIMIT = "600/minute"
 WRITE_LIMIT = "120/minute"
 
 
-def user_or_ip(request: Request) -> str:
-    """Kunci limiter: user ID dari JWT; fallback alamat IP untuk yang publik.
-
-    Klaim `sub` dibaca TANPA verifikasi tanda tangan — aman, karena limiter
-    slowapi membungkus fungsi endpoint: dependency auth sudah menolak token
-    palsu (401) sebelum hitungan limiter tersentuh. Per-user (bukan per-IP)
-    supaya satu kantor di belakang NAT tidak saling menghabiskan jatah, dan
-    satu user tidak bisa lolos limit dengan berganti IP.
-    """
-    auth = request.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        try:
-            sub = jwt.get_unverified_claims(auth[7:]).get("sub")
-        except Exception:
-            sub = None
-        if sub:
-            return f"user:{sub}"
+def get_client_ip(request: Request) -> str:
+    """Ekstraksi IP client: prioritaskan X-Forwarded-For bila ada (reverse proxy), fallback ke remote address."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
     return get_remote_address(request)
 
 
-limiter = Limiter(key_func=user_or_ip)
+def user_or_ip(request: Request) -> str:
+    """Kunci limiter: gunakan remote address / proxy-aware client IP sebagai default yang aman.
+
+    jwt.get_unverified_claims dihindari karena rentan DoS/spoofing sub tanpa verifikasi signature.
+    """
+    return get_client_ip(request)
+
+
+limiter = Limiter(key_func=get_client_ip)

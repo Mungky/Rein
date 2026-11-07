@@ -59,6 +59,8 @@ export interface PublicIndexDept {
 }
 
 export interface LibraryFileMeta {
+  workspace_project_id?: string | null;
+  workspace_task_id?: string | null;
   id: string;
   file_name: string;
   original_name: string;

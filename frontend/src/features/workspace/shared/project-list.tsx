@@ -132,12 +132,15 @@ function PhaseSection({
       )}
 
       {showCreateWo && (
-        <WoFormModal
-          mode="create"
-          phaseId={phase.id}
-          onClose={() => setShowCreateWo(false)}
-          onCreated={handleWoCreated}
-        />
+        <div className="fixed inset-0 z-50 bg-bg">
+          <WoFormModal
+            mode="create"
+            phaseId={phase.id}
+            fullPage
+            onClose={() => setShowCreateWo(false)}
+            onCreated={handleWoCreated}
+          />
+        </div>
       )}
     </div>
   );

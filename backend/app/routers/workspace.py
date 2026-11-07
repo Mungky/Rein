@@ -33,16 +33,18 @@ Endpoints:
 
 import uuid
 import logging
+import os
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import case, select, func, or_
+from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import case, select, func, or_, delete, inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_current_profile, require_permission, _load_permissions
+from app.dependencies import get_current_profile, require_permission, require_any_permission, _load_permissions
 from db.models.profile import Profile, AppRole
 from db.models.workspace import (
     ProjectTemplate, PhaseTemplate, TaskTemplate,
@@ -50,6 +52,8 @@ from db.models.workspace import (
     ProjectStatus, PhaseStatus, TaskStatus,
 )
 from db.session import get_db
+from app.services.workspace_workflow import transition
+from app.services import workspace_project as project_rules
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -74,7 +78,7 @@ async def _visible_project_ids(db: AsyncSession, profile: Profile) -> list[uuid.
 
     Admins always see all projects (returns None).
     """
-    if profile.role == AppRole.admin:
+    if profile.role == AppRole.admin or await _can(db, profile, "workspace:view_all"):
         return None  # no filter
 
     # Projects where user is manager
@@ -84,7 +88,7 @@ async def _visible_project_ids(db: AsyncSession, profile: Profile) -> list[uuid.
 
     # Projects where user has tasks assigned
     task_phase_ids = (await db.execute(
-        select(WorkspaceTask.phase_id).where(WorkspaceTask.assigned_to == profile.id)
+        select(WorkspaceTask.phase_id).where(project_rules.assignment_filter(profile.id))
     )).scalars().all()
 
     assigned_project_ids: list[uuid.UUID] = []
@@ -95,8 +99,51 @@ async def _visible_project_ids(db: AsyncSession, profile: Profile) -> list[uuid.
             .distinct()
         )).scalars().all()
 
-    all_ids = list({*manager_ids, *assigned_project_ids})
+    member_ids = []
+    if os.getenv("WORKSPACE_COORDINATION_ENABLED") == "1":
+        from db.models.workspace_coordination import WorkspaceMember
+        member_ids = (await db.scalars(select(WorkspaceMember.project_id).where(WorkspaceMember.profile_id == profile.id))).all()
+    all_ids = list({*manager_ids, *assigned_project_ids, *member_ids})
     return all_ids
+
+
+async def _require_project_access(db: AsyncSession, profile: Profile, project_id: uuid.UUID):
+    project = await db.get(WorkspaceProject, project_id)
+    if not project:
+        raise HTTPException(404, "Proyek tidak ditemukan")
+    visible = await _visible_project_ids(db, profile)
+    if visible is not None and project_id not in visible:
+        raise HTTPException(403, "Tidak diotorisasi untuk proyek ini")
+    return project
+
+
+async def _require_task_access(db: AsyncSession, profile: Profile, task: WorkspaceTask):
+    phase = await db.get(WorkspacePhase, task.phase_id)
+    if not phase:
+        raise HTTPException(404, "Fase tidak ditemukan")
+    await _require_project_access(db, profile, phase.project_id)
+
+
+async def _require_phase_access(db: AsyncSession, profile: Profile, phase_id: uuid.UUID):
+    phase = await db.get(WorkspacePhase, phase_id)
+    if not phase:
+        raise HTTPException(404, "Fase tidak ditemukan")
+    await _require_project_access(db, profile, phase.project_id)
+    return phase
+
+
+async def _locked_task(db, profile, task_id):
+    task = await db.get(WorkspaceTask, task_id)
+    if not task:
+        raise HTTPException(404, "Task tidak ditemukan")
+    await _require_task_access(db, profile, task)
+    if project_rules.enabled():
+        from app.routers.workspace_board import _lock_board
+        phase = await db.get(WorkspacePhase, task.phase_id)
+        board = await _lock_board(db, phase.project_id, None)
+        board.version += 1
+    return await db.scalar(select(WorkspaceTask).where(WorkspaceTask.id == task_id)
+        .with_for_update(key_share=True).execution_options(populate_existing=True))
 
 
 # ---------------------------------------------------------------------------
@@ -137,26 +184,47 @@ class ProjectOut(BaseModel):
     manager_id: str | None
     description: str | None
     progress: float
+    archived_at: str | None = None
 
 class ProjectCreate(BaseModel):
-    name: str
-    rpo_number: str | None = None  # manual input, e.g. "RPO-26-0007"
-    client_name: str | None = None
+    name: str = Field(min_length=1, max_length=255)
+    rpo_number: str = Field(min_length=1, max_length=100)
+    client_name: str = Field(min_length=1, max_length=255)
     template_id: str | None = None
-    start_date: str | None = None
-    deadline: str | None = None
+    start_date: date
+    deadline: date
     manager_id: str | None = None
     description: str | None = None
 
+    @field_validator("name", "rpo_number", "client_name")
+    @classmethod
+    def clean_required(cls, value):
+        if not value.strip():
+            raise ValueError("Nama proyek, RPO dan klien wajib diisi")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def dates_in_order(self):
+        if self.deadline < self.start_date:
+            raise ValueError("Tanggal selesai harus setelah atau sama dengan tanggal mulai")
+        return self
+
 class ProjectUpdate(BaseModel):
-    name: str | None = None
-    rpo_number: str | None = None
-    client_name: str | None = None
-    status: str | None = None
-    start_date: str | None = None
-    deadline: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    rpo_number: str | None = Field(default=None, min_length=1, max_length=100)
+    client_name: str | None = Field(default=None, min_length=1, max_length=255)
+    status: ProjectStatus | None = None
+    start_date: date | None = None
+    deadline: date | None = None
     manager_id: str | None = None
     description: str | None = None
+
+    @field_validator("name", "rpo_number", "client_name")
+    @classmethod
+    def nonempty(cls, value):
+        if value is not None and not value.strip():
+            raise ValueError("Nama, RPO dan klien tidak boleh kosong")
+        return value.strip() if value else value
 
 class PhaseOut(BaseModel):
     id: str
@@ -191,6 +259,7 @@ class PhaseCreate(BaseModel):
     deadline: str | None = None
 
 class TaskOut(BaseModel):
+    wo_number: int | None = None
     id: str
     phase_id: str
     name: str
@@ -199,6 +268,7 @@ class TaskOut(BaseModel):
     estimated_days: int | None
     assigned_to: str | None
     assigned_name: str | None
+    assigned_avatar_url: str | None = None
     deadline: str | None
     status: str
     notes: str | None
@@ -207,6 +277,7 @@ class TaskOut(BaseModel):
     reviewed_at: str | None
     started_at: str | None
     order: int
+    updated_at: str | None = None
 
 class TaskCreate(BaseModel):
     name: str
@@ -265,7 +336,7 @@ def _date_str(d: date | None) -> str | None:
 
 
 async def _task_progress(db: AsyncSession, phase_id: uuid.UUID) -> float:
-    total = await db.scalar(select(func.count()).where(WorkspaceTask.phase_id == phase_id))
+    total = await db.scalar(select(func.count()).where(WorkspaceTask.phase_id == phase_id, WorkspaceTask.status != TaskStatus.cancelled))
     if not total:
         return 0.0
     done = await db.scalar(
@@ -283,7 +354,7 @@ async def _project_progress(db: AsyncSession, project_id: uuid.UUID) -> float:
     )).scalars().all()
     if not phases:
         return 0.0
-    total = await db.scalar(select(func.count()).where(WorkspaceTask.phase_id.in_(phases)))
+    total = await db.scalar(select(func.count()).where(WorkspaceTask.phase_id.in_(phases), WorkspaceTask.status != TaskStatus.cancelled))
     if not total:
         return 0.0
     done = await db.scalar(
@@ -296,18 +367,22 @@ async def _project_progress(db: AsyncSession, project_id: uuid.UUID) -> float:
 
 
 async def _enrich_task(db: AsyncSession, t: WorkspaceTask) -> TaskOut:
+    if "updated_at" in inspect(t).unloaded:
+        await db.refresh(t, ["updated_at"])
     assigned_name = None
+    assigned_avatar_url = None
     if t.assigned_to:
         p = await db.get(Profile, t.assigned_to)
         assigned_name = p.full_name if p else None
+        assigned_avatar_url = p.avatar_url if p else None
     return TaskOut(
-        id=str(t.id), phase_id=str(t.phase_id),
+        id=str(t.id), wo_number=t.wo_number, phase_id=str(t.phase_id), updated_at=t.updated_at.isoformat(),
         name=t.name,
         description=t.description,
         location=t.location,
         estimated_days=t.estimated_days,
         assigned_to=str(t.assigned_to) if t.assigned_to else None,
-        assigned_name=assigned_name,
+        assigned_name=assigned_name, assigned_avatar_url=assigned_avatar_url,
         deadline=_date_str(t.deadline),
         status=t.status.value,
         notes=t.notes,
@@ -330,6 +405,7 @@ def _project_to_out(proj: WorkspaceProject, progress: float) -> ProjectOut:
         manager_id=str(proj.manager_id) if proj.manager_id else None,
         description=proj.description,
         progress=progress,
+        archived_at=proj.archived_at.isoformat() if proj.archived_at else None,
     )
 
 
@@ -411,6 +487,7 @@ async def create_template(
 
 @router.get("/projects", response_model=list[ProjectOut])
 async def list_projects(
+    archived: bool = False,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
 ):
@@ -419,17 +496,19 @@ async def list_projects(
     """
     visible_ids = await _visible_project_ids(db, profile)
 
-    q = select(WorkspaceProject).order_by(WorkspaceProject.created_at.desc())
+    q = select(WorkspaceProject).where(WorkspaceProject.archived_at.is_not(None) if archived else WorkspaceProject.archived_at.is_(None)).order_by(WorkspaceProject.created_at.desc())
     if visible_ids is not None:  # None = admin, sees all
         if not visible_ids:
             return []  # no projects assigned
         q = q.where(WorkspaceProject.id.in_(visible_ids))
 
     rows = (await db.execute(q)).scalars().all()
-    out = []
-    for r in rows:
-        out.append(_project_to_out(r, await _project_progress(db, r.id)))
-    return out
+    counts = (await db.execute(select(WorkspacePhase.project_id, func.count(WorkspaceTask.id).filter(WorkspaceTask.status != TaskStatus.cancelled),
+        func.sum(case((WorkspaceTask.status == TaskStatus.done, 1), else_=0)))
+        .join(WorkspaceTask, WorkspaceTask.phase_id == WorkspacePhase.id)
+        .where(WorkspacePhase.project_id.in_([p.id for p in rows])).group_by(WorkspacePhase.project_id))).all() if rows else []
+    progress = {key: round(done / total * 100, 1) if total else 0 for key, total, done in counts}
+    return [_project_to_out(p, progress.get(p.id, 0)) for p in rows]
 
 
 @router.get("/timeline", response_model=list[TimelineProjectOut])
@@ -446,7 +525,7 @@ async def timeline(
     """
     visible_ids = await _visible_project_ids(db, profile)
 
-    q = select(WorkspaceProject).order_by(WorkspaceProject.created_at.desc())
+    q = select(WorkspaceProject).where(WorkspaceProject.archived_at.is_(None)).order_by(WorkspaceProject.created_at.desc())
     if visible_ids is not None:
         if not visible_ids:
             return []
@@ -473,7 +552,7 @@ async def timeline(
         rows = (await db.execute(
             select(
                 WorkspaceTask.phase_id,
-                func.count().label("total"),
+                func.count().filter(WorkspaceTask.status != TaskStatus.cancelled).label("total"),
                 func.sum(case((WorkspaceTask.status == TaskStatus.done, 1), else_=0)).label("done"),
             )
             .where(WorkspaceTask.phase_id.in_(phase_ids))
@@ -530,20 +609,27 @@ async def create_project(
     manager_id = uuid.UUID(body.manager_id) if body.manager_id else profile.id
 
     # RPO number is user-input free text. Strip whitespace, treat empty as None.
-    rpo_clean = (body.rpo_number or "").strip() or None
+    rpo_clean = body.rpo_number.strip().upper()
+    await db.execute(select(func.pg_advisory_xact_lock(func.hashtext("rein-rpo:" + rpo_clean.lower()))))
+    if await db.scalar(select(WorkspaceProject.id).where(func.lower(WorkspaceProject.rpo_number) == rpo_clean.lower())):
+        raise HTTPException(409, "Nomor RPO sudah digunakan proyek lain")
     proj = WorkspaceProject(
         name=body.name,
         rpo_number=rpo_clean,
         client_name=body.client_name,
         template_id=template_id,
-        start_date=date.fromisoformat(body.start_date) if body.start_date else None,
-        deadline=date.fromisoformat(body.deadline) if body.deadline else None,
+        start_date=body.start_date,
+        deadline=body.deadline,
         status=ProjectStatus.planning,
         manager_id=manager_id,
         description=body.description,
     )
     db.add(proj)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, "Nomor RPO sudah digunakan proyek lain")
     await db.refresh(proj)
 
     # Auto-create phases & tasks from template
@@ -566,6 +652,8 @@ async def create_project(
                     phase_id=phase.id, name=t_tmpl.name, status=TaskStatus.todo, order=t_tmpl.order,
                 ))
 
+    if not template_id:
+        db.add(WorkspacePhase(project_id=proj.id, name="Pekerjaan", order=1, status=PhaseStatus.pending))
     return _project_to_out(proj, 0.0)
 
 
@@ -595,17 +683,35 @@ async def update_project(
     proj = await db.get(WorkspaceProject, project_id)
     if not proj:
         raise HTTPException(404, "Proyek tidak ditemukan")
+    await _require_project_access(db, _profile, project_id)
+    if proj.archived_at:
+        raise HTTPException(409, "Pulihkan proyek sebelum mengubah data")
+    start, end = body.start_date or proj.start_date, body.deadline or proj.deadline
+    if start and end and end < start:
+        raise HTTPException(422, "Tanggal selesai tidak boleh sebelum tanggal mulai")
     if body.name is not None: proj.name = body.name
     if body.rpo_number is not None:
-        rpo_clean = body.rpo_number.strip()
-        proj.rpo_number = rpo_clean or None
+        rpo_clean = body.rpo_number.strip().upper()
+        await db.execute(select(func.pg_advisory_xact_lock(func.hashtext("rein-rpo:" + rpo_clean.lower()))))
+        if await db.scalar(select(WorkspaceProject.id).where(func.lower(WorkspaceProject.rpo_number) == rpo_clean.lower(), WorkspaceProject.id != project_id)):
+            raise HTTPException(409, "Nomor RPO sudah digunakan proyek lain")
+        proj.rpo_number = rpo_clean
     if body.client_name is not None: proj.client_name = body.client_name
+    if body.status == ProjectStatus.completed and proj.status != ProjectStatus.completed:
+        if await db.scalar(select(WorkspaceTask.id).join(WorkspacePhase).where(WorkspacePhase.project_id == project_id, WorkspaceTask.status.notin_([TaskStatus.done, TaskStatus.cancelled])).limit(1)):
+            raise HTTPException(409, "Selesaikan dan setujui semua WO sebelum menutup proyek")
+        if os.getenv("WORKSPACE_COORDINATION_ENABLED") == "1":
+            from db.models.workspace_coordination import WorkspaceIssue
+            if await db.scalar(select(WorkspaceIssue.id).where(WorkspaceIssue.project_id == project_id, WorkspaceIssue.kind == "blocker", WorkspaceIssue.status != "verified").limit(1)):
+                raise HTTPException(409, "Verifikasi semua kendala sebelum menutup proyek")
     if body.status is not None: proj.status = ProjectStatus(body.status)
-    if body.start_date is not None: proj.start_date = date.fromisoformat(body.start_date)
-    if body.deadline is not None: proj.deadline = date.fromisoformat(body.deadline)
+    if body.start_date is not None: proj.start_date = body.start_date
+    if body.deadline is not None: proj.deadline = body.deadline
     if body.manager_id is not None: proj.manager_id = uuid.UUID(body.manager_id)
     if body.description is not None: proj.description = body.description
     await db.flush()
+    await project_rules.record_event(db, proj.id, _profile.id, "Data proyek diperbarui",
+        payload={"name": proj.name, "changes": body.model_dump(exclude_unset=True, mode="json")})
     return _project_to_out(proj, await _project_progress(db, proj.id))
 
 
@@ -619,6 +725,7 @@ async def list_phases(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
 ):
+    await _require_project_access(db, _profile, project_id)
     rows = (await db.execute(
         select(WorkspacePhase).where(WorkspacePhase.project_id == project_id).order_by(WorkspacePhase.order)
     )).scalars().all()
@@ -643,6 +750,7 @@ async def create_phase(
     proj = await db.get(WorkspaceProject, project_id)
     if not proj:
         raise HTTPException(404, "Proyek tidak ditemukan")
+    await _require_project_access(db, _profile, project_id)
     ph = WorkspacePhase(
         project_id=project_id, name=body.name, order=body.order,
         start_date=date.fromisoformat(body.start_date) if body.start_date else None,
@@ -670,6 +778,7 @@ async def update_phase(
     ph = await db.get(WorkspacePhase, phase_id)
     if not ph:
         raise HTTPException(404, "Phase tidak ditemukan")
+    await _require_project_access(db, _profile, ph.project_id)
     ph.name = body.name
     ph.order = body.order
     if body.start_date: ph.start_date = date.fromisoformat(body.start_date)
@@ -693,6 +802,7 @@ async def list_tasks(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
 ):
+    await _require_phase_access(db, _profile, phase_id)
     rows = (await db.execute(
         select(WorkspaceTask).where(WorkspaceTask.phase_id == phase_id).order_by(WorkspaceTask.order)
     )).scalars().all()
@@ -708,8 +818,8 @@ async def my_tasks(
     rows = (await db.execute(
         select(WorkspaceTask)
         .where(
-            WorkspaceTask.assigned_to == profile.id,
-            WorkspaceTask.status != TaskStatus.done,
+            project_rules.assignment_filter(profile.id),
+            WorkspaceTask.status.notin_([TaskStatus.done, TaskStatus.cancelled]),
         )
         .order_by(WorkspaceTask.deadline.asc().nullslast())
     )).scalars().all()
@@ -721,11 +831,12 @@ async def create_task(
     phase_id: uuid.UUID,
     body: TaskCreate,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-    _profile: Annotated[Profile, Depends(require_permission("workspace:manage"))] = None,
+    _profile: Annotated[Profile, Depends(require_any_permission("workspace:manage", "workspace:create_wo"))] = None,
 ):
     ph = await db.get(WorkspacePhase, phase_id)
     if not ph:
         raise HTTPException(404, "Phase tidak ditemukan")
+    await _require_project_access(db, _profile, ph.project_id)
     t = WorkspaceTask(
         phase_id=phase_id,
         name=body.name,
@@ -741,6 +852,12 @@ async def create_task(
     db.add(t)
     await db.flush()
     await db.refresh(t)
+    if os.getenv("WORKSPACE_STAGES_ENABLED") == "1":
+        from app.routers.workspace_board import _lock_board
+        board = await _lock_board(db, ph.project_id, None)
+        board.version += 1
+        await db.flush()
+    await project_rules.task_event(db, t, _profile, "WO dibuat")
     return await _enrich_task(db, t)
 
 
@@ -751,15 +868,18 @@ async def update_task(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
 ):
-    t = await db.get(WorkspaceTask, task_id)
+    t = await _locked_task(db, profile, task_id)
     if not t:
         raise HTTPException(404, "Task tidak ditemukan")
+    await _require_task_access(db, profile, t)
+    if body.status is not None and body.status != t.status.value:
+        raise HTTPException(409, "Gunakan aksi Mulai, Kirim Laporan, atau Review untuk mengubah status WO.")
 
     # Use permission-based check — not role-based
-    can_manage = await _can(db, profile, "workspace:manage")
+    can_manage = await _can(db, profile, "workspace:manage") or await _can(db, profile, "workspace:create_wo")
 
     # Non-managers can only update tasks assigned to them
-    if not can_manage and t.assigned_to != profile.id:
+    if not can_manage and not await project_rules.is_assignee(db, t, profile):
         raise HTTPException(403, "Tidak diotorisasi")
 
     if body.name is not None and can_manage:
@@ -771,13 +891,27 @@ async def update_task(
     if body.estimated_days is not None and can_manage:
         t.estimated_days = body.estimated_days
     if body.assigned_to is not None and can_manage:
-        t.assigned_to = uuid.UUID(body.assigned_to) if body.assigned_to else None
+        try:
+            assigned_to = uuid.UUID(body.assigned_to) if body.assigned_to else None
+        except ValueError:
+            raise HTTPException(422, "ID penanggung jawab tidak valid")
+        if assigned_to:
+            assigned = await db.get(Profile, assigned_to)
+            if not assigned or not assigned.is_active:
+                raise HTTPException(422, "Penanggung jawab harus pengguna aktif")
+        if project_rules.enabled():
+            from db.models.workspace_project import WorkspaceTaskAssignee
+            if t.assigned_to:
+                await db.execute(delete(WorkspaceTaskAssignee).where(WorkspaceTaskAssignee.task_id == t.id,
+                    WorkspaceTaskAssignee.profile_id == t.assigned_to))
+            if assigned_to and not await db.get(WorkspaceTaskAssignee, (t.id, assigned_to)):
+                db.add(WorkspaceTaskAssignee(task_id=t.id, profile_id=assigned_to))
+        t.assigned_to = assigned_to
     if body.deadline is not None and can_manage:
         t.deadline = date.fromisoformat(body.deadline) if body.deadline else None
-    if body.status is not None:
-        t.status = TaskStatus(body.status)
     if body.notes is not None:
         t.notes = body.notes
+    await project_rules.task_event(db, t, profile, "WO diubah")
     await db.flush()
     return await _enrich_task(db, t)
 
@@ -793,22 +927,21 @@ async def start_task(
     profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
 ):
     """Field worker taps 'Mulai' — transitions todo → in_progress."""
-    t = await db.get(WorkspaceTask, task_id)
+    t = await _locked_task(db, profile, task_id)
     if not t:
         raise HTTPException(404, "Task tidak ditemukan")
+    await _require_task_access(db, profile, t)
     # Either the assignee or someone with execute_wo / manage permission
-    can_execute = (
-        t.assigned_to == profile.id
-        or await _can(db, profile, "workspace:execute_wo")
-        or await _can(db, profile, "workspace:manage")
+    can_execute = await _can(db, profile, "workspace:manage") or (
+        await _can(db, profile, "workspace:execute_wo") and await project_rules.is_assignee(db, t, profile)
     )
     if not can_execute:
         raise HTTPException(403, "Tidak diotorisasi untuk memulai WO ini")
-    if t.status not in (TaskStatus.todo, TaskStatus.in_progress):
-        raise HTTPException(400, f"WO tidak bisa dimulai dari status '{t.status.value}'")
-    t.status = TaskStatus.in_progress
+    await project_rules.require_ready(db, t)
+    t.status = transition(t.status, "start")
     if t.started_at is None:
         t.started_at = datetime.now(timezone.utc)
+    await project_rules.task_event(db, t, profile, "WO dimulai")
     await db.flush()
     return await _enrich_task(db, t)
 
@@ -825,18 +958,19 @@ async def submit_report(
     Transitions in_progress → pending_review.
     Creates a TaskCompletion row holding photos + notes.
     """
-    t = await db.get(WorkspaceTask, task_id)
+    t = await _locked_task(db, profile, task_id)
     if not t:
         raise HTTPException(404, "Task tidak ditemukan")
-    can_execute = (
-        t.assigned_to == profile.id
-        or await _can(db, profile, "workspace:execute_wo")
-        or await _can(db, profile, "workspace:manage")
+    await _require_task_access(db, profile, t)
+    can_execute = await _can(db, profile, "workspace:manage") or (
+        await _can(db, profile, "workspace:execute_wo") and await project_rules.is_assignee(db, t, profile)
     )
     if not can_execute:
         raise HTTPException(403, "Tidak diotorisasi untuk submit laporan WO ini")
-    if t.status not in (TaskStatus.in_progress, TaskStatus.todo):
-        raise HTTPException(400, f"WO tidak bisa disubmit dari status '{t.status.value}'")
+    await project_rules.require_ready(db, t)
+    target = transition(t.status, "submit")
+    if not (body.photos_before or body.photos_after or (body.notes and body.notes.strip())):
+        raise HTTPException(422, "Tambahkan minimal satu foto atau catatan laporan")
 
     completion = TaskCompletion(
         task_id=task_id,
@@ -847,7 +981,10 @@ async def submit_report(
         completed_at=datetime.now(timezone.utc),
     )
     db.add(completion)
-    t.status = TaskStatus.pending_review
+    t.status = target
+    await project_rules.task_event(db, t, profile, "Laporan dikirim")
+    if t.started_at is None:
+        t.started_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(completion)
 
@@ -876,20 +1013,22 @@ async def review_task(
     decision = 'approve'           → status = done, reviewed_at/by recorded
     decision = 'request_revision'  → status = in_progress, review_notes set
     """
-    t = await db.get(WorkspaceTask, task_id)
+    t = await _locked_task(db, profile, task_id)
     if not t:
         raise HTTPException(404, "Task tidak ditemukan")
+    await _require_task_access(db, profile, t)
     can_review = (
         await _can(db, profile, "workspace:review_wo")
         or await _can(db, profile, "workspace:manage")
     )
     if not can_review:
         raise HTTPException(403, "Tidak diotorisasi untuk review WO")
-    if t.status != TaskStatus.pending_review:
-        raise HTTPException(400, "WO belum menunggu review")
+    if not await db.scalar(select(func.count()).where(TaskCompletion.task_id == t.id)):
+        raise HTTPException(409, "Laporan WO belum tersedia untuk ditinjau")
 
     if body.decision == "approve":
-        t.status = TaskStatus.done
+        await project_rules.require_ready(db, t, completing=True)
+        t.status = transition(t.status, "approve")
         t.reviewed_at = datetime.now(timezone.utc)
         t.reviewed_by = profile.id
         # Clear any prior revision note since it's now approved
@@ -897,13 +1036,14 @@ async def review_task(
     elif body.decision == "request_revision":
         if not (body.review_notes and body.review_notes.strip()):
             raise HTTPException(400, "Catatan revisi wajib diisi")
-        t.status = TaskStatus.in_progress
+        t.status = transition(t.status, "request_revision")
         t.reviewed_at = datetime.now(timezone.utc)
         t.reviewed_by = profile.id
         t.review_notes = body.review_notes.strip()
     else:
         raise HTTPException(400, "decision harus 'approve' atau 'request_revision'")
 
+    await project_rules.task_event(db, t, profile, "WO disetujui" if body.decision == "approve" else "Revisi diminta")
     await db.flush()
     return await _enrich_task(db, t)
 
@@ -919,9 +1059,18 @@ async def complete_task(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     profile: Annotated[Profile, Depends(require_permission("workspace:complete_task"))] = None,
 ):
-    t = await db.get(WorkspaceTask, task_id)
+    t = await _locked_task(db, profile, task_id)
     if not t:
         raise HTTPException(404, "Task tidak ditemukan")
+    await _require_task_access(db, profile, t)
+    if (not await project_rules.is_assignee(db, t, profile)
+            and not await _can(db, profile, "workspace:execute_wo")
+            and not await _can(db, profile, "workspace:manage")):
+        raise HTTPException(403, "Tidak diotorisasi untuk submit laporan WO ini")
+    await project_rules.require_ready(db, t)
+    target = transition(t.status, "submit")
+    if not (body.photo_url or (body.notes and body.notes.strip())):
+        raise HTTPException(422, "Tambahkan minimal satu foto atau catatan laporan")
 
     completion = TaskCompletion(
         task_id=task_id,
@@ -933,7 +1082,10 @@ async def complete_task(
         completed_at=datetime.now(timezone.utc),
     )
     db.add(completion)
-    t.status = TaskStatus.done
+    t.status = target
+    await project_rules.task_event(db, t, profile, "Laporan dikirim")
+    if t.started_at is None:
+        t.started_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(completion)
 
@@ -956,6 +1108,10 @@ async def list_completions(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     _profile: Annotated[Profile, Depends(require_permission("workspace:view"))] = None,
 ):
+    task = await db.get(WorkspaceTask, task_id)
+    if not task:
+        raise HTTPException(404, "Task tidak ditemukan")
+    await _require_task_access(db, _profile, task)
     rows = (await db.execute(
         select(TaskCompletion).where(TaskCompletion.task_id == task_id).order_by(TaskCompletion.completed_at.desc())
     )).scalars().all()
@@ -1009,7 +1165,7 @@ async def workspace_summary(
         select(func.count()).where(
             WorkspaceTask.phase_id.in_(managed_phase_ids),
             WorkspaceTask.deadline < today,
-            WorkspaceTask.status != TaskStatus.done,
+            WorkspaceTask.status.notin_([TaskStatus.done, TaskStatus.cancelled]),
         )
     ) or 0 if managed_phase_ids else 0
 
@@ -1029,7 +1185,7 @@ async def workspace_summary(
         select(WorkspaceTask)
         .where(
             WorkspaceTask.assigned_to == profile.id,
-            WorkspaceTask.status != TaskStatus.done,
+            WorkspaceTask.status.notin_([TaskStatus.done, TaskStatus.cancelled]),
         )
         .order_by(WorkspaceTask.deadline.asc().nullslast())
     )).scalars().all()

@@ -16,12 +16,13 @@ import { workspaceApi, type Completion, type Task } from "@/lib/api/workspace";
 import { uploadWorkspacePhoto } from "@/lib/api/workspace-storage";
 
 interface Props {
+  api?: typeof workspaceApi;
   task: Task;
   onClose: () => void;
   onSubmitted: (c: Completion) => void;
 }
 
-export function WorkOrderReportForm({ task, onClose, onSubmitted }: Props) {
+export function WorkOrderReportForm({ api = workspaceApi, task, onClose, onSubmitted }: Props) {
   const [photosBefore, setPhotosBefore] = useState<string[]>([]);
   const [photosAfter, setPhotosAfter] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
@@ -36,7 +37,7 @@ export function WorkOrderReportForm({ task, onClose, onSubmitted }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await workspaceApi.submitReport(task.id, {
+      const result = await api.submitReport(task.id, {
         photos_before: photosBefore,
         photos_after: photosAfter,
         notes: notes.trim() || undefined,
@@ -73,6 +74,7 @@ export function WorkOrderReportForm({ task, onClose, onSubmitted }: Props) {
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-5">
+          {api === workspaceApi ? <>
           <PhotoGroup
             label="Foto Sebelum"
             description="Kondisi sebelum mulai dikerjakan"
@@ -89,6 +91,7 @@ export function WorkOrderReportForm({ task, onClose, onSubmitted }: Props) {
             onError={setError}
             taskId={task.id}
           />
+          </> : <p className="text-xs text-text-muted">Preview lokal: gunakan catatan laporan; unggah foto dinonaktifkan.</p>}
 
           <div>
             <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">

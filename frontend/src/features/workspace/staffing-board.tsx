@@ -1,0 +1,15 @@
+"use client";
+import { useCallback, useEffect, useState } from "react";
+import type { workspaceApi } from "@/lib/api/workspace";
+import type { Staffing } from "@/lib/api/workspace-coordination";
+import { apiErrorText } from "@/lib/api/client";
+import { Badge, dateLabel, duration, Empty } from "./operations-ui";
+
+export function StaffingBoard({api, onOpenProject}: {api: typeof workspaceApi; onOpenProject?: (id:string)=>void}) {
+  const [people,setPeople]=useState<Staffing[]>([]),[error,setError]=useState(""),[loaded,setLoaded]=useState(false),[q,setQ]=useState("");
+  const load=useCallback(async()=>{try{setPeople(await api.manpower());setError("");setLoaded(true);}catch(err){setError(apiErrorText(err,"Beban kerja belum dapat dimuat"));}},[api]);
+  useEffect(()=>{void Promise.resolve().then(load);},[load]);
+  return <div className="space-y-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-base font-semibold">Beban kerja lintas proyek</h2><p className="mt-1 text-xs text-text-muted">Jadwal, pelaksana, estimasi dan jam aktual. Penugasan yang bertabrakan ditandai.</p></div><button className="btn btn-default btn-sm" onClick={()=>void load()}>Muat ulang</button></div><input aria-label="Cari personel" value={q} onChange={e=>setQ(e.target.value)} className="field-input max-w-sm" placeholder="Cari orang / divisi…" />{error&&<p role="alert" className="text-sm text-red-600">{error}</p>}{!loaded&&!error&&<p className="text-sm text-text-muted">Memuat penugasan…</p>}
+    <div className="grid gap-4 xl:grid-cols-2">{people.filter(p=>(p.name+" "+p.role).toLowerCase().includes(q.toLowerCase())).map(p=><article key={p.id} className="rounded-xl border border-border bg-bg p-4"><div className="mb-3 flex items-start justify-between gap-3"><div><h3 className="text-sm font-semibold">{p.name}</h3><p className="mt-1 text-xs capitalize text-text-muted">{p.role.replaceAll("_"," ")}</p></div><Badge tone={p.conflicts?"bad":p.jobs.length?"neutral":"good"}>{p.conflicts?`${p.conflicts} jadwal bentrok`:p.jobs.length?`${p.jobs.length} penugasan terbuka`:"Belum ada penugasan"}</Badge></div>{!p.jobs.length&&<p className="text-xs text-text-muted">Belum ada pekerjaan terbuka dalam cakupan proyek yang Anda lihat.</p>}<div className="space-y-3">{p.jobs.map(j=><div key={j.task_id} className={`rounded-lg border p-3 ${j.conflict?"border-red-200 bg-red-50/40":"border-border-soft"}`}><button className="text-left text-xs font-semibold text-primary" onClick={()=>onOpenProject?.(j.project_id)}>{j.name}</button><p className="mt-1 text-xs text-text-muted">{j.project} · {j.division}</p><p className="mt-1 text-xs">{dateLabel(j.start)} — {dateLabel(j.end)}</p><div className="mt-2 flex flex-wrap items-center gap-2"><Badge tone={j.state==="Terhambat"?"warn":"neutral"}>{j.state}</Badge><span className="text-[11px] text-text-muted">Estimasi {duration(j.estimated_minutes)} · aktual {duration(j.actual_minutes)}</span></div></div>)}</div></article>)}</div>{loaded&&!people.length&&<Empty>Belum ada penugasan yang dapat ditampilkan.</Empty>}
+  </div>;
+}

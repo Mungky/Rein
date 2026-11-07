@@ -1,0 +1,48 @@
+{
+  "analyzed_at": "2026-11-05",
+  "purpose": "Odoo Community Project feature adaptation for Rein",
+  "plugins": [
+    {
+      "version": "2.2.3",
+      "name": "ecc@ecc",
+      "local_source": ".research/ecc",
+      "commit": "b38be6a7f6350964d59328b52f0624e1d1d552d1",
+      "repository": "https://github.com/affaan-m/ecc"
+    },
+    {
+      "version": "6.8.0",
+      "name": "rea@rea",
+      "local_source": ".research/rea",
+      "commit": "fe677f6cf9853fb12490dfb8ef23ccae3a551049",
+      "repository": "https://github.com/morluto/rea"
+    }
+  ],
+  "odoo": {
+    "commit": "edceef7991b19796b21debf9819f532a33778f87",
+    "local_source": ".research/odoo",
+    "sparse_paths": [
+      "addons/project",
+      "addons/hr_timesheet",
+      "addons/project_todo",
+      "addons/sale_project"
+    ],
+    "branch": "19.0",
+    "repository": "https://github.com/odoo/odoo"
+  },
+  "rea": {
+    "artifact_sha256": "50625a904b359969ea9055776fc10b1255aeb0801b5ffb4250842dde171440a8",
+    "parent_evidence_id": "ev_70ab349f09518efc7cf4c3812f33e005014b9cc8dd0e7a212bcf9ff5ecad1ecc",
+    "parsed_javascript_files": 3,
+    "relevant_files": 120,
+    "runtime_observed": false,
+    "parse_failures": 0,
+    "source_paths": [
+      "views/project_task_kanban/project_task_kanban_model.js",
+      "components/project_task_state_selection/project_task_state_selection.js",
+      "views/project_task_model_mixin.js"
+    ],
+    "coverage": "partial",
+    "input_path": ".research/odoo/addons/project/static/src",
+    "evidence_file": "docs/research/odoo-project/rea-evidence.json"
+  }
+}

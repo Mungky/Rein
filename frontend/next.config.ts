@@ -1,10 +1,10 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
-  // SCADA Monitor menjadi R-Net (2026-07) — jaga bookmark/link lama tetap hidup.
-  async redirects() {
-    return [{ source: "/scada", destination: "/r-net", permanent: true }];
-  },
+  distDir: process.env.NODE_ENV === "development" && process.env.WORKSPACE_LOCAL_PREVIEW === "1" ? ".next-preview" : ".next",
+  experimental: { cpus: 2, webpackMemoryOptimizations: true },
+  turbopack: { root: path.resolve(__dirname) },
   // Security headers (audit Fase 2). SAMEORIGIN still allows our own orbit
   // iframes; it only blocks OTHER sites from embedding REIN (clickjacking).
   async headers() {

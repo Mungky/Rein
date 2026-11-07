@@ -13,7 +13,7 @@
  * fullscreen on mobile (<sm).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Calendar,
@@ -33,8 +33,12 @@ import {
 import { workspaceApi, type Completion, type Task } from "@/lib/api/workspace";
 import { StatusBadge } from "./status-badge";
 import { WorkOrderReportForm } from "./wo-report-form";
+import { TaskProjectPanel } from "./task-project-panel";
 
 export interface WoDetailDrawerProps {
+  operationalPanel?: ReactNode;
+  projectFeatures?: boolean;
+  api?: typeof workspaceApi;
   taskId: string;
   /** Optional initial data — if provided, drawer doesn't refetch on open. */
   initial?: Task;
@@ -52,7 +56,9 @@ export interface WoDetailDrawerProps {
 }
 
 export function WoDetailDrawer({
-  taskId, initial, onClose,
+  operationalPanel,
+  projectFeatures = process.env.NEXT_PUBLIC_WORKSPACE_PROJECT_SUITE_ENABLED === "1",
+  api = workspaceApi, taskId, initial, onClose,
   canManage, canExecute, canReview,
   onTaskChanged, rpoNumber, phaseName,
 }: WoDetailDrawerProps) {
@@ -93,27 +99,13 @@ export function WoDetailDrawer({
     }
   }, [initial]);
 
-  useEffect(() => { if (!task) loadTask(); }, [task, loadTask]);
+  useEffect(() => { if (!task) void Promise.resolve().then(loadTask); }, [task, loadTask]);
 
   // Load completions when task exists
   useEffect(() => {
     if (!taskId) return;
-    workspaceApi.listCompletions(taskId).then(setCompletions).catch(() => {});
-  }, [taskId]);
-
-  // Sync draft when task loads or editing toggles on
-  useEffect(() => {
-    if (!task) return;
-    if (editing) {
-      setDraft({
-        name: task.name,
-        description: task.description ?? "",
-        location: task.location ?? "",
-        estimated_days: task.estimated_days != null ? String(task.estimated_days) : "",
-        deadline: task.deadline ?? "",
-      });
-    }
-  }, [editing, task]);
+    api.listCompletions(taskId).then(setCompletions).catch(() => {});
+  }, [taskId, api]);
 
   const saveDraft = async () => {
     if (!task) return;
@@ -121,7 +113,7 @@ export function WoDetailDrawer({
     setError(null);
     try {
       const days = draft.estimated_days.trim();
-      const updated = await workspaceApi.updateTask(task.id, {
+      const updated = await api.updateTask(task.id, {
         name: draft.name.trim() || task.name,
         description: draft.description.trim() || null,
         location: draft.location.trim() || null,
@@ -141,7 +133,7 @@ export function WoDetailDrawer({
   const doStart = async () => {
     if (!task) return;
     try {
-      const updated = await workspaceApi.startTask(task.id);
+      const updated = await api.startTask(task.id);
       setTask(updated);
       onTaskChanged?.(updated);
     } catch (e) {
@@ -152,7 +144,7 @@ export function WoDetailDrawer({
   const doApprove = async () => {
     if (!task) return;
     try {
-      const updated = await workspaceApi.reviewTask(task.id, { decision: "approve" });
+      const updated = await api.reviewTask(task.id, { decision: "approve" });
       setTask(updated);
       onTaskChanged?.(updated);
     } catch (e) {
@@ -164,7 +156,7 @@ export function WoDetailDrawer({
     if (!task) return;
     if (!revisionNote.trim()) { setError("Catatan revisi wajib diisi"); return; }
     try {
-      const updated = await workspaceApi.reviewTask(task.id, {
+      const updated = await api.reviewTask(task.id, {
         decision: "request_revision",
         review_notes: revisionNote.trim(),
       });
@@ -199,7 +191,7 @@ export function WoDetailDrawer({
   }
 
   const status = task.status;
-  const showStartButton = canExecute && (status === "todo");
+  const showStartButton = canExecute && (status === "todo" || status === "overdue");
   const showSubmitButton = canExecute && status === "in_progress";
   const showReviewButtons = canReview && status === "pending_review";
 
@@ -338,6 +330,14 @@ export function WoDetailDrawer({
             )}
           </div>
 
+          {operationalPanel}
+          {projectFeatures && <TaskProjectPanel api={api} task={task} canManage={canManage} onChanged={() => {
+            void api.listTasks(task.phase_id).then((tasks) => {
+              const updated = tasks.find((item) => item.id === task.id);
+              if (updated) { setTask(updated); onTaskChanged?.(updated); }
+            });
+          }} />}
+
           {/* Completions / Activity */}
           {completions.length > 0 && (
             <div>
@@ -392,7 +392,11 @@ export function WoDetailDrawer({
           ) : (
             <>
               {canManage && (
-                <button onClick={() => setEditing(true)} className="btn btn-default btn-sm gap-1.5">
+                <button onClick={() => {
+                  setDraft({ name: task.name, description: task.description ?? "", location: task.location ?? "",
+                    estimated_days: task.estimated_days != null ? String(task.estimated_days) : "", deadline: task.deadline ?? "" });
+                  setEditing(true);
+                }} className="btn btn-default btn-sm gap-1.5">
                   <Pencil className="size-3.5" /> Edit
                 </button>
               )}
@@ -427,7 +431,7 @@ export function WoDetailDrawer({
 
       {/* Report modal */}
       {showReport && task && (
-        <WorkOrderReportForm
+        <WorkOrderReportForm api={api}
           task={task}
           onClose={() => setShowReport(false)}
           onSubmitted={handleReportSubmitted}

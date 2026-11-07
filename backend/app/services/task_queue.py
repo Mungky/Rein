@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 class TaskType(str, Enum):
     INDEX_TO_SHEETS = "index_to_sheets"
     SEND_EMAIL = "send_email"
-    CLEANUP_EXPIRED_PROPOSALS = "cleanup_expired_proposals"
-    REVOKE_EXPIRED_ACCESS = "revoke_expired_access"
     AUDIT_FILE = "audit_file"
     CLEANUP_EXPIRED_VIEW_REQUESTS = "cleanup_expired_view_requests"
     PURGE_TAG_HISTORY = "purge_tag_history"
@@ -84,10 +82,6 @@ class TaskQueue:
             await self._index_to_sheets(task.payload)
         elif task.task_type == TaskType.SEND_EMAIL:
             await self._send_email(task.payload)
-        elif task.task_type == TaskType.CLEANUP_EXPIRED_PROPOSALS:
-            await self._cleanup_expired_proposals()
-        elif task.task_type == TaskType.REVOKE_EXPIRED_ACCESS:
-            await self._revoke_expired_access()
         elif task.task_type == TaskType.AUDIT_FILE:
             await self._audit_file(task.payload)
         elif task.task_type == TaskType.CLEANUP_EXPIRED_VIEW_REQUESTS:
@@ -178,50 +172,6 @@ class TaskQueue:
             )
         except Exception as e:
             logger.error("Email sending failed: %s", e)
-
-    async def _cleanup_expired_proposals(self) -> None:
-        """Delete Drive files for expired proposals and mark them cancelled."""
-        from db.session import async_session_factory
-        from db.models.upload_queue import UploadQueue, UploadStatus
-        from app.services import gdrive
-
-        now = datetime.now(timezone.utc)
-        async with async_session_factory() as db:
-            result = await db.execute(
-                select(UploadQueue).where(
-                    UploadQueue.status == UploadStatus.awaiting_confirmation,
-                    UploadQueue.proposal_expires_at < now,
-                )
-            )
-            expired = result.scalars().all()
-            for entry in expired:
-                if entry.gdrive_file_id:
-                    try:
-                        await gdrive.delete_file(entry.gdrive_file_id)
-                    except Exception as e:
-                        logger.warning("Failed to delete expired Drive file %s: %s", entry.gdrive_file_id, e)
-                entry.status = UploadStatus.cancelled
-                logger.info("Expired proposal %s cleaned up", entry.id)
-            await db.commit()
-
-    async def _revoke_expired_access(self) -> None:
-        """Mark expired access requests as expired."""
-        from db.session import async_session_factory
-        from db.models.access_request import AccessRequest, AccessStatus
-
-        now = datetime.now(timezone.utc)
-        async with async_session_factory() as db:
-            result = await db.execute(
-                select(AccessRequest).where(
-                    AccessRequest.status == AccessStatus.approved,
-                    AccessRequest.expires_at < now,
-                )
-            )
-            expired = result.scalars().all()
-            for req in expired:
-                req.status = AccessStatus.expired
-                logger.info("Access request %s expired", req.id)
-            await db.commit()
 
 
     async def _audit_file(self, payload: dict[str, Any]) -> None:

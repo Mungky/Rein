@@ -17,6 +17,7 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  Trash2,
 } from "lucide-react";
 import type { AppRole } from "@/lib/utils/roles";
 import { cn } from "@/lib/utils";
@@ -52,6 +53,8 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [editingNameFor, setEditingNameFor] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState("");
+  const [editingUsernameFor, setEditingUsernameFor] = useState<string | null>(null);
+  const [usernameDraft, setUsernameDraft] = useState("");
   const [resetTarget, setResetTarget] = useState<UserProfile | null>(null);
 
   const fetchUsers = useCallback(async () => {
@@ -135,6 +138,43 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
     finally { setUpdatingId(null); }
   };
 
+  const saveUsername = async (userId: string) => {
+    const trimmed = usernameDraft.trim().toLowerCase();
+    if (!trimmed) return;
+    if (!isValidUsername(trimmed)) {
+      setError("Username hanya boleh huruf kecil, angka, titik, garis bawah, atau strip (3-32 karakter).");
+      return;
+    }
+    setUpdatingId(userId); setError(null);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`${API_URL}/api/admin/users/${userId}/username`, {
+        method: "PATCH", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ username: trimmed }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal mengubah username"); }
+      setEditingUsernameFor(null);
+      fetchUsers();
+    } catch (err) { setError(err instanceof Error ? err.message : "Terjadi kesalahan"); }
+    finally { setUpdatingId(null); }
+  };
+
+  const deleteUser = async (target: UserProfile) => {
+    if (!window.confirm(`Hapus akun "${target.full_name}" (@${target.username})?\n\nAkun ini tidak akan bisa login lagi dan akan dihapus dari daftar pengguna, tetapi namanya tetap dipertahankan di riwayat Project dengan penanda merah (Sudah tidak bekerja).`)) {
+      return;
+    }
+    setUpdatingId(target.id); setError(null);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`${API_URL}/api/admin/users/${target.id}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || "Gagal menghapus pengguna"); }
+      fetchUsers();
+    } catch (err) { setError(err instanceof Error ? err.message : "Terjadi kesalahan"); }
+    finally { setUpdatingId(null); }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -199,8 +239,13 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
                 <tr key={u.id} className="border-b border-border-soft last:border-b-0 hover:bg-bg-hover transition-colors group">
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary to-primary-hover text-white flex items-center justify-center text-[11px] font-bold shrink-0 shadow-[0_1px_3px_rgba(37,99,235,0.25)]">
-                        {u.initials || u.full_name?.slice(0, 2).toUpperCase() || "??"}
+                      <div className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-primary to-primary-hover text-white flex items-center justify-center text-[11px] font-bold shrink-0 shadow-[0_1px_3px_rgba(37,99,235,0.25)]">
+                        {u.avatar_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={u.avatar_url} alt={u.full_name} className="size-full object-cover" />
+                        ) : (
+                          u.initials || u.full_name?.slice(0, 2).toUpperCase() || "??"
+                        )}
                       </div>
                       {isEditing ? (
                         <div className="flex items-center gap-1.5">
@@ -223,7 +268,31 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3.5 text-[12.5px] text-text-muted font-mono">{u.username}</td>
+                  <td className="px-4 py-3.5 text-[12.5px] text-text-muted font-mono">
+                    {editingUsernameFor === u.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          autoFocus value={usernameDraft}
+                          onChange={(e) => setUsernameDraft(e.target.value.toLowerCase())}
+                          onKeyDown={(e) => { if (e.key === "Enter") saveUsername(u.id); if (e.key === "Escape") setEditingUsernameFor(null); }}
+                          className="field-input text-[12px] font-mono w-[150px] h-8"
+                        />
+                        <button className="btn btn-primary btn-icon btn-sm" onClick={() => saveUsername(u.id)} disabled={updatingId === u.id}><Save className="w-3.5 h-3.5" /></button>
+                        <button className="btn btn-default btn-icon btn-sm" onClick={() => setEditingUsernameFor(null)}><X className="w-3.5 h-3.5" /></button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <span>{u.username}</span>
+                        <button
+                          className="opacity-0 group-hover:opacity-100 transition-opacity text-text-light hover:text-primary p-0.5"
+                          title="Ubah username (Admin)"
+                          onClick={() => { setEditingUsernameFor(u.id); setUsernameDraft(u.username); }}
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3.5">
                     <div className="relative inline-block">
                       <select
@@ -256,9 +325,19 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
                     {updatingId === u.id ? (
                       <span className="text-[11px] text-text-muted animate-pulse">Menyimpan…</span>
                     ) : (
-                      <button className="btn btn-default btn-sm gap-1.5" onClick={() => setResetTarget(u)}>
-                        <KeyRound className="w-3.5 h-3.5" /> Reset Password
-                      </button>
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        <button className="btn btn-default btn-sm gap-1.5" onClick={() => setResetTarget(u)}>
+                          <KeyRound className="w-3.5 h-3.5" /> Reset Password
+                        </button>
+                        <button
+                          className="btn btn-default btn-sm gap-1.5 text-red hover:bg-red-bg hover:border-red/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                          disabled={isSelf}
+                          title={isSelf ? "Tidak dapat menghapus akun sendiri" : `Hapus pengguna ${u.full_name}`}
+                          onClick={() => deleteUser(u)}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Hapus
+                        </button>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -312,6 +391,13 @@ export function UsersTab({ currentUserId }: { currentUserId?: string }) {
                 </button>
                 <button className="btn btn-default btn-sm flex-1 gap-1.5" onClick={() => setResetTarget(u)}>
                   <KeyRound className="w-3.5 h-3.5" /> Reset Password
+                </button>
+                <button
+                  className="btn btn-default btn-sm gap-1 text-red hover:bg-red-bg hover:border-red/30 disabled:opacity-40"
+                  disabled={isSelf || updatingId === u.id}
+                  onClick={() => deleteUser(u)}
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Hapus
                 </button>
               </div>
               {editingNameFor === u.id && (

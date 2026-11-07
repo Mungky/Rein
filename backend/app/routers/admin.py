@@ -18,6 +18,7 @@ from db.models.file_type import FileType
 from db.models.profile import AppRole, Profile
 from db.models.role_permission import (
     ALL_PERMISSIONS,
+    DEFAULT_ROLE_PERMISSIONS,
     PERMISSION_LABELS,
     RolePermission,
 )
@@ -76,6 +77,21 @@ class NameUpdateRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=255)
 
 
+class UsernameUpdateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+
+    @field_validator("username")
+    @classmethod
+    def _validate_username(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not USERNAME_RE.match(v):
+            raise ValueError(
+                "Username hanya boleh huruf kecil, angka, titik, garis bawah, "
+                "atau tanda hubung (3-32 karakter)."
+            )
+        return v
+
+
 class PasswordUpdateRequest(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
@@ -83,7 +99,8 @@ class PasswordUpdateRequest(BaseModel):
 class PermissionMatrix(BaseModel):
     """Full permission matrix payload (role -> list of permissions)."""
 
-    permissions: dict[AppRole, list[str]]
+    permissions: dict[AppRole, list[str]] | None = None
+    matrix: dict[AppRole, list[str]] | None = None
 
 
 class ProfileResponse(BaseModel):
@@ -189,13 +206,20 @@ async def _create_supabase_user(email: str, password: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+DELETED_USERNAME_PREFIX = "deleted__"
+
+
 @router.get("/users", response_model=list[ProfileResponse])
 async def list_users(
     db: Annotated[AsyncSession, Depends(get_db)],
     _admin: AdminOnly,
 ):
-    """List all profiles (admin only)."""
-    result = await db.execute(select(Profile).order_by(Profile.created_at.desc()))
+    """List all active/non-deleted profiles (admin only)."""
+    result = await db.execute(
+        select(Profile)
+        .where(~Profile.username.like(f"{DELETED_USERNAME_PREFIX}%"))
+        .order_by(Profile.created_at.desc())
+    )
     return list(result.scalars().all())
 
 
@@ -320,6 +344,47 @@ async def update_user_name(
     return profile
 
 
+@router.patch("/users/{user_id}/username", response_model=ProfileResponse)
+async def update_user_username(
+    user_id: uuid.UUID,
+    body: UsernameUpdateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _admin: AdminOnly,
+):
+    profile = await db.get(Profile, user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile tidak ditemukan")
+
+    if profile.username == body.username:
+        return profile
+
+    existing = await db.execute(
+        select(Profile).where(Profile.username == body.username, Profile.id != user_id)
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username sudah dipakai oleh pengguna lain.",
+        )
+
+    new_email = _username_to_email(body.username)
+    response = await _supabase_admin_request(
+        "PUT",
+        f"/auth/v1/admin/users/{user_id}",
+        json_body={"email": new_email, "email_confirm": True},
+    )
+    if response.status_code not in (200, 204):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Gagal mengubah username di Supabase Auth: {response.text}",
+        )
+
+    profile.username = body.username
+    await db.flush()
+    await db.refresh(profile)
+    return profile
+
+
 @router.post("/users/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
 async def reset_user_password(
     user_id: uuid.UUID,
@@ -332,6 +397,39 @@ async def reset_user_password(
         raise HTTPException(status_code=404, detail="Profile tidak ditemukan")
 
     await _update_supabase_password(user_id, body.password)
+    return None
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    admin: AdminOnly,
+):
+    """Delete a user account.
+
+    Removes login credentials from Supabase Auth and marks the profile as
+    deleted/inactive while preserving the row so historical project records
+    (Work Orders, Logbooks, Issues, Documents) stay intact and flagged in red.
+    """
+    profile = await db.get(Profile, user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile tidak ditemukan")
+
+    if user_id == admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Anda tidak dapat menghapus akun admin Anda sendiri.",
+        )
+
+    await _delete_supabase_user(user_id)
+
+    base_uname = profile.username
+    if base_uname.startswith(DELETED_USERNAME_PREFIX):
+        base_uname = base_uname[len(DELETED_USERNAME_PREFIX) :]
+    profile.username = f"{DELETED_USERNAME_PREFIX}{base_uname[:15]}__{str(profile.id)[:8]}"
+    profile.is_active = False
+    await db.flush()
     return None
 
 
@@ -355,6 +453,7 @@ async def get_permissions(
 
     return {
         "permissions": matrix,
+        "matrix": matrix,
         "all_permissions": list(ALL_PERMISSIONS),
         "labels": PERMISSION_LABELS,
     }
@@ -371,8 +470,9 @@ async def set_permissions(
     Admin always retains every permission — we re-add the full set after wipe
     so the system cannot be locked out from the UI.
     """
+    incoming = body.permissions if body.permissions is not None else (body.matrix or {})
     valid = set(ALL_PERMISSIONS)
-    for role, perms in body.permissions.items():
+    for role, perms in incoming.items():
         for perm in perms:
             if perm not in valid:
                 raise HTTPException(
@@ -383,7 +483,7 @@ async def set_permissions(
     await db.execute(delete(RolePermission))
 
     rows: list[RolePermission] = []
-    for role, perms in body.permissions.items():
+    for role, perms in incoming.items():
         for perm in set(perms):
             rows.append(RolePermission(role=role, permission=perm))
 
@@ -397,7 +497,47 @@ async def set_permissions(
 
     db.add_all(rows)
     await db.flush()
-    return {"updated": len(rows)}
+
+    out_matrix: dict[str, list[str]] = {role.value: [] for role in AppRole}
+    for r in rows:
+        out_matrix.setdefault(r.role.value, []).append(r.permission)
+
+    return {
+        "updated": len(rows),
+        "permissions": out_matrix,
+        "matrix": out_matrix,
+        "all_permissions": list(ALL_PERMISSIONS),
+        "labels": PERMISSION_LABELS,
+    }
+
+
+@router.post("/permissions/reset")
+async def reset_permissions(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _admin: AdminOnly,
+):
+    """Reset all role permissions to DEFAULT_ROLE_PERMISSIONS."""
+    await db.execute(delete(RolePermission))
+    rows: list[RolePermission] = []
+    for role in AppRole:
+        perms = set(DEFAULT_ROLE_PERMISSIONS.get(role, ()))
+        if role == AppRole.admin:
+            perms = set(ALL_PERMISSIONS)
+        for perm in perms:
+            rows.append(RolePermission(role=role, permission=perm))
+    db.add_all(rows)
+    await db.flush()
+
+    out_matrix: dict[str, list[str]] = {role.value: [] for role in AppRole}
+    for r in rows:
+        out_matrix.setdefault(r.role.value, []).append(r.permission)
+
+    return {
+        "permissions": out_matrix,
+        "matrix": out_matrix,
+        "all_permissions": list(ALL_PERMISSIONS),
+        "labels": PERMISSION_LABELS,
+    }
 
 
 # ---------------------------------------------------------------------------
