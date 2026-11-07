@@ -22,7 +22,7 @@ from db.session import get_db
 
 router = APIRouter()
 
-
+@router.get("")
 @router.get("/")
 async def list_permissions(
     db: Annotated[AsyncSession, Depends(get_db)],

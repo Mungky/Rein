@@ -100,7 +100,7 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const res = await fetch(`${API_URL}/api/permissions/`, {
+      const res = await fetch(`${API_URL}/api/permissions`, {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) {
