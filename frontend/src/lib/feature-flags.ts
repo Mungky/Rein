@@ -6,8 +6,8 @@
  * is deleted — flip the flag to `true` to bring the whole module back at once.
  */
 export const FEATURES = {
-  dashboard: false,
-  workspace: false,
+  dashboard: true,
+  workspace: true,
 } as const;
 
 export type FeatureKey = keyof typeof FEATURES;

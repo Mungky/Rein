@@ -77,6 +77,11 @@ def run_migrations_online() -> None:
     The +asyncpg driver is stripped above so the URL is a standard
     postgresql:// URL suitable for a sync engine.
     """
+    supplied_connection = config.attributes.get("connection")
+    if supplied_connection is not None:
+        do_run_migrations(supplied_connection)
+        return
+
     connectable = create_engine(
         _get_url(),
         poolclass=pool.NullPool,

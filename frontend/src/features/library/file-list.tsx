@@ -5,23 +5,12 @@ import {
   FileText, FolderInput, Loader2, MoreVertical, Pencil, Presentation, Trash2, X,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentType } from "react";
+import { toast } from "sonner";
 import { deleteFile, moveFile, pollViewLink, renameFile, requestViewAccess } from "@/lib/api/library";
 import type { FolderMyPerms } from "@/lib/api/library";
 import { DropdownMenu, DropdownItem } from "./dropdown-menu";
 import { MoveModal } from "./move-modal";
 import type { FolderNode, LibraryFileMeta, ViewRequestResponse } from "./types";
-
-const DOC_TYPE_COLORS: Record<string, string> = {
-  DRW: "text-blue bg-blue-bg",
-  INV: "text-green bg-green-bg",
-  PO: "text-amber bg-amber-bg",
-  SPK: "text-primary bg-primary-bg",
-  RFP: "text-primary bg-primary-bg",
-  RPT: "text-text-muted bg-bg-hover",
-  SPEC: "text-text-muted bg-bg-hover",
-  OTHER: "text-text-muted bg-bg-hover",
-};
-
 /** Colored icon + tinted background per file extension — kills the all-gray monotony. */
 function fileVisual(fileName: string): { Icon: ComponentType<{ className?: string }>; cls: string } {
   const dot = fileName.lastIndexOf(".");
@@ -193,6 +182,7 @@ function FileRow({
   const [accessState, setAccessState] = useState<ViewRequestResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(file.file_name);
   const [saving, setSaving] = useState(false);
@@ -208,15 +198,16 @@ function FileRow({
   useEffect(() => {
     if (accessState?.status !== "pending") return;
     pollRef.current = setInterval(async () => {
+      if (document.visibilityState !== "visible") return;
       try {
         const result = await pollViewLink(file.id);
         if (result.status !== "pending") {
           setAccessState(result);
-          if (pollRef.current) clearInterval(pollRef.current);
+          clearInterval(pollRef.current!);
         }
       } catch { /* ignore */ }
-    }, 3000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    }, 5000);
+    return () => clearInterval(pollRef.current!);
   }, [accessState?.status, file.id]);
 
   const handleAccess = async () => {
@@ -235,14 +226,15 @@ function FileRow({
   };
 
   const handleDelete = async () => {
-    if (!confirm(`Hapus "${file.file_name}"? File akan dipindahkan ke Trash Google Drive (dapat dipulihkan 30 hari).`)) return;
     setDeleting(true);
     try {
       await deleteFile(file.id);
+      setConfirmDelete(false);
       onDeleted?.(file.id);
     } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Gagal menghapus file");
+    } finally {
       setDeleting(false);
-      alert(e instanceof Error ? e.message : "Gagal menghapus file");
     }
   };
 
@@ -274,11 +266,10 @@ function FileRow({
       await moveFile(file.id, targetFolderId);
       onMoved?.(file.id);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Gagal memindahkan file");
+      toast.error(e instanceof Error ? e.message : "Gagal memindahkan file");
     }
   };
 
-  const typeColor = DOC_TYPE_COLORS[file.doc_type ?? ""] ?? "text-text-muted bg-bg-ctrl";
   const { Icon: FileIcon, cls: iconCls } = fileVisual(file.file_name);
   const recent = isRecent(file.created_at);
 
@@ -339,7 +330,7 @@ function FileRow({
           type="button"
           onClick={rowClickable ? handleAccess : undefined}
           disabled={!rowClickable || loading}
-          title={status === "approved" ? "Buka file" : status === "none" ? "Klik untuk minta akses / buka file" : undefined}
+          title="Buka file"
           className={`flex items-center gap-2.5 sm:gap-3 flex-1 min-w-0 text-left ${rowClickable ? "cursor-pointer" : "cursor-default"}`}
         >
           <div className={`w-9 h-9 rounded-[var(--r)] flex items-center justify-center shrink-0 transition-transform duration-150 group-hover:scale-[1.06] ${selected ? "bg-primary text-white" : iconCls}`}>
@@ -347,11 +338,6 @@ function FileRow({
           </div>
 
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            {file.doc_type && (
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-[3px] shrink-0 tracking-wide ${typeColor}`}>
-                {file.doc_type}
-              </span>
-            )}
             <span className="text-[12.5px] sm:text-[13px] font-semibold font-mono truncate text-text">{file.file_name}</span>
             {recent && (
               <span className="hidden sm:inline-flex items-center gap-1 shrink-0 text-[10px] font-semibold text-green">
@@ -364,6 +350,7 @@ function FileRow({
 
       {/* Right cluster — metadata (now fills the empty right space) + status + actions */}
       <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        {file.workspace_project_id&&<a href={`/workspace?project=${encodeURIComponent(file.workspace_project_id)}${file.workspace_task_id?`&wo=${encodeURIComponent(file.workspace_task_id)}`:""}`} title={`Buka ${file.project_name||"Project"}`} className="inline-flex min-h-11 items-center rounded px-2 text-xs font-medium text-primary hover:bg-primary/10 sm:min-h-7">{file.workspace_task_id?"WO":"Project"}</a>}
         {!renaming && (
           <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-text-muted tabular-nums whitespace-nowrap">
             <span>{formatBytes(file.file_size)}</span>
@@ -388,7 +375,7 @@ function FileRow({
                   <DropdownItem icon={<FolderInput className="w-3.5 h-3.5 text-text-muted" />} label="Pindahkan" onClick={() => { close(); setShowMoveModal(true); }} />
                 )}
                 {canDelete && (
-                  <DropdownItem icon={deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} label="Hapus" danger disabled={deleting} onClick={() => { close(); handleDelete(); }} />
+                  <DropdownItem icon={deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} label="Hapus" danger disabled={deleting} onClick={() => { close(); setConfirmDelete(true); }} />
                 )}
               </>
             )}
@@ -405,6 +392,40 @@ function FileRow({
           title="Pindahkan File"
           subtitle={file.file_name}
         />
+      )}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-bg border border-border rounded-xl shadow-2xl w-full max-w-sm flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b border-border bg-bg-ctrl">
+              <h3 className="text-sm font-semibold text-text">Hapus File?</h3>
+              <p className="text-xs text-text-muted mt-1 truncate" title={file.file_name}>
+                {file.file_name}
+              </p>
+            </div>
+            <div className="p-5 text-xs text-text-muted">
+              File akan dipindahkan ke Trash Google Drive (dapat dipulihkan dalam 30 hari).
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border bg-bg-ctrl">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => setConfirmDelete(false)}
+                className="btn btn-ghost btn-sm"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={handleDelete}
+                className="btn btn-sm bg-red text-white hover:bg-red/90"
+              >
+                {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />}
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

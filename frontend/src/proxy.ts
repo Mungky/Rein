@@ -10,23 +10,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { createMiddlewareClient } from "@/lib/supabase/server";
 
 /** Halaman yang menuntut sesi login yang sah.
- *
- *  `/r-net` dan `/m` DULU TIDAK ADA di daftar ini, dan itu bukan kelalaian
- *  kecil: matcher di bawah mencocokkan keduanya, jadi gerbang ini benar-benar
- *  berjalan untuk mereka — memanggil getUser(), lalu melewatkannya begitu saja.
- *  Satu-satunya penjaga yang tersisa ada di sisi klien, yang baru bekerja
- *  SETELAH halamannya terkirim dan React sempat jalan.
- *
- *  Dicocokkan sebagai awalan: "/r-net" dan "/r-net/apa-pun" sama-sama terjaga,
- *  tapi nama lain yang kebetulan berawalan sama (mis. "/r-net-publik") tidak
- *  ikut terseret karena pemisah "/"-nya diwajibkan. */
+ *  Dicocokkan sebagai awalan. */
 const PROTECTED_PREFIXES = [
   "/dashboard",
   "/dcc",
   "/approvals",
   "/admin",
   "/workspace",
-  "/r-net",
   "/m",
 ];
 
@@ -38,6 +28,24 @@ function isProtectedPath(pathname: string): boolean {
 
 export async function proxy(request: NextRequest) {
   const { supabase, response } = createMiddlewareClient(request);
+  // Fast-path untuk prefetch link hover Next.js: hindari remote network getUser()
+  // jika cookie auth Supabase sudah ada di browser.
+  const isPrefetch =
+    request.headers.get("next-router-prefetch") === "1" ||
+    request.headers.get("purpose") === "prefetch";
+  if (isPrefetch) {
+    const hasAuthCookie = request.cookies
+      .getAll()
+      .some(
+        (c) =>
+          c.name.startsWith("sb-") &&
+          (c.name.includes("auth-token") || c.name.includes("access-token"))
+      );
+    if (hasAuthCookie) {
+      return response;
+    }
+  }
+
 
   // Validate the session against the auth server (and refresh it if the access
   // token is stale but the refresh token is still good). getUser() actually
@@ -45,13 +53,7 @@ export async function proxy(request: NextRequest) {
   // an expired session is reliably detected here instead of slipping through
   // the gate and stranding the app on a "Memuat profil…" spinner (Masalah G).
   //
-  // PERHATIKAN AKIBAT SAMPINGANNYA, karena inilah jawaban sebenarnya atas
-  // "sesi habis tapi saya masih bisa buka apa saja": pemanggilan ini juga
-  // MEMPERPANJANG sesinya. Selama refresh token masih hidup, setiap navigasi
-  // menerbitkan access token baru — jadi sesi tidak pernah kedaluwarsa dengan
-  // sendirinya, seberapa lama pun ditinggal. Menambah baris ke daftar terjaga
-  // di atas tidak mengubah itu sama sekali; yang mengubahnya adalah batas diam
-  // di sisi R-Net (features/scada/use-idle.ts).
+  // Catatan: pemanggilan ini juga memperpanjang sesi (refresh token).
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -60,7 +62,7 @@ export async function proxy(request: NextRequest) {
 
   // If user is authenticated and visiting login, redirect to DCC (default landing)
   if (user && pathname === "/login") {
-    return NextResponse.redirect(new URL("/dcc", request.url));
+    return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
   // If user is not authenticated and trying to access a protected route, redirect to login

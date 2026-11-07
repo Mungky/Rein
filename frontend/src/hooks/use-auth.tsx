@@ -5,6 +5,7 @@ import type { User, Session } from "@supabase/supabase-js";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type { AppRole, Permission } from "@/lib/utils/roles";
 import { ROLE_LABELS, getInitials } from "@/lib/utils/roles";
+import { requestProfile, clearProfileRequest } from "@/lib/auth/profile-request";
 import { usernameToEmail } from "@/lib/auth/username";
 
 export interface UserProfile {
@@ -26,6 +27,7 @@ export interface AuthState {
   loading: boolean;
   login: (username: string, password: string) => Promise<{ error: string | null }>;
   logout: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -34,14 +36,12 @@ export function useAuth(): AuthState {
   const supabase = useMemo(() => getSupabaseClient(), []);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!supabase);
 
   const fetchProfile = useCallback(
     async (accessToken: string): Promise<{ profile: UserProfile | null; expired: boolean }> => {
       try {
-        const res = await fetch(`${API_URL}/api/auth/me`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        const res = await requestProfile(API_URL, accessToken);
         // 401/403 = the token is rejected (expired/invalid), not a transient
         // outage. Signal "expired" so the caller can clear the stale session
         // and send the user to login instead of hanging (Masalah G). A network
@@ -69,10 +69,7 @@ export function useAuth(): AuthState {
   );
 
   useEffect(() => {
-    if (!supabase) {
-      setLoading(false);
-      return;
-    }
+    if (!supabase) return;
 
     let cancelled = false;
 
@@ -133,6 +130,32 @@ export function useAuth(): AuthState {
     };
   }, [supabase, fetchProfile]);
 
+  useEffect(() => {
+    if (!supabase) return;
+    const handleProfileUpdated = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const { profile: prof } = await fetchProfile(session.access_token);
+      if (prof) setProfile(prof);
+    };
+    window.addEventListener("rein:profile-updated", handleProfileUpdated);
+    return () => window.removeEventListener("rein:profile-updated", handleProfileUpdated);
+  }, [supabase, fetchProfile]);
+
+  const refreshProfile = useCallback(async () => {
+    if (!supabase) return;
+    clearProfileRequest();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+    const { profile: prof } = await fetchProfile(session.access_token);
+    if (prof) setProfile(prof);
+    window.dispatchEvent(new CustomEvent("rein:profile-updated"));
+  }, [supabase, fetchProfile]);
+
   const login = useCallback(
     async (username: string, password: string): Promise<{ error: string | null }> => {
       if (!supabase) {
@@ -152,6 +175,7 @@ export function useAuth(): AuthState {
 
   const logout = useCallback(async () => {
     if (!supabase) return;
+    clearProfileRequest();
     await supabase.auth.signOut();
     setUser(null);
     setProfile(null);
@@ -173,17 +197,18 @@ export function useAuth(): AuthState {
    *  "belum boleh", bukan "boleh". */
   const role = profile?.role ?? null;
 
-  return { user, profile, role, loading, login, logout };
+  return { user, profile, role, loading, login, logout, refreshProfile };
 }
 
 /** Convenience helpers */
 export function useAuthDisplay() {
-  const { profile, role } = useAuth();
+  const { profile, role, refreshProfile } = useAuth();
   const userName = profile?.full_name || "Pengguna";
   const userInitials = profile?.initials || (profile?.full_name ? getInitials(profile.full_name) : "U");
   const username = profile?.username || "";
+  const avatarUrl = profile?.avatar_url || null;
   const roleLabel = role ? (ROLE_LABELS[role] ?? role) : "—";
-  return { userName, userInitials, username, roleLabel, role };
+  return { userName, userInitials, username, avatarUrl, roleLabel, role, refreshProfile };
 }
 
 export type { Permission };

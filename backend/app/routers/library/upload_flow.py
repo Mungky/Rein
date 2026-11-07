@@ -175,7 +175,7 @@ async def upload_file(
     doc_number: str | None = Form(None),
     title: str | None = Form(None),
     note: str | None = Form(None),
-    use_original_name: bool = Form(False),
+    use_original_name: bool = Form(True),
 ):
     """
     Receive confirmed file + metadata. Upload directly to the folder's Drive location.

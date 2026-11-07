@@ -2,14 +2,15 @@
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-class ApiClient {
+export class ApiClient {
   private baseUrl: string;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, private withSession = true) {
     this.baseUrl = baseUrl;
   }
 
   private async getAuthHeaders(): Promise<HeadersInit> {
+    if (!this.withSession) return { "Content-Type": "application/json" };
     // Get Supabase session token
     const { getSupabaseClient } = await import("@/lib/supabase/client");
     const supabase = getSupabaseClient();
@@ -97,25 +98,32 @@ class ApiClient {
     return res.json();
   }
 
-  async upload<T>(path: string, file: File, fieldName = "file"): Promise<T> {
-    const { getSupabaseClient } = await import("@/lib/supabase/client");
-    const supabase = getSupabaseClient();
-    const { data: { session } } = await supabase.auth.getSession();
-
+  async upload<T>(path: string, file: File, fieldName = "file", fields: Record<string, string> = {}): Promise<T> {
+    const headers = await this.getAuthHeaders() as Record<string, string>;
+    delete headers["Content-Type"];
     const formData = new FormData();
     formData.append(fieldName, file);
+    Object.entries(fields).forEach(([key, value]) => formData.append(key, value));
 
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
-      headers: {
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
+      headers,
       body: formData,
     });
     if (!res.ok) throw new ApiError(res.status, await res.text());
     return res.json();
   }
 
+  async multipart<T>(path: string, fields: Record<string,string>, files: File[] = [], method: "POST" | "PUT" = "POST"): Promise<T> {
+    const headers = await this.getAuthHeaders() as Record<string,string>;
+    delete headers["Content-Type"];
+    const body = new FormData();
+    Object.entries(fields).forEach(([key,value]) => body.append(key,value));
+    files.forEach(file => body.append("files",file));
+    const response = await fetch(`${this.baseUrl}${path}`, {method,headers,body});
+    if (!response.ok) throw new ApiError(response.status,await response.text());
+    return response.json();
+  }
 }
 
 class ApiError extends Error {

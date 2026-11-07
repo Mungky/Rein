@@ -8,7 +8,6 @@ import {
   Lock,
   Shield,
   FolderKanban,
-  MonitorPlay,
 } from "lucide-react";
 import { ROLE_LABELS } from "@/lib/utils/roles";
 import type { AppRole, Permission } from "@/lib/utils/roles";
@@ -28,13 +27,12 @@ const NAV_PRIMARY: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutGrid, locked: isLocked("dashboard") },
   {
     id: "workspace",
-    label: "Workspace",
+    label: "Project",
     icon: FolderKanban,
     permission: "workspace:view",
     locked: isLocked("workspace"),
   },
   { id: "dcc", label: "Document Manager", icon: FolderOpen },
-  { id: "scada", label: "R-Net", icon: MonitorPlay, permission: "scada:view" },
 ];
 
 const NAV_ADMIN: NavItem[] = [
@@ -51,6 +49,7 @@ export interface SidebarProps {
   userRole: AppRole;
   userName?: string;
   userInitials?: string;
+  userAvatarUrl?: string | null;
   /** When true, show icon-only collapsed sidebar (for tablet). */
   collapsed?: boolean;
 }
@@ -73,8 +72,10 @@ function SidebarItem({
       type="button"
       onClick={onClick}
       title={item.label}
+      aria-label={collapsed ? item.label : undefined}
+      aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex h-[38px] items-center",
+        "relative flex h-11 sm:h-[38px] items-center",
         "border-none text-left font-medium whitespace-nowrap",
         "font-sans text-[13px] cursor-pointer",
         "transition-all duration-[var(--tr)]",
@@ -113,6 +114,7 @@ export function Sidebar({
   userRole,
   userName = "Pengguna",
   userInitials = "U",
+  userAvatarUrl = null,
   collapsed = false,
 }: SidebarProps) {
   const roleLabel = ROLE_LABELS[userRole] ?? userRole;
@@ -210,12 +212,17 @@ export function Sidebar({
         >
           <div
             className={cn(
-              "flex size-8 shrink-0 items-center justify-center",
+              "flex size-8 shrink-0 items-center justify-center overflow-hidden",
               "rounded-full bg-gradient-to-br from-primary to-primary-hover text-text-inv",
               "text-[11px] font-bold shadow-[0_1px_2px_rgba(37,99,235,0.30)]"
             )}
           >
-            {userInitials}
+            {userAvatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={userAvatarUrl} alt={userName} className="size-full object-cover" />
+            ) : (
+              userInitials
+            )}
           </div>
           {!collapsed && (
             <div className="min-w-0 flex-1">

@@ -15,8 +15,9 @@ export function ThemeToggle({ theme, toggleTheme, className }: ThemeToggleProps)
       type="button"
       onClick={toggleTheme}
       title={theme === "dark" ? "Mode terang" : "Mode gelap"}
+      aria-label={theme === "dark" ? "Aktifkan mode terang" : "Aktifkan mode gelap"}
       className={cn(
-        "inline-flex size-9 shrink-0 cursor-pointer items-center justify-center",
+        "inline-flex size-11 sm:size-9 shrink-0 cursor-pointer items-center justify-center",
         "rounded-[var(--r)] border-none bg-transparent text-text-muted",
         "transition-all duration-[var(--tr)]",
         "hover:bg-bg-hover hover:text-primary",

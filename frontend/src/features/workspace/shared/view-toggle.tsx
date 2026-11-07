@@ -1,24 +1,26 @@
 "use client";
 
-import { List, Columns3, CalendarDays } from "lucide-react";
+import { List, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import type { WorkspaceView } from "../types";
 
 const views: { key: WorkspaceView; label: string; icon: typeof List }[] = [
   { key: "list",     label: "Daftar",   icon: List },
-  { key: "kanban",   label: "Kanban",   icon: Columns3 },
   { key: "calendar", label: "Timeline", icon: CalendarDays },
 ];
 
 export function ViewToggle({ value, onChange }: { value: WorkspaceView; onChange: (v: WorkspaceView) => void }) {
   return (
-    <div className="flex items-center p-0.5 rounded-[var(--r)] bg-bg-ctrl border border-border ml-2">
+    <div role="group" aria-label="Tampilan proyek" className="flex shrink-0 items-center p-0.5 rounded-[var(--r)] bg-bg-ctrl border border-border">
       {views.map(({ key, label, icon: Icon }) => (
         <button
           key={key}
+          aria-label={label}
+          title={label}
+          aria-pressed={value === key}
           onClick={() => onChange(key)}
           className={cn(
-            "flex items-center justify-center gap-1.5 h-7 px-2.5 rounded-[var(--r-sm)] text-[11.5px] font-medium transition-all",
+            "flex min-h-11 min-w-11 items-center justify-center gap-1.5 px-2.5 rounded-[var(--r-sm)] text-[11.5px] font-medium transition-colors sm:min-h-7 sm:min-w-7",
             value === key
               ? "bg-bg text-primary shadow-[var(--shadow-xs)]"
               : "text-text-muted hover:text-text",

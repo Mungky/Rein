@@ -19,3 +19,5 @@ sentry-sdk[fastapi]>=2.0.0
 # Zona waktu IANA (scada_settings.display_timezone). Linux biasanya sudah
 # punya basis datanya, container slim dan Windows tidak.
 tzdata>=2024.1
+
+openpyxl==3.1.5

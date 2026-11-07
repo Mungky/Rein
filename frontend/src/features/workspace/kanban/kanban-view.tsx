@@ -7,28 +7,21 @@ import { useWorkspaceStore } from "../store";
 import { STATUS_LABEL, STATUS_COLOR, PROJECT_STATUSES, KANBAN_COLUMNS } from "../constants";
 import type { Project, Phase, Task } from "@/lib/api/workspace";
 import { workspaceApi } from "@/lib/api/workspace";
-import { useAuthDisplay } from "@/hooks/use-auth";
+import { useAuth, useAuthDisplay } from "@/hooks/use-auth";
 import { useCan } from "@/components/providers/permissions-provider";
 import type { AppRole } from "@/lib/utils/roles";
 import { StatusBadge } from "../shared/status-badge";
 import { WoDetailDrawer } from "../shared/wo-detail-drawer";
 import { KanbanColumn } from "./kanban-column";
 import { KanbanCard } from "./kanban-card";
-
-// Status transitions that are valid via drag in the Kanban view.
-// Any unknown source/target combo silently no-ops to avoid corrupting the
-// server-side lifecycle (which has its own start/submit/review endpoints).
-const VALID_TRANSITIONS: Record<string, string[]> = {
-  todo: ["in_progress"],
-  in_progress: ["todo", "pending_review"],
-  pending_review: ["in_progress", "done"],
-  done: ["in_progress"],
-};
+import { StageBoard } from "./stage-board";
+import { toast } from "sonner";
 
 export function KanbanView({ canManage }: { canManage: boolean; canComplete?: boolean }) {
   const store = useWorkspaceStore();
   const { projects, loading, updateProjectStatus } = store;
   const { role } = useAuthDisplay();
+  const { profile } = useAuth();
   const canExecute = useCan(role as AppRole, "workspace:execute_wo");
   const canReview = useCan(role as AppRole, "workspace:review_wo") || canManage;
 
@@ -46,18 +39,19 @@ export function KanbanView({ canManage }: { canManage: boolean; canComplete?: bo
 
   // Load phases + tasks when a project is selected
   useEffect(() => {
-    if (!selectedProjectId) return;
-    setLoadingDetail(true);
-    workspaceApi.listPhases(selectedProjectId).then(async (phs) => {
-      setPhases(phs);
-      const allTasks: Record<string, Task[]> = {};
-      await Promise.all(
-        phs.map(async (ph) => {
-          allTasks[ph.id] = await workspaceApi.listTasks(ph.id);
-        }),
-      );
-      setTasksByPhase(allTasks);
-    }).finally(() => setLoadingDetail(false));
+    if (!selectedProjectId || process.env.NEXT_PUBLIC_WORKSPACE_STAGES_ENABLED === "1") return;
+    let active = true;
+    void Promise.resolve().then(async () => {
+      if (!active) return;
+      setLoadingDetail(true);
+      try {
+        const phs = await workspaceApi.listPhases(selectedProjectId);
+        const entries = await Promise.all(phs.map(async (phase) => [phase.id, await workspaceApi.listTasks(phase.id)] as const));
+        if (active) { setPhases(phs); setTasksByPhase(Object.fromEntries(entries)); }
+      } catch { if (active) toast.error("Pekerjaan tidak dapat dimuat. Coba buka kembali proyek."); }
+      finally { if (active) setLoadingDetail(false); }
+    });
+    return () => { active = false; };
   }, [selectedProjectId]);
 
   const selectedProject = useMemo(
@@ -130,9 +124,16 @@ export function KanbanView({ canManage }: { canManage: boolean; canComplete?: bo
   // === Task-level Kanban (project drilldown) ===
   if (!selectedProject) return null;
 
+  if (process.env.NEXT_PUBLIC_WORKSPACE_STAGES_ENABLED === "1") {
+    return <StageBoard key={selectedProject.id} project={selectedProject} canManage={canManage}
+      canExecute={canExecute} canReview={canReview} userId={profile?.id}
+      onProjectCreated={(id) => { void store.loadProjects().then(() => setSelectedProjectId(id)); }}
+      onBack={() => setSelectedProjectId(null)} />;
+  }
+
   const allTasks = Object.values(tasksByPhase).flat();
   const tasksByStatus = Object.fromEntries(
-    KANBAN_COLUMNS.map((c) => [c.key, allTasks.filter((t) => t.status === c.key)])
+    KANBAN_COLUMNS.map((c) => [c.key, allTasks.filter((t) => t.status === c.key || (c.key === "in_progress" && t.status === "overdue"))])
   );
 
   function handleTaskDragEnd(event: DragEndEvent) {
@@ -143,9 +144,11 @@ export function KanbanView({ canManage }: { canManage: boolean; canComplete?: bo
     const newStatus = String(over.id) as Task["status"];
     const task = allTasks.find((t) => t.id === taskId);
     if (!task) return;
-    const allowed = VALID_TRANSITIONS[task.status] ?? [];
-    if (!allowed.includes(newStatus)) {
-      // Silent no-op for invalid transitions (e.g. todo → done skipping review)
+    if (task.status === newStatus) return;
+    if (!(newStatus === "in_progress" && ["todo", "overdue"].includes(task.status))) {
+      setOpenTask(task);
+      setOpenTaskPhase(phases.find((phase) => phase.id === task.phase_id)?.name ?? null);
+      toast.info("Gunakan Kirim Laporan atau Review pada detail WO.");
       return;
     }
     // Optimistic update
@@ -156,13 +159,14 @@ export function KanbanView({ canManage }: { canManage: boolean; canComplete?: bo
       );
       return next;
     });
-    workspaceApi.updateTask(taskId, { status: newStatus }).then((updated) => {
+    workspaceApi.startTask(taskId).then((updated) => {
       // Refresh from server
       setTasksByPhase((prev) => ({
         ...prev,
         [task.phase_id]: prev[task.phase_id].map((t) => (t.id === taskId ? updated : t)),
       }));
     }).catch(() => {
+      toast.error("WO tidak dapat dimulai. Muat ulang lalu coba lagi.");
       // Rollback on failure
       setTasksByPhase((prev) => {
         const next = { ...prev };

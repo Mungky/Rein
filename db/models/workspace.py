@@ -10,7 +10,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
-    Date, DateTime, Enum, ForeignKey, Integer, String, Text, func, text,
+    Date, DateTime, Enum, ForeignKey, Integer, Sequence, String, Text, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -46,6 +46,7 @@ class TaskStatus(str, enum.Enum):
     pending_review = "pending_review"  # field worker submitted report, engineer reviewing
     done = "done"
     overdue = "overdue"
+    cancelled = "cancelled"
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +100,7 @@ class WorkspaceProject(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "workspace_projects"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     client_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Manual RPO (Remula Purchase Order) number — user inputs format themselves.
     # Unique-when-not-null via partial index. NULL allowed for ad-hoc projects.
@@ -147,6 +149,9 @@ class WorkspacePhase(UUIDMixin, TimestampMixin, Base):
     )
 
 
+wo_number_seq = Sequence("workspace_wo_number_seq", metadata=Base.metadata)
+
+
 class WorkspaceTask(UUIDMixin, TimestampMixin, Base):
     """A task / Work Order within a phase.
 
@@ -159,6 +164,7 @@ class WorkspaceTask(UUIDMixin, TimestampMixin, Base):
         when engineer approves or asks for revision after the field worker submits.
     """
     __tablename__ = "workspace_tasks"
+    wo_number: Mapped[int] = mapped_column(Integer, wo_number_seq, server_default=wo_number_seq.next_value(), unique=True)
 
     phase_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("workspace_phases.id", ondelete="CASCADE"),

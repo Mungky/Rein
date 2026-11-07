@@ -153,8 +153,11 @@ async def _write_log(
 
 def _file_meta(f: LibraryFile) -> dict:
     """Return metadata-only dict (no drive link — content is locked)."""
+    source = f.proposal_metadata or {}
     return {
         "id": str(f.id),
+        "workspace_project_id": source.get("workspace_project_id"),
+        "workspace_task_id": source.get("workspace_task_id"),
         "file_name": f.file_name or f.original_name,
         "original_name": f.original_name,
         "doc_type": f.doc_type,

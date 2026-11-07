@@ -35,6 +35,7 @@ import type { AppRole } from "@/lib/utils/roles";
 import { useWorkspaceStore } from "../store";
 import { WoDetailDrawer } from "../shared/wo-detail-drawer";
 import { StatusBadge } from "../shared/status-badge";
+import { filterProjects,type ProjectCollection } from "../project-lifecycle";
 
 // =========================================================================
 // Constants
@@ -82,6 +83,8 @@ const TASK_BAR_COLORS: Record<string, { bg: string; border: string }> = {
 // =========================================================================
 
 interface CalendarProps {
+  collection?: ProjectCollection;
+  query?: string;
   project?: Project;
   onBack: () => void;
 }
@@ -95,7 +98,7 @@ interface PhaseRowData {
 // Main component
 // =========================================================================
 
-export function CalendarView({ project, onBack }: CalendarProps) {
+export function CalendarView({ project, onBack,collection="active",query="" }: CalendarProps) {
   const { role } = useAuthDisplay();
   const canManage = useCan(role as AppRole, "workspace:manage");
   const canExecute = useCan(role as AppRole, "workspace:execute_wo");
@@ -105,7 +108,8 @@ export function CalendarView({ project, onBack }: CalendarProps) {
   const [zoom, setZoom] = useState<ZoomLevel>("month");
   // Global mode now uses the bulk /timeline endpoint (3 queries total)
   // instead of fanning out listPhases per project (was N+1).
-  const [globalRows, setGlobalRows] = useState<TimelineProject[]>([]);
+  const [allGlobalRows, setGlobalRows] = useState<TimelineProject[]>([]);
+  const globalRows=useMemo(()=>filterProjects(allGlobalRows,collection,query),[allGlobalRows,collection,query]);
   const [detailRows, setDetailRows] = useState<PhaseRowData[]>([]);
   const [loading, setLoading] = useState(true);
   const [openTask, setOpenTask] = useState<{ task: Task; phaseName: string | null; project: Project | undefined } | null>(null);

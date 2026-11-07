@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Loader2, X, Plus, FolderKanban, Sparkles } from "lucide-react";
+import { apiErrorText } from "@/lib/api/client";
 import { workspaceApi } from "@/lib/api/workspace";
 import type { ProjectTemplate } from "@/lib/api/workspace";
 
@@ -37,7 +38,7 @@ export function CreateProjectModal({ templates, onClose, onCreated }: {
       });
       onCreated();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Gagal membuat proyek.";
+      const msg = apiErrorText(err, "Gagal membuat proyek.");
       // Likely cause: duplicate RPO
       if (msg.toLowerCase().includes("unique") || msg.toLowerCase().includes("duplicate")) {
         setError("Nomor RPO sudah dipakai proyek lain. Gunakan nomor yang berbeda.");
@@ -79,6 +80,7 @@ export function CreateProjectModal({ templates, onClose, onCreated }: {
               <input
                 className="field-input font-mono"
                 placeholder="RPO-26-0007"
+                required
                 value={rpoNumber}
                 onChange={(e) => setRpoNumber(e.target.value)}
                 maxLength={64}
@@ -102,7 +104,8 @@ export function CreateProjectModal({ templates, onClose, onCreated }: {
             <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">Klien</label>
             <input
               className="field-input"
-              placeholder="Nama klien (opsional)"
+              placeholder="Nama klien"
+              required
               value={clientName}
               onChange={(e) => setClientName(e.target.value)}
             />
@@ -138,6 +141,7 @@ export function CreateProjectModal({ templates, onClose, onCreated }: {
               <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">Mulai</label>
               <input
                 type="date"
+                required
                 className="field-input"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
@@ -147,7 +151,9 @@ export function CreateProjectModal({ templates, onClose, onCreated }: {
               <label className="text-[12px] font-semibold text-text-muted mb-1.5 block">Deadline</label>
               <input
                 type="date"
+                required
                 className="field-input"
+                min={startDate || undefined}
                 value={deadline}
                 onChange={(e) => setDeadline(e.target.value)}
               />
@@ -179,7 +185,7 @@ export function CreateProjectModal({ templates, onClose, onCreated }: {
           </button>
           <button
             type="submit"
-            disabled={loading || !name.trim()}
+            disabled={loading || !name.trim() || !rpoNumber.trim() || !clientName.trim() || !startDate || !deadline}
             className="btn btn-primary gap-1.5"
           >
             {loading ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}

@@ -4,11 +4,12 @@ export const STATUS_LABEL: Record<string, string> = {
   // Phase
   pending: "Menunggu",
   // Task / WO
-  todo: "Todo",
-  in_progress: "Dikerjakan",
-  pending_review: "Menunggu Review",
-  done: "Selesai",
-  overdue: "Terlambat",
+  todo: "To Do",
+  in_progress: "On Progress",
+  pending_review: "Need Review",
+  done: "Finish",
+  overdue: "To Do",
+  cancelled: "Cancelled",
 };
 
 /* Uses the design-system tokens (badge-*) where possible, falls back to Tailwind. */
@@ -22,16 +23,18 @@ export const STATUS_COLOR: Record<string, string> = {
   in_progress:    "badge badge-blue",
   pending_review: "badge badge-amber",
   done:           "badge badge-green",
-  overdue:        "badge badge-red",
+  overdue:        "badge badge-muted",
+  cancelled:      "badge badge-red",
 };
 
 export const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed"] as const;
-export const TASK_STATUSES = ["todo", "in_progress", "pending_review", "done", "overdue"] as const;
+export const TASK_STATUSES = ["todo", "in_progress", "pending_review", "done", "cancelled"] as const;
 
 /** Kanban columns — order matters for left-to-right rendering */
 export const KANBAN_COLUMNS = [
-  { key: "todo",           label: "Todo",           accent: "border-l-slate-400" },
-  { key: "in_progress",    label: "Dikerjakan",     accent: "border-l-blue-500"  },
-  { key: "pending_review", label: "Menunggu Review", accent: "border-l-amber-500" },
-  { key: "done",           label: "Selesai",        accent: "border-l-green-500" },
+  { key: "todo",           label: "To Do",           accent: "border-l-slate-400" },
+  { key: "in_progress",    label: "On Progress",     accent: "border-l-blue-500"  },
+  { key: "pending_review", label: "Need Review", accent: "border-l-amber-500" },
+  { key: "done",           label: "Finish",        accent: "border-l-green-500" },
+  { key: "cancelled", label: "Cancelled", accent: "border-l-red-400" },
 ] as const;

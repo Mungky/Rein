@@ -134,79 +134,11 @@ async def request_view_access(
             "message": "Akses langsung berdasarkan izin download folder",
         }
 
-    # Check existing pending request (avoid duplicates)
-    existing_result = await db.execute(
-        select(ViewRequest).where(
-            ViewRequest.file_id == file_id,
-            ViewRequest.requester_id == profile.id,
-            ViewRequest.status == "pending",
-        )
-    )
-    existing = existing_result.scalar_one_or_none()
-    if existing:
-        return {
-            "status": "pending",
-            "request_id": str(existing.id),
-            "expires_at": existing.expires_at.isoformat(),
-            "message": "Permintaan akses sudah dikirim dan menunggu persetujuan",
-        }
-
-    # Create view request
-    token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=VIEW_REQUEST_TTL_SECONDS)
-    view_req = ViewRequest(
-        file_id=file_id,
-        requester_id=profile.id,
-        status="pending",
-        approve_token=token,
-        expires_at=expires_at,
-    )
-    db.add(view_req)
-
-    await _write_log(db, profile, LOG_VIEW_REQUEST, "file", file_id,
-                     metadata={"filename": lib_file.file_name})
-    await db.commit()
-
-    # Send email to configured Pustakawan email addresses
-    from app.services.task_queue import task_queue, TaskType
-
-    # LIBRARIAN_EMAILS env var: comma-separated real emails for Directors/Managers
-    # Falls back to SMTP_FROM (admin email) so at least one person gets notified
-    raw_emails = settings.librarian_emails or settings.smtp_from
-    recipient_emails = [e.strip() for e in raw_emails.split(",") if e.strip()]
-
-    approve_url = (
-        f"{settings.frontend_url}/api/library/view-requests/{token}/approve"
-    )
-    deny_url = (
-        f"{settings.frontend_url}/api/library/view-requests/{token}/deny"
-    )
-    subject = f"[REIN Library] Permintaan Akses: {lib_file.file_name or lib_file.original_name}"
-    body = (
-        f"{profile.full_name} ({profile.role.value}) meminta akses ke:\n"
-        f"  {lib_file.file_name or lib_file.original_name}\n\n"
-        f"Klik untuk menyetujui (berlaku {VIEW_REQUEST_TTL_SECONDS // 60} menit):\n"
-        f"  {approve_url}\n\n"
-        f"Klik untuk menolak:\n"
-        f"  {deny_url}\n\n"
-        f"REIN Digital Library"
-    )
-
-    for email in recipient_emails:
-        task_queue.enqueue(TaskType.SEND_EMAIL, {
-            "to": email,
-            "subject": subject,
-            "body": body,
-        })
-
     return {
-        "status": "pending",
-        "request_id": str(view_req.id),
-        "expires_at": expires_at.isoformat(),
-        "message": (
-            f"Permintaan dikirim ke {len(recipient_emails)} penerima. "
-            f"Persetujuan pertama membuka akses (berlaku {VIEW_REQUEST_TTL_SECONDS // 60} menit)."
-        ),
+        "status": "denied",
+        "direct_access": False,
+        "temp_link": None,
+        "message": "Akses terbatas untuk divisi lain. Silakan minta file ini ke pengguna minimal Level 3.",
     }
 
 

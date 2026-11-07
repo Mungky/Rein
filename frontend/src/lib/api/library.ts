@@ -285,14 +285,7 @@ export async function uploadFile(
   const form = new FormData();
   form.append("file", file);
   form.append("folder_id", values.folder_id);
-  if (values.use_original_name) {
-    form.append("use_original_name", "true");
-  } else {
-    if (values.doc_type) form.append("doc_type", values.doc_type);
-    if (values.doc_number) form.append("doc_number", values.doc_number);
-    if (values.title) form.append("title", values.title);
-    if (values.note) form.append("note", values.note);
-  }
+  form.append("use_original_name", "true");
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -407,6 +400,7 @@ export interface FolderInfo {
   name: string;
   dept: string;
   dept_label: string;
+  own_roles?: string[];
 }
 
 export interface FolderPermEntry {

@@ -2,13 +2,13 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:is([data-theme="dark"] *, .dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-mono);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -168,7 +168,7 @@
   /* Text */
   --rein-text: #0f172a;             /* Slate-900 */
   --rein-text-muted: #64748b;       /* Slate-500 */
-  --rein-text-light: #94a3b8;       /* Slate-400 */
+  --rein-text-light: #64748b;       /* Slate-500 — WCAG AA 4.5:1 */
   --rein-text-inv: #ffffff;
 
   /* Borders */
@@ -270,7 +270,7 @@
   /* Text — slightly off-white, warm */
   --rein-text:       #ECEDEE;
   --rein-text-muted: #9BA1A6;
-  --rein-text-light: #5E6066;
+  --rein-text-light: #9BA1A6;
   --rein-text-inv:   #0B0C0F;
 
   /* Borders — hairline, subtle alpha */
@@ -494,6 +494,12 @@
     font-family: inherit;
     transition: all var(--tr);
     outline: none;
+  }
+  textarea.field,
+  textarea.field-input {
+    height: auto;
+    min-height: 80px;
+    padding: 8px 12px;
   }
   .field:focus,
   .field-input:focus,

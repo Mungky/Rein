@@ -44,6 +44,7 @@ from db.models.document_sequence import DocumentSequence, KNOWN_DOC_TYPES, DOC_T
 from db.models.folder_permission import FolderPermission
 from db.models.library_folder import (
     DEPT_LABELS,
+    DEPT_ROLE_MAP,
     LIBRARIAN_ROLES,
     FolderType,
     LibraryFolder,
@@ -412,13 +413,13 @@ async def set_sequence(
 async def get_folder_permissions(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Return all root dept folders and the full role permission matrix."""
-    # Root dept folders only
+    """Return all active root dept folders and the full role permission matrix."""
     folders_result = await db.execute(
         select(LibraryFolder)
         .where(
             LibraryFolder.is_active.is_(True),
             LibraryFolder.parent_id.is_(None),
+            LibraryFolder.department.in_(list(DEPT_LABELS.keys())),
         )
         .order_by(LibraryFolder.department)
     )
@@ -435,6 +436,7 @@ async def get_folder_permissions(
                 "name": f.name,
                 "dept": f.department,
                 "dept_label": DEPT_LABELS.get(f.department, f.department),
+                "own_roles": sorted(DEPT_ROLE_MAP.get(f.department, set())),
             }
             for f in folders
         ],

@@ -63,6 +63,14 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     "workspace:execute_wo",      # field worker: start + submit-report
     "workspace:review_wo",       # engineer/manager: approve / request revision
     "workspace:close_project",   # close completed project
+    "workspace:view_all",
+    "workspace:archive",
+    "workspace:publish_document",
+    "workspace:approve_document",
+    "workspace:release_work",
+    "workspace:verify_issue",
+    "workspace:purchase",
+    "workspace:warehouse",
     # R-Net / Cloud SCADA (added 2026-07-04 as "SCADA Monitor"; keys stay scada:*)
     "scada:view",                # open /scada, watch streams
     "scada:edit_layout",         # arrange & save own perspectives
@@ -83,13 +91,21 @@ PERMISSION_LABELS: dict[str, str] = {
     "dcc:chat": "Gunakan AI Chat",
     "admin:manage_users": "Kelola Pengguna (Admin)",
     "admin:manage_file_types": "Kelola Jenis File (Admin)",
-    "workspace:view": "Lihat Workspace",
-    "workspace:manage": "Kelola Proyek & Phase",
+    "workspace:view": "Lihat Project",
+    "workspace:manage": "Kelola Project & Tim",
     "workspace:complete_task": "Submit Penyelesaian Task (legacy)",
-    "workspace:create_wo": "Buat Work Order",
-    "workspace:execute_wo": "Eksekusi WO (mulai & submit laporan)",
-    "workspace:review_wo": "Review WO (approve / minta revisi)",
+    "workspace:create_wo": "Tambah & Ubah Work Order (WO)",
+    "workspace:execute_wo": "Buat Logbook & Eksekusi WO",
+    "workspace:review_wo": "Review & Selesaikan WO",
     "workspace:close_project": "Tutup Proyek",
+    "workspace:view_all": "Lihat Semua Project & Beban Kerja",
+    "workspace:archive": "Arsipkan / Pulihkan Project",
+    "workspace:publish_document": "Unggah Dokumen Project",
+    "workspace:approve_document": "Setujui Dokumen Project",
+    "workspace:release_work": "Izinkan Mulai Pekerjaan",
+    "workspace:verify_issue": "Berikan & Verifikasi Keluhan / Kendala",
+    "workspace:purchase": "Update Material & Pembelian (PO)",
+    "workspace:warehouse": "Update Material & Stok Gudang",
     "scada:view": "Lihat R-Net",
     "scada:edit_layout": "Atur Layout R-Net",
     "scada:manage": "Kelola Stream R-Net",
@@ -144,3 +160,17 @@ DEFAULT_ROLE_PERMISSIONS: dict[AppRole, tuple[str, ...]] = {
         "scada:view", "scada:edit_layout", "scada:ack",
     ),
 }
+
+# Defaults for operational coordination; runtime checks always use the editable matrix.
+COORDINATION_DEFAULTS = {
+    AppRole.director: ("workspace:view_all", "workspace:archive", "workspace:publish_document", "workspace:approve_document", "workspace:release_work", "workspace:verify_issue", "workspace:purchase", "workspace:warehouse", "workspace:create_wo", "workspace:review_wo"),
+    AppRole.manager: ("workspace:view_all", "workspace:archive", "workspace:publish_document", "workspace:approve_document", "workspace:release_work", "workspace:verify_issue", "workspace:purchase", "workspace:warehouse", "workspace:create_wo", "workspace:review_wo"),
+    AppRole.operational_manager: ("workspace:view_all", "workspace:archive", "workspace:publish_document", "workspace:approve_document", "workspace:release_work", "workspace:verify_issue", "workspace:create_wo", "workspace:review_wo", "workspace:execute_wo"),
+    AppRole.purchasing: ("workspace:purchase",),
+    AppRole.procurement: ("workspace:view", "workspace:purchase"),
+    AppRole.warehouse_manager: ("workspace:view", "workspace:warehouse"),
+}
+for _role in (AppRole.engineer_mechanical, AppRole.engineer_electrical, AppRole.engineer_process, AppRole.engineer_civil):
+    COORDINATION_DEFAULTS[_role] = ("workspace:view", "workspace:publish_document", "workspace:approve_document", "workspace:release_work", "workspace:verify_issue", "workspace:create_wo", "workspace:execute_wo", "workspace:review_wo")
+for _role, _permissions in COORDINATION_DEFAULTS.items():
+    DEFAULT_ROLE_PERMISSIONS[_role] = tuple(dict.fromkeys((*DEFAULT_ROLE_PERMISSIONS.get(_role, ()), *_permissions)))

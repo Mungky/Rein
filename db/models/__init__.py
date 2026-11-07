@@ -1,6 +1,8 @@
 """Database models package — re-exports all models for Alembic auto-detection."""
 
 from .base import Base, TimestampMixin, UUIDMixin
+from .workspace_logbook import LOGBOOK_MODELS
+from .workspace_coordination import COORDINATION_MODELS
 from .profile import Profile, AppRole, ROLE_LABELS
 from .role_permission import (
     RolePermission,
@@ -21,6 +23,8 @@ from .workspace import (
     WorkspaceProject, WorkspacePhase, WorkspaceTask, TaskCompletion,
     ProjectStatus, PhaseStatus, TaskStatus,
 )
+from .workspace_board import WorkspaceBoard, WorkspaceTaskStage, WorkspaceTaskPlacement
+from .workspace_project import PROJECT_MODELS
 from .library_folder import LibraryFolder, FolderType, DEPT_ROLE_MAP, DEPT_LABELS, LIBRARIAN_ROLES
 from .library_file import LibraryFile, LibraryFileStatus
 from .audit_job import AuditJob, AuditJobStatus, LAYER_NAMES, LAYER_LABELS
@@ -153,3 +157,5 @@ __all__ = [
     "ScadaArchive",
     "ScadaWorkbenchColumn",
 ]
+
+from .workspace_archive import WorkspaceArchiveFile

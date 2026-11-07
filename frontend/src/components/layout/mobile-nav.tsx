@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Home, FolderOpen, FolderKanban, MonitorPlay, Lock } from "lucide-react";
+import { Home, FolderOpen, FolderKanban, Lock } from "lucide-react";
 import type { AppRole, Permission } from "@/lib/utils/roles";
 import { usePermissions } from "@/components/providers/permissions-provider";
 import { isLocked } from "@/lib/feature-flags";
@@ -24,7 +24,6 @@ const items: {
   { id: "dashboard", label: "Beranda", icon: Home, locked: isLocked("dashboard") },
   { id: "workspace", label: "Proyek", icon: FolderKanban, permission: "workspace:view", locked: isLocked("workspace") },
   { id: "dcc", label: "Dokumen", icon: FolderOpen },
-  { id: "scada", label: "R-Net", icon: MonitorPlay, permission: "scada:view" },
 ];
 
 export function MobileNav({ screen, setScreen, userRole }: MobileNavProps) {
@@ -37,7 +36,7 @@ export function MobileNav({ screen, setScreen, userRole }: MobileNavProps) {
   return (
     <nav
       className={cn(
-        "flex h-14 shrink-0 items-center justify-around border-t border-border bg-bg",
+        "flex min-h-14 shrink-0 items-center justify-around border-t border-border bg-bg pb-[env(safe-area-inset-bottom)]",
         "md:hidden"
       )}
     >
@@ -49,8 +48,9 @@ export function MobileNav({ screen, setScreen, userRole }: MobileNavProps) {
             type="button"
             onClick={locked ? undefined : () => setScreen(id)}
             disabled={locked}
+            aria-current={active ? "page" : undefined}
             className={cn(
-              "relative flex min-w-0 flex-1 flex-col items-center gap-0.5 py-1.5",
+              "relative flex min-h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 py-1.5",
               "border-none bg-transparent",
               "transition-[color] duration-[var(--tr)]",
               locked

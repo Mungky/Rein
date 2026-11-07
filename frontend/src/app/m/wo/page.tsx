@@ -18,14 +18,15 @@ import {
 import { useAuth, useAuthDisplay } from "@/hooks/use-auth";
 import { workspaceApi } from "@/lib/api/workspace";
 import type { Task } from "@/lib/api/workspace";
+import { workOrderLabel } from "@/features/workspace/work-order-ui";
 
 function statusInfo(status: string) {
   switch (status) {
-    case "in_progress":    return { label: "Sedang dikerjakan",  Icon: Clock,           cls: "bg-blue-bg text-blue border-blue/30" };
-    case "pending_review": return { label: "Menunggu review",    Icon: ClipboardCheck,  cls: "bg-amber-bg text-amber border-amber/30" };
+    case "in_progress":    return { label: "On Progress",  Icon: Clock,           cls: "bg-blue-bg text-blue border-blue/30" };
+    case "pending_review": return { label: "Need Review",    Icon: ClipboardCheck,  cls: "bg-amber-bg text-amber border-amber/30" };
     case "overdue":        return { label: "Terlambat",          Icon: AlertTriangle,   cls: "bg-red-bg text-red border-red/30" };
-    case "done":           return { label: "Selesai",            Icon: CheckCircle2,    cls: "bg-green-bg text-green border-green/30" };
-    default:               return { label: "Belum mulai",        Icon: Clock,           cls: "bg-bg-ctrl text-text-muted border-border" };
+    case "done":           return { label: "Finish",            Icon: CheckCircle2,    cls: "bg-green-bg text-green border-green/30" };
+    default:               return { label: "To Do",        Icon: Clock,           cls: "bg-bg-ctrl text-text-muted border-border" };
   }
 }
 
@@ -63,7 +64,7 @@ export default function MobileWorkOrdersPage() {
   };
 
   useEffect(() => {
-    if (!authLoading && profile) load();
+    if (!authLoading && profile) void Promise.resolve().then(() => load());
   }, [authLoading, profile]);
 
   const handleLogout = async () => {
@@ -86,10 +87,10 @@ export default function MobileWorkOrdersPage() {
 
   // Group by status
   const groups = [
-    { key: "in_progress",    label: "Lagi Dikerjakan",    items: tasks.filter((t) => t.status === "in_progress") },
-    { key: "todo",           label: "Belum Mulai",        items: tasks.filter((t) => t.status === "todo") },
+    { key: "in_progress",    label: "On Progress",    items: tasks.filter((t) => t.status === "in_progress") },
+    { key: "todo",           label: "To Do",        items: tasks.filter((t) => t.status === "todo") },
     { key: "overdue",        label: "Sudah Lewat Tenggat", items: tasks.filter((t) => t.status === "overdue") },
-    { key: "pending_review", label: "Menunggu Review",    items: tasks.filter((t) => t.status === "pending_review") },
+    { key: "pending_review", label: "Need Review",    items: tasks.filter((t) => t.status === "pending_review") },
   ].filter((g) => g.items.length > 0);
 
   return (
@@ -170,7 +171,7 @@ function MobileWoCard({ task }: { task: Task }) {
     >
       <div className="flex items-start justify-between gap-2">
         <div className="text-[15px] font-bold text-text leading-snug flex-1">
-          {task.name}
+          {workOrderLabel(task)}
         </div>
         <span className={`inline-flex items-center gap-1 text-[10.5px] font-semibold px-2 py-1 rounded-full border ${si.cls} shrink-0`}>
           <si.Icon className="size-3" />

@@ -1,5 +1,5 @@
 """Database session management — async SQLAlchemy session factory."""
-
+import logging
 import os
 import ssl
 from collections.abc import AsyncGenerator
@@ -23,25 +23,40 @@ _database_url = os.getenv(
     "postgresql+asyncpg://postgres:password@localhost:5432/rein",
 )
 
+logger = logging.getLogger(__name__)
 # Ensure the URL uses the asyncpg driver for SQLAlchemy async engine
 if "+asyncpg" not in _database_url:
     _database_url = _database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-# Supabase pooler requires SSL. Create an SSL context that does not
-# verify the certificate (required for Supabase pooled connections)
-# while still encrypting the connection.
-#
-# NB: verifikasi CA SENGAJA tidak dipakai. Pooler Supabase (Supavisor,
-# aws-*.pooler.supabase.com:6543) memakai rantai self-signed yang butuh
-# CA `prod-ca-2021.crt`, tapi CA itu ditolak OpenSSL 3 ("CA cert does not
-# include key usage extension") — jadi verify+CA maupun verify+system-CA
-# sama-sama gagal dan mematikan SELURUH koneksi database. Sampai Supabase
-# menerbitkan CA yang sesuai OpenSSL 3, encrypt-only adalah satu-satunya
-# mode yang berfungsi untuk pooler ini.
-_ssl_ctx = ssl.create_default_context()
-_ssl_ctx.check_hostname = False
-_ssl_ctx.verify_mode = ssl.CERT_NONE
+# Opsi verifikasi SSL jika sertifikat CA disediakan melalui env DB_SSL_CA atau SSL_CERT_FILE.
+# Jika file CA valid ditemukan, gunakan ssl.CERT_REQUIRED untuk verifikasi sertifikat penuh.
+# Jika tidak diset / tidak ditemukan, fallback ke mode encrypt-only (ssl.CERT_NONE)
+# dengan peringatan keamanan yang jelas.
+_ssl_ca_path = os.getenv("DB_SSL_CA") or os.getenv("SSL_CERT_FILE")
 
+if _ssl_ca_path and os.path.isfile(_ssl_ca_path):
+    _ssl_ctx = ssl.create_default_context(cafile=_ssl_ca_path)
+    _ssl_ctx.verify_mode = ssl.CERT_REQUIRED
+    _ssl_ctx.check_hostname = True
+    logger.info("Database SSL verification enabled using CA file: %s", _ssl_ca_path)
+else:
+    # PERINGATAN KEAMANAN:
+    # Verifikasi sertifikat CA dimatikan (CERT_NONE) sehingga koneksi berjalan dalam
+    # mode encrypt-only tanpa validasi identitas host. Mode ini rentan terhadap
+    # serangan Man-in-the-Middle (MitM) jika lalu lintas jaringan dialihkan atau disadap.
+    #
+    # Catatan historis: Pooler transaksi Supabase (Supavisor) lama menggunakan rantai
+    # sertifikat yang ditolak OpenSSL 3 tanpa CA kustom. Untuk mengaktifkan verifikasi penuh
+    # di lingkungan produksi terisolasi, sediakan sertifikat CA melalui DB_SSL_CA atau SSL_CERT_FILE.
+    if _ssl_ca_path:
+        logger.warning(
+            "DB_SSL_CA / SSL_CERT_FILE diset (%s) tetapi file tidak ditemukan. "
+            "Fallback ke mode encrypt-only tanpa verifikasi sertifikat.",
+            _ssl_ca_path,
+        )
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = ssl.CERT_NONE
 # Connection budget. DATABASE_URL must point at Supabase's TRANSACTION pooler
 # (port 6543): server slots are only held for the duration of a query, so many
 # clients (local dev + deployed backend + MQTT bridge + Alembic) can share the
@@ -57,14 +72,16 @@ _ssl_ctx.verify_mode = ssl.CERT_NONE
 #   DB_POOL_SIZE=5  DB_MAX_OVERFLOW=5   (dev)
 # Confirm your pooler's "Pool Size" / max client connections in the Supabase
 # dashboard before raising these further.
-_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
-_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
+_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+_POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "5"))
 
 async_engine = create_async_engine(
     _database_url,
     echo=False,
     pool_size=_POOL_SIZE,
     max_overflow=_MAX_OVERFLOW,
+    pool_timeout=_POOL_TIMEOUT,
     pool_pre_ping=True,
     pool_recycle=1800,  # drop connections Supabase may have idled out
     connect_args={
@@ -95,7 +112,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         try:
             yield session
-            await session.commit()
+            if session.dirty or session.new or session.deleted:
+                await session.commit()
         except Exception:
             await session.rollback()
             raise

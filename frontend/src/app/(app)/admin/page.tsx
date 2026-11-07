@@ -9,76 +9,61 @@ import {
   Shield,
   Users,
   ShieldCheck,
-  FileText,
-  Hash,
   Folder,
   Sparkles,
-  Activity,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { PageGuard } from "@/components/guards/page-guard";
 import { cn } from "@/lib/utils";
-import { getSequences, getFolderPermissions } from "@/lib/api/library";
-import { API_URL, authHeaders } from "@/features/admin/shared";
+import { getFolderPermissions } from "@/lib/api/library";
+import { API_URL, ALL_ROLES, authHeaders } from "@/features/admin/shared";
 import { UsersTab } from "@/features/admin/users-tab";
-import { SequencesTab } from "@/features/admin/sequences-tab";
-import { DocTypesTab, type FileTypeRow } from "@/features/admin/file-types-tab";
 import { PermissionsTab } from "@/features/admin/permissions-tab";
-import { RnetTab } from "@/features/admin/rnet-tab";
 
-const ADMIN_TABS = ["users", "sequences", "doctypes", "permissions", "rnet"] as const;
+const ADMIN_TABS = ["users", "permissions"] as const;
 type AdminTab = (typeof ADMIN_TABS)[number];
 
 interface AdminStats {
   users: number | null;
-  fileTypes: number | null;
   folders: number | null;
-  sequences: number | null;
+  roles: number;
 }
 
 function AdminPageInner() {
   const { profile } = useAuth();
-  // Tab awal boleh ditentukan lewat URL (?tab=rnet). Dipakai tautan "durasi
-  // level diatur di Panel Administrasi → R-Net" di dropdown sensor R-Net:
-  // tanpa ini tautannya mendarat di tab Pengguna dan orang tetap harus
-  // mencari — persis keluhan yang membuatnya ditambahkan.
-  //
-  // useSearchParams, bukan window.location: halaman ini di-prerender statis,
-  // jadi membaca window saat inisialisasi state akan membuat render pertama di
-  // klien berbeda dari HTML server (hydration mismatch). Konsekuensinya
-  // halaman harus berada di bawah <Suspense> — lihat export default di bawah;
-  // tanpa itu `next build` gagal, bukan sekadar memperingatkan.
   const searchParams = useSearchParams();
   const want = searchParams.get("tab");
   const [tab, setTab] = useState<AdminTab>(
     ADMIN_TABS.includes(want as AdminTab) ? (want as AdminTab) : "users"
   );
-  const [stats, setStats] = useState<AdminStats>({ users: null, fileTypes: null, folders: null, sequences: null });
+  const [stats, setStats] = useState<AdminStats>({
+    users: null,
+    folders: null,
+    roles: ALL_ROLES.length,
+  });
 
-  // Fetch summary stats in parallel — pure read, doesn't block tab rendering
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const headers = await authHeaders();
-        const [users, fileTypes, folderRes, seqRes] = await Promise.all([
-          fetch(`${API_URL}/api/admin/users`, { headers }).then((r) => r.ok ? r.json() : []),
-          fetch(`${API_URL}/api/admin/file-types`, { headers }).then((r) => r.ok ? r.json() : []),
+        const [users, folderRes] = await Promise.all([
+          fetch(`${API_URL}/api/admin/users`, { headers }).then((r) => (r.ok ? r.json() : [])),
           getFolderPermissions().catch(() => ({ folders: [], permissions: [] })),
-          getSequences().catch(() => ({ sequences: [] })),
         ]);
         if (cancelled) return;
         setStats({
           users: Array.isArray(users) ? users.length : 0,
-          fileTypes: Array.isArray(fileTypes) ? fileTypes.filter((t: FileTypeRow) => t.is_active).length : 0,
           folders: folderRes.folders.length,
-          sequences: seqRes.sequences.length,
+          roles: ALL_ROLES.length,
         });
       } catch {
-        if (!cancelled) setStats({ users: 0, fileTypes: 0, folders: 0, sequences: 0 });
+        if (!cancelled) setStats({ users: 0, folders: 0, roles: ALL_ROLES.length });
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -95,7 +80,7 @@ function AdminPageInner() {
                 Panel Administrasi
               </h1>
               <p className="text-[13px] text-text-muted mt-1 leading-relaxed">
-                Kelola pengguna, jenis dokumen, nomor urutan arsip, dan izin akses folder seluruh Rein.
+                Kelola akun pengguna, role, serta izin akses modul dan folder dokumen.
               </p>
             </div>
             <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary-soft text-primary text-[11.5px] font-semibold border border-primary/15">
@@ -105,7 +90,7 @@ function AdminPageInner() {
           </div>
 
           {/* Stat cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-5">
             <StatCard
               accent="blue"
               icon={<Users className="size-5" />}
@@ -115,24 +100,17 @@ function AdminPageInner() {
             />
             <StatCard
               accent="purple"
-              icon={<FileText className="size-5" />}
-              label="Jenis File"
-              value={stats.fileTypes}
-              hint="Yang aktif dipakai"
+              icon={<ShieldCheck className="size-5" />}
+              label="Total Role"
+              value={stats.roles}
+              hint="Role yang dapat diatur"
             />
             <StatCard
               accent="green"
               icon={<Folder className="size-5" />}
               label="Folder Dokumen"
               value={stats.folders}
-              hint="Tercatat di sistem"
-            />
-            <StatCard
-              accent="amber"
-              icon={<Hash className="size-5" />}
-              label="Nomor Urutan"
-              value={stats.sequences}
-              hint="Sequence dokumen"
+              hint="Folder aktif di sistem"
             />
           </div>
         </div>
@@ -143,27 +121,15 @@ function AdminPageInner() {
             <TabButton active={tab === "users"} onClick={() => setTab("users")} icon={<Users className="w-3.5 h-3.5" />}>
               Pengguna
             </TabButton>
-            <TabButton active={tab === "sequences"} onClick={() => setTab("sequences")} icon={<Hash className="w-3.5 h-3.5" />}>
-              Nomor Urutan
-            </TabButton>
-            <TabButton active={tab === "doctypes"} onClick={() => setTab("doctypes")} icon={<FileText className="w-3.5 h-3.5" />}>
-              Jenis File
-            </TabButton>
             <TabButton active={tab === "permissions"} onClick={() => setTab("permissions")} icon={<ShieldCheck className="w-3.5 h-3.5" />}>
               Permission Role
-            </TabButton>
-            <TabButton active={tab === "rnet"} onClick={() => setTab("rnet")} icon={<Activity className="w-3.5 h-3.5" />}>
-              R-Net
             </TabButton>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto bg-bg-ctrl">
           {tab === "users" && <UsersTab currentUserId={profile?.id} />}
-          {tab === "sequences" && <SequencesTab />}
-          {tab === "doctypes" && <DocTypesTab />}
           {tab === "permissions" && <PermissionsTab />}
-          {tab === "rnet" && <RnetTab />}
         </div>
       </div>
     </PageGuard>
@@ -171,7 +137,11 @@ function AdminPageInner() {
 }
 
 function StatCard({
-  accent, icon, label, value, hint,
+  accent,
+  icon,
+  label,
+  value,
+  hint,
 }: {
   accent: "blue" | "green" | "amber" | "red" | "purple";
   icon: React.ReactNode;
@@ -196,7 +166,10 @@ function StatCard({
 }
 
 function TabButton({
-  active, onClick, icon, children,
+  active,
+  onClick,
+  icon,
+  children,
 }: {
   active: boolean;
   onClick: () => void;
@@ -220,11 +193,6 @@ function TabButton({
   );
 }
 
-
-/** Suspense di sini bukan hiasan: AdminPageInner memanggil useSearchParams, dan
- *  di rute yang di-prerender Next mewajibkan batas Suspense — tanpa itu
- *  `next build` gagal dengan "Missing Suspense boundary with useSearchParams".
- *  Efeknya isi panel dirender di klien, yang memang wajar untuk halaman admin. */
 export default function AdminPage() {
   return (
     <Suspense fallback={null}>
