@@ -35,8 +35,10 @@ if config.config_file_name is not None:
 # to DATABASE_URL (which in production points at the transaction pooler).
 _db_url = os.getenv("MIGRATION_DATABASE_URL", "") or os.getenv("DATABASE_URL", "")
 if _db_url:
-    # Convert asyncpg URL to standard psycopg2 URL for Alembic migrations
-    _db_url = _db_url.replace("+asyncpg", "")
+    # Convert asyncpg URL to explicit psycopg2 driver URL for Alembic migrations
+    _db_url = _db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    if _db_url.startswith("postgresql://"):
+        _db_url = _db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
     # Supabase pooler requires SSL — inject sslmode into the URL if not present
     if "?" in _db_url:
         if "sslmode" not in _db_url:
