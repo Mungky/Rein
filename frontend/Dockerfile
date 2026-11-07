@@ -8,12 +8,14 @@ RUN bun install --frozen-lockfile
 # Copy source and build
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV BACKEND_URL=http://backend:8000
 RUN bun run build
 
 FROM oven/bun:1-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV BACKEND_URL=http://backend:8000
 
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/node_modules ./node_modules
