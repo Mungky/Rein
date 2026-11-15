@@ -11,6 +11,8 @@ import { runMigrations } from './db/migrate';
 import { env, googleLoginEnabled } from './env';
 import { FixedWindowLimiter } from './lib/rate-limit';
 import { createMailProvider } from './mail/provider';
+import { MAX_ATTACHMENT_BYTES } from '@rein/shared';
+import { createStorage } from './storage';
 
 const MINUTE = 60_000;
 const e = env();
@@ -37,6 +39,8 @@ const deps: Deps = {
   env: e,
   logger,
   mail: createMailProvider(e, logger),
+  storage: await createStorage(e),
+  uploadMaxBytes: MAX_ATTACHMENT_BYTES,
   google: googleLoginEnabled(e)
     ? createGoogleOidc({
         clientId: e.GOOGLE_OAUTH_CLIENT_ID!,
@@ -54,7 +58,13 @@ const deps: Deps = {
 const app = createApp(deps);
 const server = serve({ fetch: app.fetch, port: e.PORT }, (info) => {
   logger.info(
-    { port: info.port, mail: deps.mail.name, google: Boolean(deps.google), spa: deps.webDist },
+    {
+      port: info.port,
+      mail: deps.mail.name,
+      storage: deps.storage.name,
+      google: Boolean(deps.google),
+      spa: deps.webDist,
+    },
     'REIN server berjalan',
   );
 });

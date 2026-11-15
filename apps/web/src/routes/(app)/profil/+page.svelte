@@ -5,12 +5,59 @@
   import Avatar from '$lib/components/Avatar.svelte';
   import Button from '$lib/components/Button.svelte';
   import Modal from '$lib/components/Modal.svelte';
-  import { logout, session } from '$lib/session.svelte';
+  import Icon from '$lib/components/Icon.svelte';
+  import Progress from '$lib/components/Progress.svelte';
+  import { formatBytes } from '$lib/format';
+  import { compressImage } from '$lib/image';
+  import { loadMe, logout, session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
+  import { uploadAttachment } from '$lib/upload';
 
-  /** Profil & keamanan (Figma D/09, M/09). M0: identitas + keluar semua perangkat. */
+  /** Profil & keamanan (Figma D/09, M/09). M0: foto profil + identitas + keluar semua perangkat. */
   let confirmOpen = $state(false);
   let busy = $state(false);
+  let fileInput = $state<HTMLInputElement>();
+  let up = $state<{
+    phase: 'compress' | 'upload';
+    before: number;
+    after: number;
+    pct: number;
+  } | null>(null);
+
+  /** FR-005: foto dipotong & dikompres di klien ke 256×256 WebP, lalu diunggah. */
+  async function onPick(e: Event) {
+    const file = (e.currentTarget as HTMLInputElement).files?.[0];
+    (e.currentTarget as HTMLInputElement).value = '';
+    if (!file || !session.me) return;
+    if (!file.type.startsWith('image/')) {
+      toast('Pilih file gambar (JPG, PNG, WebP, HEIC)', { tone: 'danger' });
+      return;
+    }
+    up = { phase: 'compress', before: file.size, after: 0, pct: 0 };
+    try {
+      const img = await compressImage(file, { square: 256, quality: 0.85 });
+      up = { phase: 'upload', before: file.size, after: img.blob.size, pct: 0 };
+      const res = await uploadAttachment({
+        ownerType: 'user',
+        ownerId: session.me.user.id,
+        category: 'photo',
+        file: {
+          blob: img.blob,
+          name: img.blob.type === 'image/webp' ? 'avatar.webp' : 'avatar.jpg',
+        },
+        width: img.width,
+        height: img.height,
+        onProgress: (f) => up && (up.pct = Math.round(f * 100)),
+      });
+      await api('/api/me/avatar', { body: { attachmentId: res.id } });
+      await loadMe(true);
+      toast('Foto profil diperbarui');
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Gagal memproses foto', { tone: 'danger' });
+    } finally {
+      up = null;
+    }
+  }
 
   async function logoutAll() {
     busy = true;
@@ -32,11 +79,38 @@
   {@const u = session.me.user}
   <div class="pad">
     <section class="card id">
-      <Avatar name={u.fullName} src={u.avatarUrl} size={64} />
+      <button
+        class="av-btn"
+        aria-label="Ganti foto profil"
+        disabled={!!up}
+        onclick={() => fileInput?.click()}
+      >
+        {#key u.avatarUrl}<Avatar name={u.fullName} src={u.avatarUrl} size={64} />{/key}
+        <span class="cam" aria-hidden="true"><Icon name="camera" size={14} /></span>
+      </button>
+      <input bind:this={fileInput} type="file" accept="image/*" hidden onchange={onPick} />
       <div class="who">
         <h1>{u.fullName}</h1>
         <p class="muted">@{u.username} · {u.roleName}</p>
         <p class="muted">{u.email} <span class="ok">✓ Terverifikasi</span></p>
+        {#if up}
+          <div class="up" aria-live="polite">
+            <span class="faint">
+              {#if up.phase === 'compress'}
+                Mengompres {formatBytes(up.before)}…
+              {:else}
+                Dikompres {formatBytes(up.before)} → {formatBytes(up.after)} · mengunggah {up.pct}%
+              {/if}
+            </span>
+            <Progress value={up.phase === 'compress' ? 10 : up.pct} width={220} />
+          </div>
+        {:else}
+          <div>
+            <Button variant="secondary" icon="camera" onclick={() => fileInput?.click()}
+              >Ganti foto</Button
+            >
+          </div>
+        {/if}
       </div>
     </section>
 
@@ -87,8 +161,32 @@
   .who {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
     min-width: 0;
+  }
+  .av-btn {
+    position: relative;
+    border-radius: 50%;
+    flex: none;
+  }
+  .cam {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-strong);
+    color: var(--color-icon-default);
+  }
+  .up {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
   }
   .ok {
     color: var(--color-success-default);

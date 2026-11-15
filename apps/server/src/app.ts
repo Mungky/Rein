@@ -6,6 +6,9 @@ import { isSecureCookie } from './env';
 import { HttpError } from './lib/http';
 import { clientIp } from './lib/ip';
 import { adminUserRoutes } from './routes/admin-users';
+import { attachmentRoutes } from './routes/attachments';
+import { fileRoutes } from './routes/files';
+import { meRoutes } from './routes/me';
 import { authRoutes } from './routes/auth';
 import { googleRoutes } from './routes/google';
 import { healthRoutes } from './routes/health';
@@ -45,19 +48,24 @@ export function createApp(deps: Deps) {
   app.route('/', healthRoutes);
 
   app.use('/api/*', csrfGuard);
-  app.use(
-    '/api/*',
-    bodyLimit({
-      maxSize: JSON_LIMIT,
-      onError: () => {
-        throw new HttpError(413, 'TOO_LARGE', 'Permintaan terlalu besar');
-      },
-    }),
+  const jsonLimit = bodyLimit({
+    maxSize: JSON_LIMIT,
+    onError: () => {
+      throw new HttpError(413, 'TOO_LARGE', 'Permintaan terlalu besar');
+    },
+  });
+  // Upload lampiran di-stream (batas sendiri per file); endpoint lain JSON ≤ 64 KB.
+  app.use('/api/*', (c, next) =>
+    c.req.path.startsWith('/api/attachments') ? next() : jsonLimit(c, next),
   );
   app.use('/api/*', sessionMiddleware);
+  app.use('/files/*', sessionMiddleware);
 
   app.route('/api/auth', authRoutes);
   app.route('/api/admin', adminUserRoutes);
+  app.route('/api/attachments', attachmentRoutes);
+  app.route('/api/me', meRoutes);
+  app.route('/files', fileRoutes);
   app.route('/auth/google', googleRoutes);
 
   app.notFound((c) =>

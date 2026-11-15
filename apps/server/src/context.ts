@@ -6,12 +6,16 @@ import type { Session } from './db/schema';
 import type { Env } from './env';
 import type { FixedWindowLimiter } from './lib/rate-limit';
 import type { MailProvider } from './mail/provider';
+import type { StorageDriver } from './storage/driver';
 
 export interface Deps {
   db: Db;
   env: Env;
   logger: Logger;
   mail: MailProvider;
+  storage: StorageDriver;
+  /** Batas per file (PRD §7: 50 MB). */
+  uploadMaxBytes: number;
   google: GoogleOidc | null;
   limits: {
     /** Kegagalan login per IP: 30 / 15 menit → blokir 15 menit (FR-001 AC3). */

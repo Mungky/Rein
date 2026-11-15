@@ -10,6 +10,9 @@ import { roles, userContacts, users } from '../src/db/schema';
 import { loadEnv, type Env } from '../src/env';
 import { FixedWindowLimiter } from '../src/lib/rate-limit';
 import { NullProvider } from '../src/mail/provider';
+import { LocalDriver } from '../src/storage/local';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 export const hasDb = Boolean(process.env.DATABASE_URL_TEST);
 export const PEPPER = 'test-pepper-test-pepper-test-pepper-0123456789';
@@ -39,13 +42,19 @@ export async function closeTestDb() {
   shared = null;
 }
 
-export function makeApp(opts: { google?: GoogleOidc | null; env?: Record<string, string> } = {}) {
+export const storageRoot = path.join(tmpdir(), `rein-test-storage-${process.pid}`);
+
+export function makeApp(
+  opts: { google?: GoogleOidc | null; env?: Record<string, string>; uploadMaxBytes?: number } = {},
+) {
   const mail = new NullProvider();
   const deps: Deps = {
     db: testDb(),
     env: testEnv(opts.env),
     logger: pino({ level: 'silent' }),
     mail,
+    storage: new LocalDriver(storageRoot),
+    uploadMaxBytes: opts.uploadMaxBytes ?? 50 * 1024 * 1024,
     google: opts.google ?? null,
     limits: {
       loginIp: new FixedWindowLimiter(30, 15 * 60_000),
