@@ -34,7 +34,7 @@ Komponen UI: buka `http://localhost:5173/dev/komponen`.
 
 | Perintah            | Fungsi                                                 |
 | ------------------- | ------------------------------------------------------ |
-| `pnpm dev`          | Web (Vite) + server (tsx watch)                        |
+| `pnpm dev`          | Web (Vite) + server (`node --watch` + tsx)             |
 | `pnpm build`        | Build SPA lalu server                                  |
 | `pnpm test`         | Vitest semua paket (test DB butuh `DATABASE_URL_TEST`) |
 | `pnpm lint`         | ESLint + Prettier                                      |
@@ -42,8 +42,22 @@ Komponen UI: buka `http://localhost:5173/dev/komponen`.
 | `pnpm check:bundle` | Cek budget JS awal ≤ 100 KB gzip, CSS ≤ 20 KB gzip     |
 | `pnpm db:generate`  | Buat migrasi dari schema Drizzle                       |
 | `pnpm db:migrate`   | Jalankan migrasi                                       |
-| `pnpm db:seed`      | Seed role, izin, jenis WO, dan 1 Admin (dari env)      |
+| `pnpm db:seed`      | Seed role & izin default (PRD §2.4) dan 1 Admin (env)  |
 | `pnpm gmail:token`  | Skrip satu kali: ambil refresh token `gmail.send`      |
+| `pnpm infra:up`     | Postgres + OpenWA dev (butuh `.env`)                   |
+
+Tanpa Google Cloud, dev memakai `MAIL_PROVIDER=null` (email ditulis ke log server, termasuk
+tautan aktivasi/verifikasi) dan `STORAGE_DRIVER=local` (`.data/storage`).
+
+## Produksi (Coolify)
+
+```bash
+docker build -t rein .                          # image non-root, API + SPA dalam satu proses
+docker compose -f infra/docker-compose.yml up -d # app + postgres 16 + OpenWA (tanpa port publik)
+```
+
+Migrasi berjalan otomatis saat app start. Health check: `/healthz` (DB ping) dan `/readyz`.
+Isi semua variabel `${…}` di Coolify; letakkan key GCS di `secrets/gcs-key.json` di server.
 
 ## Secret
 

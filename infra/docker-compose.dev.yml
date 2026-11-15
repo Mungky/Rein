@@ -12,6 +12,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?isi POSTGRES_PASSWORD di .env}
       POSTGRES_DB: rein
       OPENWA_DB_PASSWORD: ${OPENWA_DB_PASSWORD:?isi OPENWA_DB_PASSWORD di .env}
+      CREATE_TEST_DB: 'true'
       TZ: UTC
     ports:
       - '127.0.0.1:5432:5432'

@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/build
+**/.svelte-kit
+**/coverage
+.git
+.github
+.claude
+.lighthouseci
+.data
+design
+secrets
+.env
+.env.*
+*.md
+infra

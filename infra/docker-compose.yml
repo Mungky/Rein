@@ -1,0 +1,112 @@
+# Produksi (Coolify): app REIN + postgres 16 + OpenWA (baileys). PRD §11, BUILD-KICKOFF §B.
+# Semua nilai ${...} diisi lewat environment/secret Coolify — tidak ada secret di file ini.
+# Domain & TLS (Let's Encrypt DNS-01) serta ipAllowList LAN/VPN diatur di Coolify/Traefik untuk `app`.
+name: rein
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      TZ: Asia/Jakarta
+      APP_URL: ${APP_URL:-https://rein.remula.co.id}
+      TRUST_PROXY: 'true'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgres://rein:${POSTGRES_PASSWORD}@postgres:5432/rein
+      AUTH_PEPPER: ${AUTH_PEPPER:?isi AUTH_PEPPER}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-https://rein.remula.co.id/auth/google/callback}
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-gmail}
+      GMAIL_SENDER: ${GMAIL_SENDER:-}
+      GMAIL_SENDER_NAME: ${GMAIL_SENDER_NAME:-REIN}
+      GMAIL_REFRESH_TOKEN: ${GMAIL_REFRESH_TOKEN:-}
+      STORAGE_DRIVER: gcs
+      GCS_BUCKET: ${GCS_BUCKET:-rein-attachments}
+      GCS_BACKUP_BUCKET: ${GCS_BACKUP_BUCKET:-rein-backup}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcs-key.json
+      OPENWA_URL: http://openwa:2785
+      OPENWA_API_KEY: ${OPENWA_API_KEY:?isi OPENWA_API_KEY}
+      OPENWA_SESSION_ID: ${OPENWA_SESSION_ID:-rein}
+      OPENWA_WEBHOOK_SECRET: ${OPENWA_WEBHOOK_SECRET:-}
+      REIN_WA_NUMBER: ${REIN_WA_NUMBER:-}
+    volumes:
+      - ../secrets/gcs-key.json:/run/secrets/gcs-key.json:ro
+    expose:
+      - '3000'
+    networks: [rein]
+    mem_limit: 384m
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - 'no-new-privileges:true'
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rein
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?isi POSTGRES_PASSWORD}
+      POSTGRES_DB: rein
+      OPENWA_DB_PASSWORD: ${OPENWA_DB_PASSWORD:?isi OPENWA_DB_PASSWORD}
+      TZ: UTC
+    command: ['postgres', '-c', 'shared_buffers=128MB', '-c', 'max_connections=40']
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U rein -d rein']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [rein]
+    mem_limit: 768m
+
+  openwa:
+    image: ${OPENWA_IMAGE:-ghcr.io/rmyndharis/openwa:latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: '2785'
+      HOME: /tmp
+      ENGINE_TYPE: baileys
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: '5432'
+      DATABASE_NAME: openwa
+      DATABASE_USERNAME: openwa
+      DATABASE_PASSWORD: ${OPENWA_DB_PASSWORD}
+      REDIS_ENABLED: 'false'
+      QUEUE_ENABLED: 'false'
+      SEND_PACING_ENABLED: 'true'
+      API_MASTER_KEY: ${OPENWA_API_KEY}
+      # Webhook OpenWA → REIN di jaringan internal Docker.
+      SSRF_ALLOWED_HOSTS: app
+    # TIDAK ada `ports:` — OpenWA hanya bisa dijangkau dari jaringan internal.
+    # Dashboard (scan QR) dibuka lewat VPN, mis. port-forward sementara dari Coolify.
+    expose:
+      - '2785'
+    volumes:
+      - openwa-data:/app/data
+    networks: [rein]
+    mem_limit: 512m
+    security_opt:
+      - 'no-new-privileges:true'
+
+networks:
+  rein:
+
+volumes:
+  pg-data:
+  openwa-data:
