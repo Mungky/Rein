@@ -1,0 +1,68 @@
+# Dev lokal: postgres (db rein, rein_test, openwa) + OpenWA (engine baileys).
+# App REIN dijalankan di host dengan `pnpm dev`.
+#   docker compose -f infra/docker-compose.dev.yml --env-file .env up -d
+name: rein-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rein
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?isi POSTGRES_PASSWORD di .env}
+      POSTGRES_DB: rein
+      OPENWA_DB_PASSWORD: ${OPENWA_DB_PASSWORD:?isi OPENWA_DB_PASSWORD di .env}
+      TZ: UTC
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U rein -d rein']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  openwa:
+    # Image resmi OpenWA (https://github.com/rmyndharis/OpenWA). Rilis baru hanya diterbitkan
+    # sebagai `latest` / commit SHA di GHCR; pin lewat OPENWA_IMAGE bila perlu.
+    image: ${OPENWA_IMAGE:-ghcr.io/rmyndharis/openwa:latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: '2785'
+      HOME: /tmp
+      ENGINE_TYPE: baileys
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: '5432'
+      DATABASE_NAME: openwa
+      DATABASE_USERNAME: openwa
+      DATABASE_PASSWORD: ${OPENWA_DB_PASSWORD}
+      REDIS_ENABLED: 'false'
+      QUEUE_ENABLED: 'false'
+      SEND_PACING_ENABLED: 'true'
+      # Kunci admin API (≥ 32 karakter). REIN memanggil dengan header X-API-Key.
+      API_MASTER_KEY: ${OPENWA_API_KEY:?isi OPENWA_API_KEY di .env}
+      # Webhook ke server REIN yang berjalan di host saat dev.
+      SSRF_ALLOWED_HOSTS: host.docker.internal
+      # Dashboard dibuka lewat http://localhost:2785 (tanpa TLS) saat dev.
+      CSP_UPGRADE_INSECURE_REQUESTS: 'false'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    # Hanya localhost — OpenWA tidak boleh diekspos ke jaringan.
+    ports:
+      - '127.0.0.1:2785:2785'
+    volumes:
+      - openwa-data:/app/data
+    security_opt:
+      - 'no-new-privileges:true'
+    mem_limit: 512m
+
+volumes:
+  pg-data:
+  openwa-data:

@@ -22,7 +22,7 @@ Prasyarat: Node ≥ 22.12, pnpm 10, Docker Desktop.
 
 ```bash
 cp .env.example .env          # isi nilai yang diperlukan
-docker compose -f infra/docker-compose.dev.yml up -d
+pnpm infra:up                 # = docker compose -f infra/docker-compose.dev.yml --env-file .env up -d
 pnpm install
 pnpm db:migrate && pnpm db:seed
 pnpm dev                      # web: http://localhost:5173 · API: http://localhost:3000
