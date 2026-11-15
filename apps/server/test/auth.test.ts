@@ -206,9 +206,12 @@ describe.skipIf(!hasDb)('FR-002 undangan + aktivasi, FR-003 verifikasi email', (
     expect(done.status).toBe(200);
     expect(await done.json()).toMatchObject({ next: '/verifikasi', mailSent: true });
 
-    // tautan aktivasi sekali pakai
+    // tautan aktivasi sekali pakai; "minta tautan baru" tidak mengirim apa pun untuk akun aktif
     const again = await agent(app).post('/api/auth/activation/inspect', { token });
     expect(again.status).toBe(410);
+    const before = mail.outbox.length;
+    expect((await agent(app).post('/api/auth/activation/request', { token })).status).toBe(200);
+    expect(mail.outbox.length).toBe(before);
 
     const verifyMail = mail.outbox.filter((m) => m.to === email).at(-1)!;
     const code = /(\d{6})/.exec(verifyMail.subject)![1]!;
@@ -225,6 +228,31 @@ describe.skipIf(!hasDb)('FR-002 undangan + aktivasi, FR-003 verifikasi email', (
     expect(row?.status).toBe('active');
     expect(await lastAudit(row!.id, 'user.invited')).toBeTruthy();
     expect(await lastAudit(row!.id, 'user.activated')).toBeTruthy();
+  });
+
+  it('FR-002 AC: tautan kedaluwarsa → "minta tautan baru" mengirim undangan baru', async () => {
+    const { app, mail } = makeApp();
+    const admin = await createUser({ role: 'admin' });
+    const { a: adm } = await login(app, admin.username, admin.password!);
+    const id = uniq();
+    const email = `exp${id}@remula.test`;
+    await adm.post('/api/admin/users/invite', {
+      fullName: 'Sari Handayani',
+      email,
+      username: `sari${id}`,
+      roleId: await roleId('qc'),
+    });
+    const tokenOf = (text: string) => decodeURIComponent(/token=([^\s"&<]+)/.exec(text)![1]!);
+    const first = tokenOf(mail.outbox.filter((m) => m.to === email).at(-1)!.text);
+    await testDb().execute(
+      sql`update verification_codes set expires_at = now() - interval '1 minute' where purpose = 'activate' and expires_at > now()`,
+    );
+    const u = agent(app);
+    expect((await u.post('/api/auth/activation/inspect', { token: first })).status).toBe(410);
+    expect((await u.post('/api/auth/activation/request', { token: first })).status).toBe(200);
+    const second = tokenOf(mail.outbox.filter((m) => m.to === email).at(-1)!.text);
+    expect(second).not.toBe(first);
+    expect((await u.post('/api/auth/activation/inspect', { token: second })).status).toBe(200);
   });
 
   it('magic link memverifikasi tanpa sesi', async () => {

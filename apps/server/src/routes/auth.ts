@@ -25,6 +25,7 @@ import {
 import {
   consumeCode,
   findActivation,
+  issueActivation,
   issueEmailVerification,
   primaryEmailContact,
   tokenInvalid,
@@ -32,8 +33,9 @@ import {
   verifyEmailToken,
 } from '../auth/verification';
 import type { AppEnv, AuthContext, Deps } from '../context';
-import { userContacts, users } from '../db/schema';
+import { userContacts, users, verificationCodes } from '../db/schema';
 import { googleLoginEnabled, isSecureCookie } from '../env';
+import { sha256Hex } from '../lib/crypto';
 import { HttpError, readJson } from '../lib/http';
 import { userAgent } from '../lib/ip';
 
@@ -249,6 +251,45 @@ export const authRoutes = new Hono<AppEnv>()
       username: user.username,
       email: contact?.value ?? null,
     });
+  })
+
+  /**
+   * FR-002 AC: "Minta tautan baru" dari tautan bekas/kedaluwarsa. Token lama (milik pemegang
+   * email) mengidentifikasi user; respons selalu sama agar tidak membocorkan status akun.
+   */
+  .post('/activation/request', async (c) => {
+    const { db, env, mail, limits } = c.var.deps;
+    const { token } = await readJson(c, tokenOnlySchema);
+    const old = await db.query.verificationCodes.findFirst({
+      where: and(
+        eq(verificationCodes.tokenHash, sha256Hex(token)),
+        eq(verificationCodes.purpose, 'activate'),
+      ),
+    });
+    const user = old ? await db.query.users.findFirst({ where: eq(users.id, old.userId) }) : null;
+    const contact = user ? await primaryEmailContact(db, user.id) : null;
+    if (user && contact && user.status === 'invited' && limits.emailSend.take(`act:${user.id}`)) {
+      await issueActivation(
+        { db, env, mail },
+        {
+          userId: user.id,
+          contactId: contact.id,
+          email: contact.value,
+          name: user.fullName,
+          username: user.username,
+          inviterName: 'Admin REIN',
+        },
+      );
+      await audit(db, {
+        actorId: user.id,
+        action: 'user.invite_requested',
+        entityType: 'user',
+        entityId: user.id,
+        ip: c.var.ip,
+        userAgent: userAgent(c),
+      });
+    }
+    return c.json({ ok: true });
   })
 
   /** FR-002: set password → akun aktif → sesi baru → alur verifikasi email. */
