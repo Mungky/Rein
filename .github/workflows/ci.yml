@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint · typecheck · test · build · budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rein
+          POSTGRES_PASSWORD: rein-ci
+          POSTGRES_DB: rein_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U rein -d rein_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL_TEST: postgres://rein:rein-ci@localhost:5432/rein_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Performance budget (JS ≤ 100 KB gzip, CSS ≤ 20 KB)
+        run: pnpm check:bundle
+      - name: Audit dependensi (PRD §9.3)
+        run: pnpm audit --prod --audit-level high
+      - name: Lighthouse CI (mobile, Slow 4G simulasi)
+        env:
+          NODE_ENV: test
+          PORT: '3000'
+          APP_URL: http://localhost:3000
+          DATABASE_URL: postgres://rein:rein-ci@localhost:5432/rein_test
+          AUTH_PEPPER: ci-only-pepper-ci-only-pepper-ci-only-pepper
+          WEB_DIST_DIR: ${{ github.workspace }}/apps/web/build
+        run: npx --yes @lhci/cli@0.16.1 autorun
+      - name: Simpan laporan Lighthouse
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse
+          path: .lighthouseci/
+          if-no-files-found: ignore

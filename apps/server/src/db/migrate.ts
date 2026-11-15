@@ -17,11 +17,3 @@ export async function runMigrations(url: string): Promise<void> {
     await pool.end();
   }
 }
-
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isMain) {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL wajib diisi');
-  await runMigrations(url);
-  console.log('Migrasi selesai.');
-}

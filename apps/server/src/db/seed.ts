@@ -2,8 +2,6 @@
  * Seed idempoten: role bawaan + izin default (PRD §2.4) dan 1 Admin dari env.
  * Izin role yang sudah ada TIDAK ditimpa (Admin mungkin sudah mengubahnya).
  */
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { and, eq } from 'drizzle-orm';
 import {
   DEFAULT_ROLE_PERMISSIONS,
@@ -14,7 +12,7 @@ import {
 } from '@rein/shared';
 import { hashSecret } from '../auth/password';
 import type { Db } from './client';
-import { createDb } from './client';
+
 import { rolePermissions, roles, userContacts, users } from './schema';
 
 export async function seedRoles(db: Db): Promise<Map<string, string>> {
@@ -87,29 +85,4 @@ export async function seedAdmin(
     });
   });
   return 'created';
-}
-
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isMain) {
-  const e = process.env;
-  if (!e.DATABASE_URL) throw new Error('DATABASE_URL wajib diisi');
-  const { db, pool } = createDb(e.DATABASE_URL);
-  try {
-    const roleIds = await seedRoles(db);
-    console.log(`Role bawaan: ${roleIds.size}`);
-    if (e.SEED_ADMIN_EMAIL && e.SEED_ADMIN_PASSWORD && e.AUTH_PEPPER) {
-      const res = await seedAdmin(db, roleIds.get('admin')!, {
-        name: e.SEED_ADMIN_NAME || 'Admin REIN',
-        username: e.SEED_ADMIN_USERNAME || 'admin',
-        email: e.SEED_ADMIN_EMAIL,
-        password: e.SEED_ADMIN_PASSWORD,
-        pepper: e.AUTH_PEPPER,
-      });
-      console.log(res === 'created' ? 'Admin dibuat.' : 'Admin sudah ada, dilewati.');
-    } else {
-      console.log('SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD / AUTH_PEPPER kosong — Admin dilewati.');
-    }
-  } finally {
-    await pool.end();
-  }
 }

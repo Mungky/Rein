@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  loginSchema,
-  normalizePhoneId,
-  passwordSchema,
-  safeNextPath,
-  usernameSchema,
-} from './schemas';
+import { loginSchema, passwordSchema, usernameSchema } from './schemas';
+import { normalizePhoneId, safeNextPath } from './util';
 
 describe('normalizePhoneId', () => {
   it.each([

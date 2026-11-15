@@ -10,8 +10,8 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx --env-file-if-exists=../../.env src/db/migrate.ts",
-    "db:seed": "tsx --env-file-if-exists=../../.env src/db/seed.ts",
+    "db:migrate": "tsx --env-file-if-exists=../../.env src/db/migrate-cli.ts",
+    "db:seed": "tsx --env-file-if-exists=../../.env src/db/seed-cli.ts",
     "gmail:token": "tsx --env-file-if-exists=../../.env scripts/gmail-token.ts"
   },
   "dependencies": {

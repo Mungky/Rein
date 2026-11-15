@@ -1,0 +1,25 @@
+{
+  "ci": {
+    "collect": {
+      "startServerCommand": "node apps/server/dist/index.js",
+      "startServerReadyPattern": "REIN server berjalan",
+      "url": ["http://localhost:3000/masuk"],
+      "numberOfRuns": 3,
+      "settings": {
+        "formFactor": "mobile",
+        "throttlingMethod": "simulate",
+        "screenEmulation": { "mobile": true, "width": 390, "height": 844, "deviceScaleFactor": 2 }
+      }
+    },
+    "assert": {
+      "assertions": {
+        "interactive": ["error", { "maxNumericValue": 3500 }],
+        "largest-contentful-paint": ["error", { "maxNumericValue": 2500 }],
+        "cumulative-layout-shift": ["error", { "maxNumericValue": 0.05 }],
+        "resource-summary:script:size": ["error", { "maxNumericValue": 133120 }],
+        "resource-summary:stylesheet:size": ["warn", { "maxNumericValue": 20480 }]
+      }
+    },
+    "upload": { "target": "filesystem", "outputDir": ".lighthouseci/reports" }
+  }
+}

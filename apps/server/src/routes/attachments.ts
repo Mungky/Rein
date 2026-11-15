@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { Readable, Transform } from 'node:stream';
+import { PassThrough, Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import { ATTACHMENT_CATEGORIES, ATTACHMENT_OWNER_TYPES } from '@rein/shared';
 import Busboy from 'busboy';
@@ -89,6 +90,8 @@ async function storeFile(
     },
     flush(cb) {
       try {
+        // busboy memotong stream saat melewati batas ukuran lalu mengakhirinya ('limit').
+        if (truncated || source.truncated) throw tooLarge(deps.uploadMaxBytes);
         if (!mime) check();
         cb();
       } catch (err) {
@@ -96,11 +99,19 @@ async function storeFile(
       }
     },
   });
-  source.on('limit', () => guard.destroy(tooLarge(deps.uploadMaxBytes)));
-  source.on('error', (err) => guard.destroy(err));
+  let truncated = false;
+  source.on('limit', () => {
+    truncated = true;
+  });
+  const body = new PassThrough();
   try {
-    await deps.storage.put(key, source.pipe(guard), { contentType: 'application/octet-stream' });
+    const piping = pipeline(source, guard, body);
+    await Promise.all([
+      piping,
+      deps.storage.put(key, body, { contentType: 'application/octet-stream' }),
+    ]);
   } catch (err) {
+    body.destroy();
     await deps.storage.delete(key).catch(() => {});
     throw err;
   }
