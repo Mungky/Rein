@@ -1,0 +1,10 @@
+node_modules
+dist
+build
+.svelte-kit
+coverage
+.lighthouseci
+pnpm-lock.yaml
+apps/server/drizzle/meta
+design
+*.md
