@@ -25,19 +25,28 @@
   };
   const title = $derived(chrome.title ?? TITLES[page.url.pathname] ?? 'REIN');
   const crumbs = $derived(
-    chrome.title ? chrome.crumbs : page.url.pathname.startsWith('/admin') ? [{ label: 'Admin' }] : [],
+    chrome.title
+      ? chrome.crumbs
+      : page.url.pathname.startsWith('/admin')
+        ? [{ label: 'Admin' }]
+        : [],
   );
 
   const adminLinks = $derived<NavItem[]>([
     ...(hasGlobal('admin.users')
       ? [{ href: resolve('/admin/pengguna'), label: 'Pengguna', icon: 'users' as const }]
       : []),
-    // Role & izin, Jenis WO, WhatsApp: API sudah ada; halaman web menyusul.
+    ...(hasGlobal('admin.roles')
+      ? [{ href: resolve('/admin/role'), label: 'Role & izin', icon: 'shield' as const }]
+      : []),
   ]);
 
   // FR-004: respons 423 di mana pun → layar PIN, lalu kembali ke halaman ini.
   function onLocked() {
-    void goto(resolve('/kunci') + `?next=${encodeURIComponent(page.url.pathname + page.url.search)}`);
+    void goto(
+      // eslint-disable-next-line svelte/no-navigation-without-resolve -- path memakai resolve(), query next di-encode
+      resolve('/kunci') + `?next=${encodeURIComponent(page.url.pathname + page.url.search)}`,
+    );
   }
 
   onMount(() => {

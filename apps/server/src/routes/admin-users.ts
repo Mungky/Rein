@@ -1,4 +1,4 @@
-import { adminVerifyWhatsAppSchema, inviteUserSchema } from '@rein/shared';
+import { adminVerifyWhatsAppSchema, inviteUserSchema, userRoleSchema } from '@rein/shared';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { audit } from '../audit';
@@ -18,6 +18,40 @@ import { HttpError, notFound, readJson } from '../lib/http';
  */
 export const adminUserRoutes = new Hono<AppEnv>()
   .use(requireVerified)
+
+  .post('/users/:id/role', requirePermission('admin.users'), async (c) => {
+    const a = authOf(c);
+    const { db } = c.var.deps;
+    const id = c.req.param('id');
+    const { roleId } = await readJson(c, userRoleSchema);
+    if (id === a.user.id) {
+      throw new HttpError(
+        409,
+        'SELF',
+        'Minta Admin lain mengubah role akun Anda. Izin role Anda bisa diatur lewat Role & izin.',
+      );
+    }
+    const user = await db.query.users.findFirst({ where: eq(users.id, id) });
+    if (!user) throw notFound('Pengguna tidak ditemukan');
+    const role = await db.query.roles.findFirst({ where: eq(roles.id, roleId) });
+    if (!role)
+      throw new HttpError(422, 'VALIDATION', 'Role tidak ditemukan', {
+        roleId: 'Role tidak ditemukan',
+      });
+    await db.transaction(async (tx) => {
+      await tx.update(users).set({ roleId }).where(eq(users.id, id));
+      await audit(tx, {
+        actorId: a.user.id,
+        action: 'user.role_changed',
+        entityType: 'user',
+        entityId: id,
+        diff: { from: user.roleId, to: roleId },
+        ip: c.var.ip,
+        userAgent: userAgent(c),
+      });
+    });
+    return c.json({ ok: true });
+  })
 
   .get('/roles', requirePermission('admin.users'), async (c) => {
     const rows = await c.var.deps.db

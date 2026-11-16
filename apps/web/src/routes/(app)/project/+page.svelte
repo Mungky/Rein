@@ -163,10 +163,12 @@
     title="Belum ada project"
     message={data.can.create
       ? 'Buat project pertama dari PO yang diterima.'
-      : 'Anda belum menjadi anggota project mana pun.'}
+      : 'Anda belum memiliki izin membuat project. Minta Admin mengaktifkan Buat project pada role Anda atau menambahkan Anda sebagai anggota project.'}
   >
     {#if data.can.create}
       <Button variant="primary" icon="plus" onclick={openCreate}>Buat project</Button>
+    {:else if session.me?.permissions['admin.roles'] === 'all'}
+      <Button href={resolve('/admin/role')}>Atur izin role</Button>
     {/if}
   </EmptyState>
 {:else if view === 'table'}
@@ -192,7 +194,11 @@
                 <Progress value={p.progress} /><span class="tnum faint pc">{p.progress}%</span>
               </span>
               <span class="stack">
-                {#each p.team as t (t.id)}<Avatar name={t.fullName} src={t.avatarUrl} size={20} />{/each}
+                {#each p.team as t (t.id)}<Avatar
+                    name={t.fullName}
+                    src={t.avatarUrl}
+                    size={20}
+                  />{/each}
               </span>
               <span class="cell">
                 <Icon name="calendar" size={12} />{shortDate(p.startDate)} – {shortDate(p.endDate)}
@@ -222,9 +228,13 @@
         {#each g.items as p (p.id)}
           <a class="pc" href={resolve('/(app)/project/[id]', { id: p.id })}>
             <div class="top">
-              <span class="tnum">{p.rpoNumber}</span>{#if p.urgentCount}<span class="urg">!</span>{/if}
+              <span class="tnum">{p.rpoNumber}</span>{#if p.urgentCount}<span class="urg">!</span
+                >{/if}
             </div>
-            <div><b>{p.name}</b><div class="faint small">{p.clientName}</div></div>
+            <div>
+              <b>{p.name}</b>
+              <div class="faint small">{p.clientName}</div>
+            </div>
             <div class="cell prog">
               <Progress value={p.progress} /><span class="tnum faint pc">{p.progress}%</span>
             </div>

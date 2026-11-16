@@ -59,6 +59,14 @@ docker compose -f infra/docker-compose.yml up -d # app + postgres 16 + OpenWA (t
 Migrasi berjalan otomatis saat app start. Health check: `/healthz` (DB ping) dan `/readyz`.
 Isi semua variabel `${…}` di Coolify; letakkan key GCS di `secrets/gcs-key.json` di server.
 
+## Role dan akses
+
+- Desktop: **Admin → Role & izin**. Mobile: **Profil → Admin → Role & izin**.
+- Pilih role, tentukan cakupan izin, lalu **Simpan izin**. Izin membuat project bernama **Membuat project**.
+- Admin bawaan tidak memiliki izin membuat project. Aktifkan izin tersebut untuk role yang bertugas mengelola project; lalu buka **Project → Buat project**.
+- **Admin → Pengguna → Ubah role** untuk mengganti role pengguna lain. Role akun sendiri diubah oleh Admin lain agar akses administrasi tetap terjaga.
+- `pnpm db:seed` menambah 13 role organisasi: empat role pimpinan mengikuti Manager, role lainnya mengikuti pelaksana. Role dan izin yang sudah ada tidak ditimpa. Finance dan Accounting tetap tanpa fitur keuangan.
+
 ## Secret
 
 Secret hanya di `.env` (tidak di-commit). Key JSON service account GCS disimpan di

@@ -9,7 +9,7 @@
   import Progress from '$lib/components/Progress.svelte';
   import { formatBytes } from '$lib/format';
   import { compressImage } from '$lib/image';
-  import { loadMe, logout, session } from '$lib/session.svelte';
+  import { hasGlobal, loadMe, logout, session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
   import { uploadAttachment } from '$lib/upload';
 
@@ -114,6 +114,20 @@
       </div>
     </section>
 
+    {#if hasGlobal('admin.roles') || hasGlobal('admin.users')}
+      <section class="card">
+        <h2>Admin</h2>
+        <p class="muted">Kelola pengguna dan cakupan akses setiap role.</p>
+        <div class="admin-links">
+          {#if hasGlobal('admin.users')}<Button href={resolve('/admin/pengguna')} icon="users"
+              >Pengguna</Button
+            >{/if}
+          {#if hasGlobal('admin.roles')}<Button href={resolve('/admin/role')} icon="shield"
+              >Role & izin</Button
+            >{/if}
+        </div>
+      </section>
+    {/if}
     <section class="card">
       <h2>Keamanan</h2>
       <p class="muted">
@@ -137,6 +151,11 @@
 </Modal>
 
 <style>
+  .admin-links {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
   .pad {
     display: flex;
     flex-direction: column;

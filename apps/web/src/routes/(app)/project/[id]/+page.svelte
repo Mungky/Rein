@@ -40,10 +40,7 @@
   /** Detail project (Figma D/04c–05, M/04–05; FR-021–026, FR-070–071). */
   let { data } = $props();
   const p = $derived(data.project);
-  let rows = $state<WoRow[]>([]);
-  $effect(() => {
-    rows = data.workOrders;
-  });
+  let rows = $derived<WoRow[]>(data.workOrders);
 
   $effect(() => {
     setChrome({
@@ -196,9 +193,8 @@
     if (!memberOpen) return;
     const term = q;
     const t = setTimeout(async () => {
-      dir = (
-        await api<{ users: DirUser[] }>(`/api/directory/users?q=${encodeURIComponent(term)}`)
-      ).users;
+      dir = (await api<{ users: DirUser[] }>(`/api/directory/users?q=${encodeURIComponent(term)}`))
+        .users;
     }, 200);
     return () => clearTimeout(t);
   });
@@ -239,14 +235,13 @@
   }
   let pfiles = $state<PFile[] | null>(null);
   async function loadFiles() {
-    pfiles = (await api<{ attachments: PFile[] }>(`/api/projects/${p.id}/attachments`))
-      .attachments;
+    pfiles = (await api<{ attachments: PFile[] }>(`/api/projects/${p.id}/attachments`)).attachments;
   }
   $effect(() => {
     if (tab === 'files') void loadFiles();
   });
   let upCat = $state<AttachmentCategory>('general');
-  let picker: HTMLInputElement;
+  let picker = $state<HTMLInputElement>();
   let uploadingFile = $state(false);
   async function uploadProjectFile(file: File) {
     uploadingFile = true;
@@ -298,8 +293,11 @@
       <div class="meta">
         <span><Icon name="building" size={14} />{p.client.name}</span>
         <span><Icon name="file" size={14} />{p.rpoNumber}</span>
-        {#if p.location}<span class="hide-m"><Icon name="map-pin" size={14} />{p.location}</span>{/if}
-        <span><Icon name="calendar" size={14} />{shortDate(p.startDate)} – {shortDate(p.endDate)}</span>
+        {#if p.location}<span class="hide-m"><Icon name="map-pin" size={14} />{p.location}</span
+          >{/if}
+        <span
+          ><Icon name="calendar" size={14} />{shortDate(p.startDate)} – {shortDate(p.endDate)}</span
+        >
       </div>
     </div>
     <div class="ph-prog">
@@ -406,7 +404,8 @@
           {#if p.completion.openPunch}({p.completion.openPunch} terbuka){/if}
         </li>
         <li class:ok={p.completion.handoverDate}>
-          <Icon name={p.completion.handoverDate ? 'check' : 'alert'} size={14} />Tanggal serah terima
+          <Icon name={p.completion.handoverDate ? 'check' : 'alert'} size={14} />Tanggal serah
+          terima
           {#if p.can.edit}
             <input
               type="date"
@@ -481,7 +480,7 @@
             if (f) void uploadProjectFile(f);
           }}
         />
-        <Button icon="upload" loading={uploadingFile} onclick={() => picker.click()}>
+        <Button icon="upload" loading={uploadingFile} onclick={() => picker?.click()}>
           Unggah lampiran
         </Button>
       </div>
@@ -540,7 +539,11 @@
         {/each}
       </select>
     </Field>
-    <Field label="Catatan / alasan" id="st-n" hint="Wajib saat menunda atau membuka kembali project.">
+    <Field
+      label="Catatan / alasan"
+      id="st-n"
+      hint="Wajib saat menunda atau membuka kembali project."
+    >
       <textarea id="st-n" bind:value={note} rows="3" maxlength="300"></textarea>
     </Field>
   </form>

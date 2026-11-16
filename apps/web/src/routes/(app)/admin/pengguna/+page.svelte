@@ -7,7 +7,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Input from '$lib/components/Input.svelte';
   import Modal from '$lib/components/Modal.svelte';
-  import { hasGlobal } from '$lib/session.svelte';
+  import { hasGlobal, session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
 
   /** Admin — Pengguna (Figma D/10a, M/10). M0: daftar, undang, kirim ulang, aktif/nonaktif. */
@@ -17,6 +17,7 @@
     fullName: string;
     status: UserStatus;
     roleName: string;
+    roleId: string;
     email: string | null;
     emailVerified: boolean;
     lastActiveAt: string | null;
@@ -35,6 +36,33 @@
   let saving = $state(false);
   let form = $state({ fullName: '', email: '', username: '', roleId: '', whatsapp: '' });
   let fieldErrors = $state<Record<string, string>>({});
+  let roleUser = $state<Row | null>(null);
+  let roleOpen = $state(false);
+  let nextRoleId = $state('');
+  let roleError = $state('');
+
+  function openRole(row: Row) {
+    roleUser = row;
+    nextRoleId = row.roleId;
+    roleError = '';
+    roleOpen = true;
+  }
+
+  async function changeRole() {
+    if (!roleUser) return;
+    saving = true;
+    roleError = '';
+    try {
+      await api(`/api/admin/users/${roleUser.id}/role`, { body: { roleId: nextRoleId } });
+      roleOpen = false;
+      await load();
+      toast('Role pengguna diperbarui.');
+    } catch (err) {
+      roleError = err instanceof ApiError ? err.message : 'Gagal mengubah role';
+    } finally {
+      saving = false;
+    }
+  }
 
   const allowed = hasGlobal('admin.users');
   const filtered = $derived(
@@ -169,6 +197,9 @@
             >{r.lastActiveAt ? fmt.format(new Date(r.lastActiveAt)) : '—'}</span
           >
           <span class="acts" role="cell">
+            {#if r.id !== session.me?.user.id}
+              <Button variant="ghost" onclick={() => openRole(r)}>Ubah role</Button>
+            {/if}
             {#if r.status === 'invited'}
               <Button variant="ghost" onclick={() => act(r, 'resend-invite')}>Kirim ulang</Button>
             {/if}
@@ -217,6 +248,26 @@
   {/snippet}
 </Modal>
 
+<Modal bind:open={roleOpen} title="Ubah role pengguna" width={440}>
+  <p>{roleUser?.fullName} akan mengikuti izin dari role yang dipilih.</p>
+  <div class="field">
+    <label for="next-role">Role</label>
+    <select id="next-role" bind:value={nextRoleId}>
+      {#each roles as r (r.id)}<option value={r.id}>{r.name}</option>{/each}
+    </select>
+  </div>
+  {#if roleError}<p class="msg" role="alert">{roleError}</p>{/if}
+  {#snippet footer()}
+    <Button onclick={() => (roleOpen = false)} disabled={saving}>Batal</Button>
+    <Button
+      variant="primary"
+      onclick={changeRole}
+      loading={saving}
+      disabled={nextRoleId === roleUser?.roleId}>Simpan role</Button
+    >
+  {/snippet}
+</Modal>
+
 <style>
   .toolbar {
     display: flex;
@@ -241,7 +292,7 @@
   .th,
   .tr {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.4fr) 150px 110px 130px 190px;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.4fr) 150px 110px 130px 280px;
     align-items: center;
     gap: 12px;
     padding: 0 24px;
@@ -370,7 +421,7 @@
   @media (max-width: 1100px) {
     .th,
     .tr {
-      grid-template-columns: minmax(0, 1fr) 120px 100px 170px;
+      grid-template-columns: minmax(0, 1fr) 140px 100px 260px;
     }
     .th > :nth-child(2),
     .tr > :nth-child(2),
@@ -392,7 +443,9 @@
       row-gap: 6px;
     }
     .tr > :nth-child(3) {
-      display: none;
+      display: flex;
+      grid-column: 1 / -1;
+      white-space: normal;
     }
     .acts {
       grid-column: 1 / -1;

@@ -147,13 +147,14 @@ describe.skipIf(!hasDb)('lampiran: upload, akses, foto profil', () => {
     expect(res.status).toBe(403);
   });
 
-  it('pemilik jenis project belum didukung di M0 → 422', async () => {
+  it('project pemilik yang tidak ditemukan → 404', async () => {
     const { app } = makeApp();
     const { cookie } = await session(app);
     const res = await upload(app, cookie, { ownerType: 'project', ownerId: crypto.randomUUID() }, [
       { field: 'file', name: 'po.pdf', data: new Uint8Array(Buffer.from('%PDF-1.7')) },
     ]);
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe('NOT_FOUND');
   });
 
   it('bukan multipart → 415; tanpa header CSRF → 403', async () => {

@@ -107,4 +107,6 @@ export const rolePermissionsSchema = z.object({
   permissions: z.array(rolePermissionSchema).max(PERMISSION_KEYS.length),
 });
 
+export const userRoleSchema = z.object({ roleId: z.uuid('Role tidak valid') });
+
 export const adminVerifyWhatsAppSchema = z.object({ phone: phoneSchema.optional() });
