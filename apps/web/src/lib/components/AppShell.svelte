@@ -19,11 +19,17 @@
     back?: string;
     actions?: Snippet;
     onlogout?: () => void;
+    /** Jumlah notifikasi belum dibaca (badge sidebar & bottom nav, FR-080). */
+    unread?: number;
+    /** Menu Admin sesuai izin (dihitung layout). */
+    adminLinks?: NavItem[];
     children: Snippet;
   }
   let {
     user,
     isAdmin = false,
+    unread = 0,
+    adminLinks,
     title,
     crumbs = [],
     back,
@@ -34,21 +40,23 @@
 
   let paletteOpen = $state(false);
 
-  const nav: NavItem[] = [
+  const badge = $derived(unread > 0 ? unread : undefined);
+  const nav = $derived<NavItem[]>([
     { href: resolve('/'), label: 'Beranda', icon: 'home' },
     { href: resolve('/tugas'), label: 'Tugas saya', icon: 'check' },
-    { href: resolve('/notifikasi'), label: 'Notifikasi', icon: 'bell' },
+    { href: resolve('/notifikasi'), label: 'Notifikasi', icon: 'bell', badge },
     { href: resolve('/project'), label: 'Project', icon: 'folder' },
-  ];
-  const bottom: NavItem[] = [
+  ]);
+  const bottom = $derived<NavItem[]>([
     { href: resolve('/'), label: 'Beranda', icon: 'home' },
     { href: resolve('/tugas'), label: 'Tugas', icon: 'check' },
     { href: resolve('/project'), label: 'Project', icon: 'folder' },
-    { href: resolve('/notifikasi'), label: 'Notifikasi', icon: 'bell' },
+    { href: resolve('/notifikasi'), label: 'Notifikasi', icon: 'bell', badge },
     { href: resolve('/profil'), label: 'Profil', icon: 'user' },
-  ];
+  ]);
   const adminItems = $derived<NavItem[]>(
-    isAdmin ? [{ href: resolve('/admin/pengguna'), label: 'Pengguna', icon: 'users' }] : [],
+    adminLinks ??
+      (isAdmin ? [{ href: resolve('/admin/pengguna'), label: 'Pengguna', icon: 'users' }] : []),
   );
 
   const paletteItems = $derived<PaletteItem[]>([

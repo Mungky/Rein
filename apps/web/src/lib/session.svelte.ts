@@ -9,9 +9,17 @@ export interface Me {
     roleName: string;
     avatarUrl: string | null;
     email: string | null;
+    whatsapp: string | null;
   };
   permissions: PermissionMap;
-  verification: { email: boolean };
+  /** D2: akses dibuka bila `any` (email ATAU WhatsApp terverifikasi). */
+  verification: { email: boolean; whatsapp: boolean; any: boolean };
+  device: { hasPin: boolean; trusted: boolean } | null;
+  /** FR-004 AC1: perangkat trusted wajib membuat PIN. */
+  pinRequired: boolean;
+  /** FR-004 AC3: sesi terkunci → layar PIN. */
+  locked: boolean;
+  sessionStartedAt: string;
 }
 
 export const session = $state<{ me: Me | null; loaded: boolean }>({ me: null, loaded: false });
@@ -31,6 +39,12 @@ export async function loadMe(force = false): Promise<Me | null> {
 
 export function invalidateMe(): void {
   session.loaded = false;
+}
+
+/** Izin berlaku (scope apa pun) — untuk menampilkan aksi; server tetap memutuskan. */
+export function hasAny(permission: PermissionKey): boolean {
+  const s = session.me?.permissions[permission];
+  return Boolean(s && s !== 'none');
 }
 
 /** Hanya untuk menampilkan/menyembunyikan aksi — izin sebenarnya selalu dicek di server. */

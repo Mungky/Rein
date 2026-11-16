@@ -1,8 +1,13 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
+  import { onDestroy, onMount } from 'svelte';
+  import { beforeNavigate, goto } from '$app/navigation';
   import { resolve } from '$app/paths';
   import { page } from '$app/state';
+  import { api } from '$lib/api';
+  import { chrome, resetChrome } from '$lib/chrome.svelte';
   import AppShell from '$lib/components/AppShell.svelte';
+  import { live, setUnread, startLive, stopLive } from '$lib/live.svelte';
+  import type { NavItem } from '$lib/nav';
   import { hasGlobal, logout, session } from '$lib/session.svelte';
 
   let { children } = $props();
@@ -14,18 +19,59 @@
     '/notifikasi': 'Notifikasi',
     '/profil': 'Profil & keamanan',
     '/admin/pengguna': 'Pengguna',
+    '/admin/role': 'Role & izin',
+    '/admin/jenis-wo': 'Jenis WO',
+    '/admin/whatsapp': 'WhatsApp',
   };
-  const title = $derived(TITLES[page.url.pathname] ?? 'REIN');
-  const crumbs = $derived(page.url.pathname.startsWith('/admin') ? [{ label: 'Admin' }] : []);
+  const title = $derived(chrome.title ?? TITLES[page.url.pathname] ?? 'REIN');
+  const crumbs = $derived(
+    chrome.title ? chrome.crumbs : page.url.pathname.startsWith('/admin') ? [{ label: 'Admin' }] : [],
+  );
+
+  const adminLinks = $derived<NavItem[]>([
+    ...(hasGlobal('admin.users')
+      ? [{ href: resolve('/admin/pengguna'), label: 'Pengguna', icon: 'users' as const }]
+      : []),
+    // Role & izin, Jenis WO, WhatsApp: API sudah ada; halaman web menyusul.
+  ]);
+
+  // FR-004: respons 423 di mana pun → layar PIN, lalu kembali ke halaman ini.
+  function onLocked() {
+    void goto(resolve('/kunci') + `?next=${encodeURIComponent(page.url.pathname + page.url.search)}`);
+  }
+
+  onMount(() => {
+    startLive();
+    window.addEventListener('rein:locked', onLocked);
+    void api<{ unread: number }>('/api/notifications/unread-count')
+      .then((r) => setUnread(r.unread))
+      .catch(() => {});
+  });
+  onDestroy(() => {
+    stopLive();
+    if (typeof window !== 'undefined') window.removeEventListener('rein:locked', onLocked);
+  });
+  beforeNavigate(({ to, from }) => {
+    if (to?.url.pathname !== from?.url.pathname) resetChrome();
+  });
 
   async function onlogout() {
+    stopLive();
     await logout();
     await goto(resolve('/masuk'));
   }
 </script>
 
 {#if session.me}
-  <AppShell user={session.me.user} isAdmin={hasGlobal('admin.users')} {title} {crumbs} {onlogout}>
+  <AppShell
+    user={session.me.user}
+    {adminLinks}
+    {title}
+    {crumbs}
+    back={chrome.back ?? undefined}
+    unread={live.unread}
+    {onlogout}
+  >
     {@render children()}
   </AppShell>
 {/if}

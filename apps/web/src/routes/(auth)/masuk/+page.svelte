@@ -34,7 +34,7 @@
   let shake = $state(false);
 
   const googleHref = $derived(
-    `/auth/google/start?next=${encodeURIComponent(next)}&remember=${remember ? 1 : 0}`,
+    `/auth/google/start?next=${encodeURIComponent(next)}&remember=${remember ? 1 : 0}&device=${deviceId() ?? ''}`,
   );
 
   async function submit(e: SubmitEvent) {
@@ -50,6 +50,11 @@
         body: { identifier, password, remember, next, deviceId: deviceId() },
       });
       invalidateMe();
+      try {
+        sessionStorage.setItem('rein:unlocked', '1');
+      } catch {
+        // abaikan
+      }
       // eslint-disable-next-line svelte/no-navigation-without-resolve -- res.next = path internal dari server (safeNextPath)
       await goto(res.next, { replaceState: true });
     } catch (err) {

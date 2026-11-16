@@ -68,6 +68,8 @@ export function meResponse(a: AuthContext) {
     device: a.device ? { hasPin: a.device.hasPin, trusted: a.session.trusted } : null,
     pinRequired: isVerified(a) && a.session.trusted && Boolean(a.device) && !a.device?.hasPin,
     locked: a.locked,
+    /** Klien mengunci saat aplikasi dibuka ulang (sessionStorage kosong) — kecuali sesi baru. */
+    sessionStartedAt: a.session.createdAt,
   };
 }
 
@@ -102,7 +104,13 @@ async function findLoginUser(db: Deps['db'], identifier: string) {
 
 export const authRoutes = new Hono<AppEnv>()
   /** Konfigurasi publik halaman login. */
-  .get('/config', (c) => c.json({ googleEnabled: googleLoginEnabled(c.var.deps.env) }))
+  .get('/config', (c) =>
+    c.json({
+      googleEnabled: googleLoginEnabled(c.var.deps.env),
+      // D1: email ditunda → halaman verifikasi menyembunyikan opsi kode email.
+      mailEnabled: c.var.deps.mail.name !== 'null',
+    }),
+  )
 
   /** FR-001: login email/username + password. */
   .post('/login', async (c) => {

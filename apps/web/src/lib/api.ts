@@ -35,6 +35,10 @@ export async function api<T>(
     error?: { code: string; message: string; fields?: Record<string, string> };
   } | null;
   if (!res.ok) {
+    // FR-004: sesi terkunci PIN → layout (app) menampilkan layar PIN.
+    if (res.status === 423 && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('rein:locked'));
+    }
     const e = data?.error;
     throw new ApiError(
       res.status,
