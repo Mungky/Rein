@@ -14,7 +14,10 @@ export type Scope = (typeof SCOPES)[number];
 export const PERMISSIONS = {
   'project.view': { label: 'Melihat project & isinya', scopes: ['all', 'member'] },
   'project.create': { label: 'Membuat project', scopes: ['all'] },
-  'project.edit': { label: 'Edit info project & status', scopes: ['all', 'managed'] },
+  'project.edit': {
+    label: 'Edit info, foto/logo, banner & status project',
+    scopes: ['all', 'managed'],
+  },
   'project.members.manage': { label: 'Kelola anggota project', scopes: ['all', 'managed'] },
   'project.close': { label: 'Menandai Selesai & arsip', scopes: ['all', 'managed'] },
   'wo.create': { label: 'Membuat WO', scopes: ['all', 'managed', 'member'] },

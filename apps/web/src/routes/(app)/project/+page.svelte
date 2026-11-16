@@ -11,11 +11,14 @@
   import Input from '$lib/components/Input.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Progress from '$lib/components/Progress.svelte';
+  import ProjectImagePicker from '$lib/components/ProjectImagePicker.svelte';
   import Segmented from '$lib/components/Segmented.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
   import { shortDate } from '$lib/format';
   import { session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
+  import type { ImageResult } from '$lib/image';
+  import { uploadProjectImages } from '$lib/project-media';
 
   /** Daftar project (Figma D/03, M/03; FR-025) + Buat project 2 langkah (D/04a–b; FR-020). */
   let { data } = $props();
@@ -60,6 +63,10 @@
   let f = $state({ ...EMPTY });
   let errors = $state<Record<string, string>>({});
   let busy = $state(false);
+  let logo = $state<ImageResult | null>(null);
+  let banner = $state<ImageResult | null>(null);
+  let logoProcessing = $state(false);
+  let bannerProcessing = $state(false);
   let users = $state<DirUser[]>([]);
   let picked = $state<Record<string, { role: string; pm: boolean }>>({});
   let uq = $state('');
@@ -76,6 +83,7 @@
 
   function next(e?: SubmitEvent) {
     e?.preventDefault();
+    if (busy || logoProcessing || bannerProcessing) return;
     errors = {};
     if (!f.clientName.trim()) errors.clientName = 'Nama klien wajib diisi';
     if (!f.rpoNumber.trim()) errors.rpoNumber = 'No RPO wajib diisi';
@@ -97,6 +105,7 @@
   }
 
   async function create() {
+    if (busy || logoProcessing || bannerProcessing) return;
     busy = true;
     try {
       const body = Object.fromEntries(
@@ -104,7 +113,8 @@
           .map(([k, v]) => [k, v.trim()])
           .filter(([, v]) => v !== ''),
       );
-      const { id } = await api<{ id: string }>('/api/projects', { body });
+      const media = await uploadProjectImages(session.me!.user.id, logo, banner);
+      const { id } = await api<{ id: string }>('/api/projects', { body: { ...body, ...media } });
       for (const [userId, m] of Object.entries(picked)) {
         if (userId === session.me?.user.id) continue;
         await api(`/api/projects/${id}/members`, {
@@ -129,6 +139,7 @@
   }
 
   function openCreate() {
+    logo = banner = null;
     f = { ...EMPTY };
     picked = {};
     errors = {};
@@ -187,7 +198,15 @@
         <div>
           {#each g.items as p (p.id)}
             <a class="pr" href={resolve('/(app)/project/[id]', { id: p.id })}>
-              <span class="nm"><b>{p.name}</b><span>{p.clientName}</span></span>
+              <span class="nm"
+                ><b
+                  >{#if p.logoUrl}<img
+                      class="project-logo"
+                      src={p.logoUrl}
+                      alt=""
+                    />{/if}{p.name}</b
+                ><span>{p.clientName}</span></span
+              >
               <span class="faint tnum rpo">{p.rpoNumber}</span>
               <span class="cell cats">{catText(p.activeCategories)}</span>
               <span class="cell prog">
@@ -228,6 +247,11 @@
         {#each g.items as p (p.id)}
           <a class="pc" href={resolve('/(app)/project/[id]', { id: p.id })}>
             <div class="top">
+              {#if p.logoUrl}<img
+                  class="project-logo"
+                  src={p.logoUrl}
+                  alt={'Foto/logo ' + p.clientName}
+                />{/if}
               <span class="tnum">{p.rpoNumber}</span>{#if p.urgentCount}<span class="urg">!</span
                 >{/if}
             </div>
@@ -249,6 +273,20 @@
 <Modal bind:open title={step === 1 ? 'Buat project — Info' : 'Buat project — Anggota'} width={600}>
   {#if step === 1}
     <form id="pc-1" class="g" onsubmit={next} novalidate>
+      <div class="two">
+        <ProjectImagePicker
+          kind="logo"
+          bind:image={logo}
+          bind:busy={logoProcessing}
+          disabled={busy}
+        />
+        <ProjectImagePicker
+          kind="banner"
+          bind:image={banner}
+          bind:busy={bannerProcessing}
+          disabled={busy}
+        />
+      </div>
       <div class="two">
         <Input label="Klien" bind:value={f.clientName} error={errors.clientName} maxlength={120} />
         <Input label="No RPO" bind:value={f.rpoNumber} error={errors.rpoNumber} maxlength={40} />
@@ -294,7 +332,12 @@
   {#snippet footer()}
     {#if step === 1}
       <Button onclick={() => (open = false)}>Batal</Button>
-      <Button variant="primary" type="submit" form="pc-1">Lanjut</Button>
+      <Button
+        variant="primary"
+        type="submit"
+        form="pc-1"
+        disabled={logoProcessing || bannerProcessing}>Lanjut</Button
+      >
     {:else}
       <Button onclick={() => (step = 1)}>Kembali</Button>
       <Button variant="primary" loading={busy} onclick={create}>Buat project</Button>
@@ -303,6 +346,15 @@
 </Modal>
 
 <style>
+  .project-logo {
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-md);
+    object-fit: cover;
+    flex: none;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
   .toolbar {
     display: flex;
     align-items: center;

@@ -65,6 +65,7 @@ Isi semua variabel `${…}` di Coolify; letakkan key GCS di `secrets/gcs-key.jso
 - Pilih role, tentukan cakupan izin, lalu **Simpan izin**. Izin membuat project bernama **Membuat project**.
 - Admin bawaan tidak memiliki izin membuat project. Aktifkan izin tersebut untuk role yang bertugas mengelola project; lalu buka **Project → Buat project**.
 - **Admin → Pengguna → Ubah role** untuk mengganti role pengguna lain. Role akun sendiri diubah oleh Admin lain agar akses administrasi tetap terjaga.
+- Foto/logo dan banner bisa dipilih pada form **Buat project**, lalu diganti/dihapus melalui **detail project → Foto & banner**. Pengaturannya memakai izin **Edit info, foto/logo, banner & status project** (`project.edit`, cakupan semua atau project yang dikelola).
 - `pnpm db:seed` menambah 13 role organisasi: empat role pimpinan mengikuti Manager, role lainnya mengikuti pelaksana. Role dan izin yang sudah ada tidak ditimpa. Finance dan Accounting tetap tanpa fitur keuangan.
 
 ## Secret

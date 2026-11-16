@@ -7,6 +7,8 @@ export interface ImageOptions {
   maxSide?: number;
   /** Potong persegi di tengah lalu skala ke ukuran ini (avatar/logo: 256). */
   square?: number;
+  /** Potong di tengah dengan rasio dan ukuran keluaran tertentu (banner/logo project). */
+  crop?: { width: number; height: number };
   /** Kualitas WebP 0–1 (PRD: 0,75). */
   quality?: number;
 }
@@ -42,7 +44,20 @@ export async function processImage(file: Blob, opts: ImageOptions): Promise<Imag
   let sh = bmp.height;
   let w: number;
   let h: number;
-  if (opts.square) {
+  if (opts.crop) {
+    const ratio = opts.crop.width / opts.crop.height;
+    if (sw / sh > ratio) {
+      const croppedWidth = sh * ratio;
+      sx = (sw - croppedWidth) / 2;
+      sw = croppedWidth;
+    } else {
+      const croppedHeight = sw / ratio;
+      sy = (sh - croppedHeight) / 2;
+      sh = croppedHeight;
+    }
+    w = opts.crop.width;
+    h = opts.crop.height;
+  } else if (opts.square) {
     const s = Math.min(sw, sh);
     sx = (sw - s) / 2;
     sy = (sh - s) / 2;

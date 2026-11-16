@@ -16,12 +16,24 @@ export const projectCreateSchema = z
     startDate: isoDate,
     endDate: isoDate,
     description: z.string().trim().max(500, 'Deskripsi maksimal 500 karakter').optional(),
+    logoAttachmentId: z.uuid().optional(),
+    bannerAttachmentId: z.uuid().optional(),
   })
   .refine((v) => v.endDate >= v.startDate, {
     path: ['endDate'],
     message: 'Tanggal selesai tidak boleh sebelum tanggal mulai',
   });
 export type ProjectCreateInput = z.infer<typeof projectCreateSchema>;
+
+export const projectMediaSchema = z
+  .object({
+    expectedUpdatedAt: z.iso.datetime({ offset: true }),
+    logoAttachmentId: z.uuid().nullable().optional(),
+    bannerAttachmentId: z.uuid().nullable().optional(),
+  })
+  .refine((v) => v.logoAttachmentId !== undefined || v.bannerAttachmentId !== undefined, {
+    message: 'Pilih foto/logo atau banner yang ingin diubah',
+  });
 
 export const projectUpdateSchema = z
   .object({

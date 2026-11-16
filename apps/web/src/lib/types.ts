@@ -8,6 +8,7 @@ export interface Person {
 }
 
 export interface ProjectListItem {
+  logoUrl: string | null;
   id: string;
   name: string;
   rpoNumber: string;
@@ -42,6 +43,8 @@ export interface Member {
 }
 
 export interface ProjectDetail {
+  logoUrl: string | null;
+  bannerUrl: string | null;
   id: string;
   name: string;
   rpoNumber: string;
@@ -117,7 +120,12 @@ export interface WoDetail extends WoRow {
   creator: { id: string; fullName: string };
   watchers: Person[];
   isWatching: boolean;
-  references: Array<{ id: string; kind: 'wo' | 'attachment' | 'url'; label?: string; url?: string }>;
+  references: Array<{
+    id: string;
+    kind: 'wo' | 'attachment' | 'url';
+    label?: string;
+    url?: string;
+  }>;
   attachments: FileItem[];
   help: { id: string; requestedBy: string; createdAt: string } | null;
   can: {

@@ -7,6 +7,7 @@ import {
   checkProjectTransition,
   memberUpsertSchema,
   projectCreateSchema,
+  projectMediaSchema,
   projectProgress,
   projectStatusSchema,
   projectUpdateSchema,
@@ -38,6 +39,7 @@ import {
 } from '../db/schema';
 import { HttpError, notFound, readJson } from '../lib/http';
 import { userAgent } from '../lib/ip';
+import { claimProjectImage } from '../lib/project-media';
 import { publishToUsers } from '../notify/bus';
 import { enqueueNotifications, type Tx } from '../notify/outbox';
 
@@ -166,6 +168,8 @@ async function projectDetail(db: Db, a: AuthContext, acc: ProjectAccess) {
     startDate: p.startDate,
     endDate: p.endDate,
     description: p.description,
+    logoUrl: avatarUrl(p.logoAttachmentId),
+    bannerUrl: avatarUrl(p.bannerAttachmentId),
     status: p.status,
     onHoldReason: p.onHoldReason,
     handoverDate: p.handoverDate,
@@ -215,6 +219,7 @@ export const projectRoutes = new Hono<AppEnv>()
         name: projects.name,
         rpoNumber: projects.rpoNumber,
         clientName: clients.name,
+        logoAttachmentId: projects.logoAttachmentId,
         status: projects.status,
         onHoldReason: projects.onHoldReason,
         startDate: projects.startDate,
@@ -261,6 +266,7 @@ export const projectRoutes = new Hono<AppEnv>()
         const active = list.filter((w) => ACTIVE(w.status));
         return {
           ...r,
+          logoUrl: avatarUrl(r.logoAttachmentId),
           progress: projectProgress(list),
           activeCategories: categorySummaries(active).map((s) => s.category),
           urgentCount: active.filter((w) => w.urgent).length,
@@ -295,9 +301,14 @@ export const projectRoutes = new Hono<AppEnv>()
           startDate: body.startDate,
           endDate: body.endDate,
           description: body.description || null,
+          logoAttachmentId: body.logoAttachmentId,
+          bannerAttachmentId: body.bannerAttachmentId,
           createdBy: a.user.id,
         })
         .returning({ id: projects.id });
+      for (const imageId of [body.logoAttachmentId, body.bannerAttachmentId]) {
+        if (imageId) await claimProjectImage(tx, a.user.id, p!.id, imageId);
+      }
       await tx.insert(projectMembers).values({
         projectId: p!.id,
         userId: a.user.id,
@@ -316,7 +327,13 @@ export const projectRoutes = new Hono<AppEnv>()
         action: 'project.created',
         entityType: 'project',
         entityId: p!.id,
-        diff: { name: body.name, rpo: body.rpoNumber, client: body.clientName },
+        diff: {
+          name: body.name,
+          rpo: body.rpoNumber,
+          client: body.clientName,
+          logoAttachmentId: body.logoAttachmentId,
+          bannerAttachmentId: body.bannerAttachmentId,
+        },
         ip: c.var.ip,
         userAgent: userAgent(c),
       });
@@ -330,6 +347,77 @@ export const projectRoutes = new Hono<AppEnv>()
     const { db } = c.var.deps;
     const acc = await loadProjectAccess(db, a, c.req.param('id'));
     return c.json(await projectDetail(db, a, acc));
+  })
+
+  /** FR-021 / §7: foto/logo dan banner memakai project.edit, termasuk saat menghapus. */
+  .put('/:id/media', async (c) => {
+    const a = authOf(c);
+    const { db } = c.var.deps;
+    const acc = await loadProjectAccess(db, a, c.req.param('id'));
+    assertCan(a, 'project.edit', acc.res);
+    const body = await readJson(c, projectMediaSchema);
+    await db.transaction(async (tx) => {
+      const [p] = await tx
+        .select()
+        .from(projects)
+        .where(eq(projects.id, acc.project.id))
+        .for('update');
+      if (!p || p.updatedAt.getTime() !== new Date(body.expectedUpdatedAt).getTime()) {
+        throw new HttpError(
+          409,
+          'STALE',
+          'Project sudah diubah orang lain. Muat ulang lalu coba lagi.',
+        );
+      }
+      const patch: Partial<typeof projects.$inferInsert> = {};
+      const removed: string[] = [];
+      for (const key of ['logoAttachmentId', 'bannerAttachmentId'] as const) {
+        const next = body[key];
+        if (next === undefined || next === p[key]) continue;
+        if (next) await claimProjectImage(tx, a.user.id, p.id, next);
+        patch[key] = next;
+        if (p[key]) removed.push(p[key]);
+      }
+      if (!Object.keys(patch).length) return;
+      await tx.update(projects).set(patch).where(eq(projects.id, p.id));
+      const keep = [
+        body.logoAttachmentId === undefined ? p.logoAttachmentId : body.logoAttachmentId,
+        body.bannerAttachmentId === undefined ? p.bannerAttachmentId : body.bannerAttachmentId,
+      ];
+      for (const id of removed) {
+        if (keep.includes(id)) continue;
+        await tx
+          .update(attachments)
+          .set({ deletedAt: new Date() })
+          .where(
+            and(
+              eq(attachments.id, id),
+              eq(attachments.ownerType, 'project'),
+              eq(attachments.ownerId, p.id),
+            ),
+          );
+      }
+      await audit(tx, {
+        actorId: a.user.id,
+        action: 'project.media_changed',
+        entityType: 'project',
+        entityId: p.id,
+        diff: {
+          before: {
+            logoAttachmentId: p.logoAttachmentId,
+            bannerAttachmentId: p.bannerAttachmentId,
+          },
+          after: patch,
+        },
+        ip: c.var.ip,
+        userAgent: userAgent(c),
+      });
+    });
+    publishToUsers(
+      (await memberList(db, acc.project.id)).map((m) => m.userId),
+      { type: 'project', projectId: acc.project.id },
+    );
+    return c.json(await projectDetail(db, a, await loadProjectAccess(db, a, acc.project.id)));
   })
 
   /** FR-021: edit info project (konkurensi optimistik — pelajaran v1). */

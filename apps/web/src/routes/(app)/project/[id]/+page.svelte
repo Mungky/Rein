@@ -27,6 +27,7 @@
   import Kanban from '$lib/components/Kanban.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Progress from '$lib/components/Progress.svelte';
+  import ProjectMediaModal from '$lib/components/ProjectMediaModal.svelte';
   import Segmented from '$lib/components/Segmented.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
   import WoCreateModal from '$lib/components/WoCreateModal.svelte';
@@ -40,6 +41,7 @@
   /** Detail project (Figma D/04c–05, M/04–05; FR-021–026, FR-070–071). */
   let { data } = $props();
   const p = $derived(data.project);
+  let mediaOpen = $state(false);
   let rows = $derived<WoRow[]>(data.workOrders);
 
   $effect(() => {
@@ -284,10 +286,17 @@
 
 <svelte:head><title>{p.name} · REIN</title></svelte:head>
 
-<div class="banner" aria-hidden="true"></div>
+<div class="banner">
+  {#if p.bannerUrl}<img src={p.bannerUrl} alt={'Banner ' + p.name} />{/if}
+</div>
 <header class="ph">
   <div class="ph-top">
-    <span class="clogo">{initials}</span>
+    <span class="clogo"
+      >{#if p.logoUrl}<img
+          src={p.logoUrl}
+          alt={'Foto/logo ' + p.client.name}
+        />{:else}{initials}{/if}</span
+    >
     <div class="ttl">
       <h1>{p.name}</h1>
       <div class="meta">
@@ -308,6 +317,8 @@
       <Progress value={p.progress} width={180} />
     </div>
     <div class="acts">
+      {#if p.can.edit}<Button icon="image" onclick={() => (mediaOpen = true)}>Foto & banner</Button
+        >{/if}
       {#if p.can.edit || p.can.close}
         <Button icon="refresh" onclick={openStatus}>Status</Button>
       {/if}
@@ -578,8 +589,21 @@
   {/snippet}
 </Modal>
 
+{#if mediaOpen && p.can.edit}
+  <ProjectMediaModal
+    project={p}
+    onclose={() => (mediaOpen = false)}
+    onsaved={async () => {
+      mediaOpen = false;
+      await invalidate('app:project');
+      await invalidate('app:projects');
+    }}
+  />
+{/if}
+
 <style>
   .banner {
+    overflow: hidden;
     height: 72px;
     background: linear-gradient(100deg, var(--color-accent-subtle), var(--color-bg-subtle));
   }
@@ -597,6 +621,7 @@
     flex-wrap: wrap;
   }
   .clogo {
+    overflow: hidden;
     flex: none;
     display: grid;
     place-items: center;
@@ -613,6 +638,13 @@
   .ttl {
     flex: 1;
     min-width: 0;
+  }
+  .banner img,
+  .clogo img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   .meta {
     display: flex;
