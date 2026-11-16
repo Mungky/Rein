@@ -1062,6 +1062,8 @@ async function changeStatus(
 export const homeRoutes = new Hono<AppEnv>().use(requireVerified).get('/', async (c) => {
   const a = authOf(c);
   const { db } = c.var.deps;
+  if (!a.permissions['project.view'] || a.permissions['project.view'] === 'none')
+    return c.json({ stats: { myTasks: 0, urgent: 0, dueSoon: 0, help: 0 }, help: [], tasks: [] });
   const today = todayWib();
   const in7 = new Date(Date.now() + 7 * 86_400_000 + 7 * 3600_000).toISOString().slice(0, 10);
   const mine = await listQuery(db)

@@ -7,6 +7,8 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Input from '$lib/components/Input.svelte';
   import Modal from '$lib/components/Modal.svelte';
+  import UserAccessEditor from '$lib/components/UserAccessEditor.svelte';
+  import UserNotificationSettings from '$lib/components/UserNotificationSettings.svelte';
   import { hasGlobal, session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
 
@@ -40,6 +42,10 @@
   let roleOpen = $state(false);
   let nextRoleId = $state('');
   let roleError = $state('');
+  let selectedUser = $state<Row | null>(null);
+  let settingsOpen = $state(false);
+  let activationLink = $state('');
+  let linkOpen = $state(false);
 
   function openRole(row: Row) {
     roleUser = row;
@@ -100,16 +106,23 @@
     saving = true;
     fieldErrors = {};
     try {
-      const res = await api<{ mailSent: boolean }>('/api/admin/users/invite', {
-        body: { ...form, whatsapp: form.whatsapp.trim() || undefined },
-      });
+      const res = await api<{ mailSent: boolean; activationLink: string }>(
+        '/api/admin/users/invite',
+        {
+          body: {
+            ...form,
+            email: form.email.trim() || undefined,
+            whatsapp: form.whatsapp.trim() || undefined,
+          },
+        },
+      );
       inviteOpen = false;
       if (res.mailSent) toast(`Undangan terkirim ke ${form.email}`);
       else {
-        toast('Pengguna dibuat, tetapi email undangan gagal dikirim. Kirim ulang nanti.', {
-          tone: 'danger',
-        });
+        toast('Pengguna dibuat. Salin tautan aktivasi untuk dibagikan.');
       }
+      activationLink = res.activationLink;
+      linkOpen = true;
       await load();
     } catch (err) {
       if (err instanceof ApiError) {
@@ -123,10 +136,19 @@
 
   async function act(row: Row, action: 'resend-invite' | 'disable' | 'enable') {
     try {
-      await api(`/api/admin/users/${row.id}/${action}`, { body: {} });
+      const result = await api<{ activationLink?: string; mailSent?: boolean }>(
+        `/api/admin/users/${row.id}/${action}`,
+        { body: {} },
+      );
+      if (result.activationLink) {
+        activationLink = result.activationLink;
+        linkOpen = true;
+      }
       toast(
         action === 'resend-invite'
-          ? `Undangan dikirim ulang ke ${row.email}`
+          ? result.mailSent
+            ? `Undangan dikirim ulang ke ${row.email}`
+            : 'Tautan aktivasi baru siap disalin'
           : action === 'disable'
             ? `${row.fullName} dinonaktifkan`
             : `${row.fullName} diaktifkan kembali`,
@@ -197,6 +219,13 @@
             >{r.lastActiveAt ? fmt.format(new Date(r.lastActiveAt)) : '—'}</span
           >
           <span class="acts" role="cell">
+            <Button
+              variant="ghost"
+              onclick={() => {
+                selectedUser = r;
+                settingsOpen = true;
+              }}>Akses & notifikasi</Button
+            >
             {#if r.id !== session.me?.user.id}
               <Button variant="ghost" onclick={() => openRole(r)}>Ubah role</Button>
             {/if}
@@ -224,7 +253,12 @@
       bind:value={form.username}
       error={fieldErrors.username}
     />
-    <Input label="Email" type="email" bind:value={form.email} error={fieldErrors.email} />
+    <Input
+      label="Email (opsional)"
+      type="email"
+      bind:value={form.email}
+      error={fieldErrors.email}
+    />
     <Input
       label="Nomor WhatsApp"
       type="tel"
@@ -246,6 +280,42 @@
     <Button variant="ghost" onclick={() => (inviteOpen = false)}>Batal</Button>
     <Button variant="primary" type="submit" form="invite" loading={saving}>Kirim undangan</Button>
   {/snippet}
+</Modal>
+
+<Modal bind:open={linkOpen} title="Tautan aktivasi pengguna" width={520}>
+  <p>
+    Bagikan tautan ini langsung kepada pengguna. Pengguna dapat memilih WhatsApp, email, atau
+    keduanya. Tautan berlaku 72 jam.
+  </p>
+  <Input label="Tautan aktivasi" value={activationLink} readonly />
+  {#snippet footer()}
+    <Button onclick={() => (linkOpen = false)}>Tutup</Button>
+    <Button
+      variant="primary"
+      onclick={async () => {
+        try {
+          await navigator.clipboard.writeText(activationLink);
+          toast('Tautan disalin');
+        } catch {
+          toast('Salin tautan dari kolom di atas');
+        }
+      }}>Salin tautan</Button
+    >
+  {/snippet}
+</Modal>
+<Modal
+  bind:open={settingsOpen}
+  title={'Akses & notifikasi — ' + (selectedUser?.fullName ?? '')}
+  width={720}
+>
+  {#if selectedUser}
+    <h3>Kanal notifikasi</h3>
+    {#key selectedUser.id}<UserNotificationSettings userId={selectedUser.id} />{/key}
+    {#if hasGlobal('admin.roles')}
+      <h3>Izin khusus pengguna</h3>
+      {#key selectedUser.id}<UserAccessEditor userId={selectedUser.id} />{/key}
+    {/if}
+  {/if}
 </Modal>
 
 <Modal bind:open={roleOpen} title="Ubah role pengguna" width={440}>
@@ -359,6 +429,7 @@
     display: flex;
     justify-content: flex-end;
     gap: 4px;
+    flex-wrap: wrap;
   }
   .grid {
     display: grid;

@@ -65,6 +65,7 @@ Hierarki konten: **Project → Work Order (WO) → Logbook entry → Attachment*
 | Admin | Fajar Nugroho | Laptop | Kelola pengguna, role & izin, jenis WO |
 
 ### 2.2 Model role
+- **Revisi 16 November 2026 (permintaan user):** satu role global tetap menjadi dasar izin. Admin dapat memberi override per pengguna untuk setiap permission dan scope, termasuk `none` untuk menolak akses. Menghapus override mengembalikan izin dari role. Izin efektif selalu diperiksa server; akses administrasi Admin bawaan tetap dilindungi.
 - **Role = divisi + sekumpulan permission flag**, bukan hierarki. Satu user punya tepat **satu role global**. Contoh role: Manager, Engineering/Drafting, Produksi, Purchasing, QC, Admin.
 - Selain role global, user punya **peran di project** (teks bebas atau pilihan, mis. "Project Manager", "Drafter", "Kepala Produksi") lewat `project_members.project_role`. Peran di project bersifat informatif, **kecuali** `is_project_manager = true`. Flag itu memberi status "pengelola" project tersebut, yang dipakai sebagai scope **Project yang dikelola**.
 - **Scope izin:**
@@ -260,7 +261,7 @@ Format AC: *Given / When / Then* atau poin yang bisa diuji. Prioritas: **P0** = 
 - **FR-082 (P1)** Preferensi per user per event per kanal, jam tenang, penggabungan (batching), ringkasan harian, dan mute project (`D/08b`, `M/08b`).
 
 ### 3.10 Admin (Figma `D/10a–c`, `M/10`)
-- **FR-090 (P0) Pengguna:** daftar dengan cari & filter (divisi, status); undang (nama, email, username, role, nomor WA opsional); ubah role; nonaktifkan/aktifkan; kirim ulang undangan; impor CSV [P1].
+- **FR-090 (P0) Pengguna:** daftar dengan cari & filter (divisi, status); undang (nama, username, role; **email dan nomor WA opsional**); ubah role; nonaktifkan/aktifkan; kirim ulang undangan; impor CSV [P1]. Tanpa email, Admin membagikan tautan aktivasi secara langsung. Setelah aktivasi pengguna dapat menghubungkan WhatsApp, email, atau keduanya; minimal satu kontak harus terverifikasi untuk membuka aplikasi.
   - Status: `invited`, `active`, `wa_unverified`, `disabled`.
   - AC: user `disabled` langsung kehilangan semua sesi dan tidak menerima notifikasi.
 - **FR-091 (P0)** Reset password (kirim tautan) & reset PIN semua perangkat.

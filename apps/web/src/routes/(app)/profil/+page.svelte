@@ -7,6 +7,7 @@
   import Modal from '$lib/components/Modal.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import Progress from '$lib/components/Progress.svelte';
+  import UserNotificationSettings from '$lib/components/UserNotificationSettings.svelte';
   import { formatBytes } from '$lib/format';
   import { compressImage } from '$lib/image';
   import { hasGlobal, loadMe, logout, session } from '$lib/session.svelte';
@@ -92,7 +93,10 @@
       <div class="who">
         <h1>{u.fullName}</h1>
         <p class="muted">@{u.username} · {u.roleName}</p>
-        <p class="muted">{u.email} <span class="ok">✓ Terverifikasi</span></p>
+        {#if u.email}<p class="muted">
+            {u.email}
+            {#if session.me.verification.email}<span class="ok">✓ Terverifikasi</span>{/if}
+          </p>{/if}
         {#if up}
           <div class="up" aria-live="polite">
             <span class="faint">
@@ -128,6 +132,10 @@
         </div>
       </section>
     {/if}
+    <section class="card">
+      <h2>Kontak & notifikasi</h2>
+      <UserNotificationSettings />
+    </section>
     <section class="card">
       <h2>Keamanan</h2>
       <p class="muted">

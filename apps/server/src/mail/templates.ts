@@ -32,6 +32,14 @@ function button(href: string, label: string): string {
   return `<p style="margin:20px 0"><a href="${esc(href)}" style="display:inline-block;background:#4f6bed;color:#fff;text-decoration:none;font-weight:500;padding:10px 16px;border-radius:6px">${esc(label)}</a></p>`;
 }
 
+export function notificationMail(title: string, body: string, link: string): RenderedMail {
+  return {
+    subject: `[REIN] ${title}`,
+    html: layout(title, `<p>${esc(body)}</p>${button(link, 'Buka REIN')}`),
+    text: `${title}\n\n${body}\n\n${link}\n${VPN_NOTE}`,
+  };
+}
+
 export function activationMail(p: {
   name: string;
   inviterName: string;

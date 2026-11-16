@@ -61,6 +61,10 @@ Isi semua variabel `${…}` di Coolify; letakkan key GCS di `secrets/gcs-key.jso
 
 ## Role dan akses
 
+- **Admin → Pengguna → Akses & notifikasi**: atur kanal dan pengecualian izin khusus satu pengguna. Pilihan **Ikuti role** mewarisi izin role; **Tidak diizinkan** menolak izin untuk pengguna tersebut. Mengganti role tetap mempertahankan pengecualian pribadi sampai direset.
+- Email dan WhatsApp pada undangan opsional. Salin tautan aktivasi untuk dibagikan langsung; pengguna menghubungkan kontak dan memilih kanal melalui **Profil → Kontak & notifikasi** atau halaman verifikasi. Pengiriman hanya ke kontak terverifikasi; email tetap menunggu layanan Gmail aktif.
+- Role bawaan selain Admin dapat dihapus bila tidak dipakai pengguna, dan tidak dipulihkan otomatis saat startup/seed.
+
 - Desktop: **Admin → Role & izin**. Mobile: **Profil → Admin → Role & izin**.
 - Pilih role, tentukan cakupan izin, lalu **Simpan izin**. Izin membuat project bernama **Membuat project**.
 - Admin bawaan tidak memiliki izin membuat project. Aktifkan izin tersebut untuk role yang bertugas mengelola project; lalu buka **Project → Buat project**.

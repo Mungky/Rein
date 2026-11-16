@@ -3,7 +3,7 @@ import type { MiddlewareHandler } from 'hono';
 import { getCookie } from 'hono/cookie';
 import type { AppEnv, AuthContext } from '../context';
 import { forbidden, HttpError, unauthorized } from '../lib/http';
-import { permissionsForRole } from './permissions';
+import { permissionsForUser } from './permissions';
 import { IDLE_LOCK_MS, loadSession, lockSession, SESSION_COOKIE, touchSession } from './session';
 
 /** Rute yang tetap bisa dipakai saat sesi terkunci PIN. */
@@ -31,7 +31,7 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
       c.set('auth', {
         user: loaded.user,
         session: loaded.session,
-        permissions: await permissionsForRole(db, loaded.user.roleId),
+        permissions: await permissionsForUser(db, loaded.user.id, loaded.user.roleId),
         primaryEmail: loaded.primaryEmail,
         emailVerified: loaded.emailVerified,
         whatsapp: loaded.whatsapp,

@@ -24,6 +24,7 @@ import {
 import { quietUntil, wibDayStart } from '../lib/format';
 import { WA_READY, WaPermanentError, type WhatsAppProvider } from '../wa/provider';
 import { BYPASS_QUIET, type EventKey } from './outbox';
+import { canReceiveProjectNotification } from './access';
 
 export const WA_DAILY_CAP = 20;
 /** PRD §6.2 butir 5: jeda sebelum percobaan ke-2, ke-3, ke-4. */
@@ -57,13 +58,18 @@ interface Claimed extends Record<string, unknown> {
 
 const iso = (d: Date) => d.toISOString();
 
-async function claim(db: Db, now: Date, limit: number): Promise<Claimed[]> {
+export async function claimDeliveries(
+  db: Db,
+  now: Date,
+  channel: 'whatsapp' | 'email' = 'whatsapp',
+  limit = 50,
+): Promise<Claimed[]> {
   const res = await db.execute<Claimed>(sql`
     update notification_deliveries
        set scheduled_for = ${iso(now)}::timestamptz + interval '2 minutes', updated_at = now()
      where id in (
        select id from notification_deliveries
-        where channel = 'whatsapp' and status = 'queued'
+        where channel = ${channel} and status = 'queued'
           and scheduled_for <= ${iso(now)}::timestamptz
         order by scheduled_for
         limit ${limit}
@@ -85,9 +91,11 @@ async function recipientOf(db: Db, notificationId: string) {
   const [row] = await db
     .select({
       userId: notifications.userId,
+      projectId: notifications.projectId,
       event: notifications.eventKey,
       userStatus: users.status,
       phone: userContacts.value,
+      enabled: userSettings.notifyWhatsapp,
       quietEnabled: userSettings.quietEnabled,
       quietStart: userSettings.quietStart,
       quietEnd: userSettings.quietEnd,
@@ -143,7 +151,7 @@ export async function deliverWhatsApp(deps: DeliverDeps, now = new Date()): Prom
     if (s?.status !== WA_READY) return { ...out, notReady: true };
   }
 
-  for (const d of await claim(db, now, BATCH)) {
+  for (const d of await claimDeliveries(db, now, 'whatsapp', BATCH)) {
     const r = await recipientOf(db, d.notification_id);
     const text = d.payload?.text;
     if (!r || !text) {
@@ -153,6 +161,16 @@ export async function deliverWhatsApp(deps: DeliverDeps, now = new Date()): Prom
     }
     if (r.userStatus !== 'active') {
       await update(db, d.id, { status: 'skipped', lastError: 'user_inactive' });
+      out.skipped++;
+      continue;
+    }
+    if (r.enabled === false) {
+      await update(db, d.id, { status: 'skipped', lastError: 'preference_disabled' });
+      out.skipped++;
+      continue;
+    }
+    if (!(await canReceiveProjectNotification(db, r.userId, r.projectId))) {
+      await update(db, d.id, { status: 'skipped', lastError: 'access_revoked' });
       out.skipped++;
       continue;
     }

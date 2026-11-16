@@ -37,8 +37,8 @@ export async function issueActivation(
   deps: MailDeps,
   p: {
     userId: string;
-    contactId: string;
-    email: string;
+    contactId?: string | null;
+    email?: string;
     name: string;
     username: string;
     inviterName: string;
@@ -55,6 +55,7 @@ export async function issueActivation(
     expiresAt: new Date(Date.now() + ACTIVATION_TTL_MS),
   });
   const link = `${env.APP_URL}/aktivasi?token=${encodeURIComponent(token)}`;
+  if (!p.email) return { sent: false, link };
   try {
     await mail.send({
       to: p.email,
@@ -134,10 +135,16 @@ export async function markEmailVerified(db: Db, contactId: string): Promise<void
     ),
   });
   if (taken) throw new HttpError(409, 'EMAIL_TAKEN', 'Email ini sudah dipakai akun lain');
-  await db
-    .update(userContacts)
-    .set({ verifiedAt: new Date(), pending: false })
-    .where(eq(userContacts.id, contactId));
+  await db.transaction(async (tx) => {
+    await tx
+      .update(userContacts)
+      .set({ isPrimary: false, pending: false })
+      .where(and(eq(userContacts.userId, contact.userId), eq(userContacts.kind, 'email')));
+    await tx
+      .update(userContacts)
+      .set({ verifiedAt: new Date(), pending: false, isPrimary: true })
+      .where(eq(userContacts.id, contactId));
+  });
 }
 
 /** Verifikasi kode 6 digit milik user (maks. 5 percobaan per kode). */
@@ -207,4 +214,17 @@ export async function primaryEmailContact(db: Db, userId: string) {
       eq(userContacts.isPrimary, true),
     ),
   });
+}
+
+export async function verificationEmailContact(db: Db, userId: string) {
+  return (
+    (await db.query.userContacts.findFirst({
+      where: and(
+        eq(userContacts.userId, userId),
+        eq(userContacts.kind, 'email'),
+        eq(userContacts.pending, true),
+      ),
+      orderBy: desc(userContacts.createdAt),
+    })) ?? (await primaryEmailContact(db, userId))
+  );
 }

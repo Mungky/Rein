@@ -85,8 +85,8 @@
 {:else if view === 'requested'}
   <EmptyState
     icon="mail"
-    title="Cek email Anda"
-    message="Jika undangan masih berlaku untuk akun ini, tautan aktivasi baru sudah dikirim ke email Anda."
+    title="Permintaan diterima"
+    message="Jika akun memiliki email dan layanan email aktif, tautan baru akan dikirim. Jika belum punya email, minta Admin membagikan tautan aktivasi baru."
   />
 {:else if info}
   <header>

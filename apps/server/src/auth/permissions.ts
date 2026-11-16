@@ -1,7 +1,7 @@
 import { isPermissionKey, type PermissionMap } from '@rein/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { rolePermissions } from '../db/schema';
+import { rolePermissions, userPermissions } from '../db/schema';
 
 /** Perubahan izin berlaku pada request berikutnya, cache ≤ 60 detik (FR-092). */
 const TTL_MS = 60_000;
@@ -23,4 +23,17 @@ export async function permissionsForRole(db: Db, roleId: string): Promise<Permis
 export function invalidatePermissionCache(roleId?: string): void {
   if (roleId) cache.delete(roleId);
   else cache.clear();
+}
+
+/** Override termasuk none; perubahan izin akun berlaku pada request berikutnya. */
+export async function permissionsForUser(
+  db: Db,
+  userId: string,
+  roleId: string,
+): Promise<PermissionMap> {
+  const permissions = { ...(await permissionsForRole(db, roleId)) };
+  const rows = await db.select().from(userPermissions).where(eq(userPermissions.userId, userId));
+  for (const row of rows)
+    if (isPermissionKey(row.permissionKey)) permissions[row.permissionKey] = row.scope;
+  return permissions;
 }

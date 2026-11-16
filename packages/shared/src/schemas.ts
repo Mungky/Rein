@@ -49,7 +49,10 @@ export type LoginInput = z.infer<typeof loginSchema>;
 
 export const inviteUserSchema = z.object({
   fullName: z.string().trim().min(2, req('Nama')).max(80),
-  email: emailSchema,
+  email: z.preprocess(
+    (v) => (typeof v === 'string' && !v.trim() ? undefined : v),
+    emailSchema.optional(),
+  ),
   username: usernameSchema,
   roleId: z.uuid('Role tidak valid'),
   whatsapp: phoneSchema.optional(),
@@ -108,5 +111,10 @@ export const rolePermissionsSchema = z.object({
 });
 
 export const userRoleSchema = z.object({ roleId: z.uuid('Role tidak valid') });
+
+export const notificationChannelsSchema = z.object({
+  channels: z.enum(['whatsapp', 'email', 'both']),
+});
+export type NotificationChannels = z.infer<typeof notificationChannelsSchema>['channels'];
 
 export const adminVerifyWhatsAppSchema = z.object({ phone: phoneSchema.optional() });

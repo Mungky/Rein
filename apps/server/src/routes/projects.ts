@@ -209,6 +209,8 @@ export const projectRoutes = new Hono<AppEnv>()
     const { db } = c.var.deps;
     const q = c.req.query('q')?.trim();
     const seeAll = a.permissions['project.view'] === 'all';
+    if (!seeAll && a.permissions['project.view'] !== 'member')
+      return c.json({ projects: [], can: { create: canDo(a, 'project.create') } });
     const memberOf = db
       .select({ id: projectMembers.projectId })
       .from(projectMembers)

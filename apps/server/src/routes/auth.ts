@@ -30,6 +30,7 @@ import {
   issueActivation,
   issueEmailVerification,
   primaryEmailContact,
+  verificationEmailContact,
   tokenInvalid,
   verifyEmailCode,
   verifyEmailToken,
@@ -369,7 +370,8 @@ export const authRoutes = new Hono<AppEnv>()
   .post('/verify-email/resend', requireAuth, async (c) => {
     const a = authOf(c);
     const { db, env, mail, limits } = c.var.deps;
-    if (a.emailVerified) return c.json({ ok: true, alreadyVerified: true });
+    const contact = await verificationEmailContact(db, a.user.id);
+    if (contact?.verifiedAt) return c.json({ ok: true, alreadyVerified: true });
     if (!limits.emailSend.take(a.user.id)) {
       throw new HttpError(
         429,
@@ -377,7 +379,6 @@ export const authRoutes = new Hono<AppEnv>()
         'Batas kirim ulang tercapai (5 per jam). Coba lagi nanti.',
       );
     }
-    const contact = await primaryEmailContact(db, a.user.id);
     if (!contact) {
       throw new HttpError(409, 'NO_EMAIL', 'Akun ini belum punya email. Hubungi Admin.');
     }

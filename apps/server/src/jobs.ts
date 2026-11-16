@@ -10,6 +10,7 @@ import type { Deps } from './context';
 import { onDeliveryKick } from './notify/bus';
 import { runDailyReminders } from './notify/daily';
 import { deliverWhatsApp } from './notify/deliver';
+import { deliverEmail } from './notify/email';
 
 const Q_DELIVER = 'wa-deliver';
 const Q_DAILY = 'daily-reminders';
@@ -39,6 +40,8 @@ export async function startJobs(deps: Deps): Promise<Jobs> {
       do {
         again = false;
         const r = await deliverWhatsApp(deps);
+        const email = await deliverEmail(deps);
+        if (email.sent || email.failed || email.retry) logger.info(email, 'putaran kirim email');
         if (r.sent || r.failed || r.retry) logger.info(r, 'putaran kirim WhatsApp');
       } while (again);
     })().finally(() => {

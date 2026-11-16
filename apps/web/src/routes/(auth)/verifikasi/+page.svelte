@@ -6,6 +6,7 @@
   import Button from '$lib/components/Button.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import Input from '$lib/components/Input.svelte';
+  import UserNotificationSettings from '$lib/components/UserNotificationSettings.svelte';
   import { invalidateMe, logout } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
 
@@ -37,18 +38,13 @@
   let left = $state(0);
   let mode = $state<'wa' | 'email'>('wa');
 
-  // --- email (hanya bila mailEnabled) ---
-  let code = $state('');
-  let codeError = $state<string | null>(null);
-  let codeLoading = $state(false);
-
   let poll: ReturnType<typeof setInterval> | undefined;
   let tick: ReturnType<typeof setInterval> | undefined;
 
   onMount(async () => {
     wa = await api<WaState>('/api/auth/verify-whatsapp');
     phone = (wa.pendingPhone ?? '').replace(/^\+62/, '0');
-    if (wa.verified) await done();
+    if (wa.verified && !data.manage) await done();
   });
   onDestroy(() => {
     clearInterval(poll);
@@ -59,7 +55,7 @@
     clearInterval(poll);
     invalidateMe();
     toast('Nomor WhatsApp terverifikasi');
-    await goto(resolve('/'), { replaceState: true });
+    await goto(data.manage ? resolve('/profil') : resolve('/'), { replaceState: true });
   }
 
   async function start(e?: SubmitEvent) {
@@ -85,7 +81,8 @@
         if (s?.verified) await done();
       }, 3000);
     } catch (err) {
-      phoneError = err instanceof ApiError ? (err.fields.phone ?? err.message) : 'Terjadi kesalahan';
+      phoneError =
+        err instanceof ApiError ? (err.fields.phone ?? err.message) : 'Terjadi kesalahan';
     } finally {
       starting = false;
     }
@@ -95,36 +92,6 @@
     if (!issued) return;
     await navigator.clipboard?.writeText(issued.code).catch(() => {});
     toast('Kode disalin');
-  }
-
-  async function submitEmail(e?: SubmitEvent) {
-    e?.preventDefault();
-    codeError = null;
-    if (!/^\d{6}$/.test(code)) {
-      codeError = 'Masukkan 6 digit kode dari email';
-      return;
-    }
-    codeLoading = true;
-    try {
-      await api('/api/auth/verify-email/code', { body: { code } });
-      invalidateMe();
-      toast('Email terverifikasi');
-      await goto(resolve('/'), { replaceState: true });
-    } catch (err) {
-      codeError = err instanceof ApiError ? err.message : 'Terjadi kesalahan';
-      code = '';
-    } finally {
-      codeLoading = false;
-    }
-  }
-
-  async function resendEmail() {
-    try {
-      await api('/api/auth/verify-email/resend', { body: {} });
-      toast('Kode baru dikirim ke email Anda');
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Gagal mengirim ulang', { tone: 'danger' });
-    }
   }
 
   async function signOut() {
@@ -154,7 +121,10 @@
     </p>
   {/if}
 
-  {#if !issued}
+  {#if wa?.verified}
+    <p>WhatsApp {wa.phone} sudah terverifikasi.</p>
+    <Button href={resolve('/profil')}>Kembali ke profil</Button>
+  {:else if !issued}
     <form onsubmit={start} novalidate>
       <Input
         label="Nomor WhatsApp"
@@ -193,34 +163,21 @@
   {/if}
 
   <div class="row">
-    {#if data.config.mailEnabled && data.me.user.email}
-      <button class="link muted" onclick={() => (mode = 'email')}>Pakai kode email</button>
-    {:else}
-      <span></span>
-    {/if}
+    <button class="link muted" onclick={() => (mode = 'email')}
+      >Pilih kanal / hubungkan email</button
+    >
     <button class="link muted" onclick={signOut}>Keluar</button>
   </div>
 {:else}
   <header>
     <span class="ic"><Icon name="mail" size={20} /></span>
-    <h1>Verifikasi email</h1>
+    <h1>Kontak & notifikasi</h1>
     <p class="muted">
-      Masukkan kode 6 digit yang dikirim ke <b>{data.me.user.email}</b>. Kode berlaku 15 menit.
+      Pilih WhatsApp, email, atau keduanya. Verifikasi minimal satu kontak untuk masuk.
     </p>
   </header>
-  <form onsubmit={submitEmail} novalidate>
-    <Input
-      label="Kode verifikasi"
-      inputmode="numeric"
-      autocomplete="one-time-code"
-      maxlength={6}
-      bind:value={code}
-      error={codeError}
-    />
-    <Button type="submit" variant="primary" size="md" block loading={codeLoading}>Verifikasi</Button>
-  </form>
+  <UserNotificationSettings verification />
   <div class="row">
-    <button class="link" onclick={resendEmail}>Kirim ulang kode</button>
     <button class="link muted" onclick={() => (mode = 'wa')}>Pakai WhatsApp</button>
   </div>
 {/if}

@@ -114,9 +114,11 @@ export const adminUserRoutes = new Hono<AppEnv>()
         username: 'Username sudah dipakai',
       });
     }
-    const byEmail = await db.query.userContacts.findFirst({
-      where: and(eq(userContacts.kind, 'email'), eq(userContacts.value, body.email)),
-    });
+    const byEmail = body.email
+      ? await db.query.userContacts.findFirst({
+          where: and(eq(userContacts.kind, 'email'), eq(userContacts.value, body.email)),
+        })
+      : null;
     if (byEmail) {
       throw new HttpError(409, 'EMAIL_TAKEN', 'Email sudah terdaftar', {
         email: 'Email sudah terdaftar',
@@ -134,10 +136,12 @@ export const adminUserRoutes = new Hono<AppEnv>()
         })
         .returning({ id: users.id });
       if (!u) throw new Error('Gagal membuat user');
-      const [contact] = await tx
-        .insert(userContacts)
-        .values({ userId: u.id, kind: 'email', value: body.email, isPrimary: true })
-        .returning({ id: userContacts.id });
+      const contacts = body.email
+        ? await tx
+            .insert(userContacts)
+            .values({ userId: u.id, kind: 'email', value: body.email, isPrimary: true })
+            .returning({ id: userContacts.id })
+        : [];
       if (body.whatsapp) {
         await tx
           .insert(userContacts)
@@ -152,7 +156,7 @@ export const adminUserRoutes = new Hono<AppEnv>()
         ip: c.var.ip,
         userAgent: userAgent(c),
       });
-      return { userId: u.id, contactId: contact!.id };
+      return { userId: u.id, contactId: contacts[0]?.id ?? null };
     });
 
     const { sent, link } = await issueActivation(
@@ -178,13 +182,12 @@ export const adminUserRoutes = new Hono<AppEnv>()
       throw new HttpError(409, 'NOT_INVITED', 'Pengguna ini sudah aktif atau nonaktif');
     }
     const contact = await primaryEmailContact(db, user.id);
-    if (!contact) throw new HttpError(409, 'NO_EMAIL', 'Pengguna tidak punya email');
     const { sent, link } = await issueActivation(
       { db, env, mail },
       {
         userId: user.id,
-        contactId: contact.id,
-        email: contact.value,
+        contactId: contact?.id,
+        email: contact?.value,
         name: user.fullName,
         username: user.username,
         inviterName: a.user.fullName,

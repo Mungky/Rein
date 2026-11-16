@@ -560,11 +560,26 @@ export const notificationDeliveries = pgTable(
   ],
 );
 
+export const userPermissions = pgTable(
+  'user_permissions',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    permissionKey: text('permission_key').notNull(),
+    scope: permissionScope('scope').notNull(),
+    ...timestamps,
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.permissionKey] })],
+);
+
 export const userSettings = pgTable('user_settings', {
   userId: uuid('user_id')
     .primaryKey()
     .references(() => users.id, { onDelete: 'cascade' }),
   quietStart: time('quiet_start').notNull().default('21:00'),
+  notifyEmail: boolean('notify_email').notNull().default(true),
+  notifyWhatsapp: boolean('notify_whatsapp').notNull().default(true),
   quietEnd: time('quiet_end').notNull().default('07:00'),
   quietEnabled: boolean('quiet_enabled').notNull().default(true),
   batchingEnabled: boolean('batching_enabled').notNull().default(true),

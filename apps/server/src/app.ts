@@ -7,6 +7,8 @@ import { HttpError } from './lib/http';
 import { clientIp } from './lib/ip';
 import { adminSettingsRoutes } from './routes/admin-settings';
 import { adminUserRoutes } from './routes/admin-users';
+import { userAccessRoutes } from './routes/user-access';
+import { preferenceRoutes } from './routes/preferences';
 import { attachmentRoutes } from './routes/attachments';
 import { devRoutes } from './routes/dev';
 import { fileRoutes } from './routes/files';
@@ -74,6 +76,8 @@ export function createApp(deps: Deps) {
   app.route('/api/auth', authRoutes);
   app.route('/api/admin', adminUserRoutes);
   app.route('/api/admin', adminSettingsRoutes);
+  app.route('/api/admin', userAccessRoutes);
+  app.route('/api', preferenceRoutes);
   app.route('/api/attachments', attachmentRoutes);
   app.route('/api/me', meRoutes);
   app.route('/api/projects', projectRoutes);
