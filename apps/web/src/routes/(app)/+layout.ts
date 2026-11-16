@@ -17,7 +17,7 @@ function tabUnlocked(): boolean {
  *  - belum login → /masuk;
  *  - belum ada kontak terverifikasi → /verifikasi (FR-003 AC4, keputusan D2);
  *  - sesi terkunci, atau aplikasi dibuka ulang di perangkat ber-PIN → /kunci (FR-004 AC3);
- *  - perangkat trusted tanpa PIN → /pin (FR-004 AC1).
+ *  - pengaturan awal belum selesai → pilihan PIN / nama panggilan.
  */
 export async function load({ url }) {
   const next = encodeURIComponent(url.pathname + url.search);
@@ -33,6 +33,6 @@ export async function load({ url }) {
     }
   }
   if (me?.locked) redirect(307, `/kunci?next=${next}`);
-  if (me?.pinRequired) redirect(307, `/pin?next=${next}`);
+  if (me?.onboardingNext) redirect(307, me.onboardingNext);
   return { me: me! };
 }

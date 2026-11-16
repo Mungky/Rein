@@ -38,6 +38,9 @@ export interface AuthUser {
   id: string;
   username: string;
   fullName: string;
+  nickname: string | null;
+  onboardingCompletedAt: Date | null;
+  pinSetupSkippedAt: Date | null;
   status: UserStatus;
   roleId: string;
   roleName: string;

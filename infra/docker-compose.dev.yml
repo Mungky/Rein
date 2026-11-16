@@ -47,7 +47,7 @@ services:
       REDIS_ENABLED: 'false'
       QUEUE_ENABLED: 'false'
       SEND_PACING_ENABLED: 'true'
-      # Nomor asli pengirim (bukan LID) agar verifikasi WA dibalik bisa dicocokkan.
+      # Nomor asli pengirim (bukan LID) untuk metadata webhook.
       RESOLVE_LID_TO_PHONE: 'true'
       # Kunci admin API (≥ 32 karakter). REIN memanggil dengan header X-API-Key.
       API_MASTER_KEY: ${OPENWA_API_KEY:?isi OPENWA_API_KEY di .env}

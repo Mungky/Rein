@@ -96,6 +96,8 @@ export async function seedAdmin(
         fullName: input.name,
         roleId: adminRoleId,
         status: 'active',
+        // Admin bootstrap harus bisa mengatur bot sebelum memverifikasi WA.
+        onboardingCompletedAt: new Date(),
         passwordHash,
         passwordChangedAt: new Date(),
       })

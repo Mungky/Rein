@@ -12,7 +12,12 @@
 
   /** Kerangka aplikasi gaya Linear: sidebar 240 px + kolom utama; bottom nav di < 768 px. */
   interface Props {
-    user: { fullName: string; roleName: string; avatarUrl?: string | null };
+    user: {
+      fullName: string;
+      nickname?: string | null;
+      roleName: string;
+      avatarUrl?: string | null;
+    };
     isAdmin?: boolean;
     title: string;
     crumbs?: Array<{ label: string; href?: string }>;

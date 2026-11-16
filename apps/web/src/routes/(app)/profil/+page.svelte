@@ -8,6 +8,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import Progress from '$lib/components/Progress.svelte';
   import UserNotificationSettings from '$lib/components/UserNotificationSettings.svelte';
+  import Input from '$lib/components/Input.svelte';
   import { formatBytes } from '$lib/format';
   import { compressImage } from '$lib/image';
   import { hasGlobal, loadMe, logout, session } from '$lib/session.svelte';
@@ -17,6 +18,23 @@
   /** Profil & keamanan (Figma D/09, M/09). M0: foto profil + identitas + keluar semua perangkat. */
   let confirmOpen = $state(false);
   let busy = $state(false);
+  let nickname = $state(session.me?.user.nickname ?? '');
+  let savingName = $state(false);
+  let nameError = $state<string | null>(null);
+  async function saveNickname(e: SubmitEvent) {
+    e.preventDefault();
+    savingName = true;
+    nameError = null;
+    try {
+      await api('/api/me/nickname', { body: { nickname } });
+      await loadMe(true);
+      toast('Nama panggilan diperbarui');
+    } catch (err) {
+      nameError = err instanceof ApiError ? err.message : 'Gagal menyimpan';
+    } finally {
+      savingName = false;
+    }
+  }
   let fileInput = $state<HTMLInputElement>();
   let up = $state<{
     phase: 'compress' | 'upload';
@@ -118,6 +136,19 @@
       </div>
     </section>
 
+    <section class="card">
+      <form class="nickname" onsubmit={saveNickname}>
+        <Input
+          label="Nama panggilan"
+          bind:value={nickname}
+          maxlength={40}
+          required
+          autocomplete="nickname"
+          error={nameError}
+        />
+        <Button type="submit" loading={savingName}>Simpan</Button>
+      </form>
+    </section>
     {#if hasGlobal('admin.roles') || hasGlobal('admin.users')}
       <section class="card">
         <h2>Admin</h2>
@@ -138,6 +169,11 @@
     </section>
     <section class="card">
       <h2>Keamanan</h2>
+      {#if session.me.device}<div>
+          <Button variant="secondary" href={resolve('/pin')}
+            >{session.me.device.hasPin ? 'Ganti PIN' : 'Buat PIN'}</Button
+          >
+        </div>{/if}
       <p class="muted">
         Keluar dari semua perangkat mencabut semua sesi aktif dan status perangkat tepercaya.
       </p>
@@ -159,6 +195,11 @@
 </Modal>
 
 <style>
+  .nickname {
+    display: grid;
+    gap: 12px;
+    justify-items: start;
+  }
   .admin-links {
     display: flex;
     gap: 8px;

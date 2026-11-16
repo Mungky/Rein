@@ -17,7 +17,9 @@
         : hour < 18
           ? 'Selamat sore'
           : 'Selamat malam';
-  const firstName = $derived(session.me?.user.fullName.split(' ')[0] ?? '');
+  const firstName = $derived(
+    session.me?.user.nickname ?? session.me?.user.fullName.split(' ')[0] ?? '',
+  );
   const today = new Intl.DateTimeFormat('id-ID', {
     weekday: 'long',
     day: 'numeric',

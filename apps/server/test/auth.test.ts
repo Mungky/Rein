@@ -207,7 +207,7 @@ describe.skipIf(!hasDb)('FR-002 undangan + aktivasi, FR-003 verifikasi email', (
       password: 'Tangki-Stainless-50L',
     });
     expect(done.status).toBe(200);
-    expect(await done.json()).toMatchObject({ next: '/verifikasi', mailSent: true });
+    expect(await done.json()).toMatchObject({ next: '/verifikasi', mailSent: false });
 
     // tautan aktivasi sekali pakai; "minta tautan baru" tidak mengirim apa pun untuk akun aktif
     const again = await agent(app).post('/api/auth/activation/inspect', { token });
@@ -216,6 +216,8 @@ describe.skipIf(!hasDb)('FR-002 undangan + aktivasi, FR-003 verifikasi email', (
     expect((await agent(app).post('/api/auth/activation/request', { token })).status).toBe(200);
     expect(mail.outbox.length).toBe(before);
 
+    expect(mail.outbox.filter((m) => m.to === email)).toHaveLength(1);
+    await user.post('/api/auth/verify-email/resend');
     const verifyMail = mail.outbox.filter((m) => m.to === email).at(-1)!;
     const code = /(\d{6})/.exec(verifyMail.subject)![1]!;
     const wrong = await user.post('/api/auth/verify-email/code', {
@@ -226,6 +228,8 @@ describe.skipIf(!hasDb)('FR-002 undangan + aktivasi, FR-003 verifikasi email', (
     expect(ok.status).toBe(200);
     const me = await (await user.get('/api/auth/me')).json();
     expect(me.verification.email).toBe(true);
+    expect(me.verification.any).toBe(false);
+    expect(me.onboardingNext).toBe('/verifikasi');
 
     const row = await testDb().query.users.findFirst({ where: eq(users.username, `udin${id}`) });
     expect(row?.status).toBe('active');

@@ -8,7 +8,12 @@
   import Kbd from './Kbd.svelte';
 
   interface Props {
-    user: { fullName: string; roleName: string; avatarUrl?: string | null };
+    user: {
+      fullName: string;
+      nickname?: string | null;
+      roleName: string;
+      avatarUrl?: string | null;
+    };
     items: NavItem[];
     adminItems?: NavItem[];
     onpalette?: () => void;
@@ -75,7 +80,9 @@
   {/if}
   <a class="me" href={resolve('/profil')}>
     <Avatar name={user.fullName} src={user.avatarUrl} size={24} />
-    <span class="who"><b>{user.fullName}</b><span class="faint">{user.roleName}</span></span>
+    <span class="who"
+      ><b>{user.nickname ?? user.fullName}</b><span class="faint">{user.roleName}</span></span
+    >
   </a>
 </aside>
 

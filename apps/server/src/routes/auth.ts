@@ -5,13 +5,15 @@ import {
   tokenOnlySchema,
   verifyEmailCodeSchema,
   whatsappStartSchema,
+  whatsappVerifySchema,
+  nicknameSchema,
 } from '@rein/shared';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { audit } from '../audit';
-import { authOf, isVerified, requireAuth } from '../auth/middleware';
-import { issueWhatsAppVerification, WA_CODE_TTL_MS } from '../auth/wa-verification';
+import { authOf, isVerified, requireAuth, requireVerified } from '../auth/middleware';
+import { issueWhatsAppVerification, verifyWhatsAppCode } from '../auth/wa-verification';
 import { burnVerifyTime, hashSecret, verifySecret } from '../auth/password';
 import { passwordProblem } from '../auth/password-policy';
 import {
@@ -36,7 +38,7 @@ import {
   verifyEmailToken,
 } from '../auth/verification';
 import type { AppEnv, AuthContext, Deps } from '../context';
-import { userContacts, users, verificationCodes } from '../db/schema';
+import { sessions, userContacts, users, verificationCodes } from '../db/schema';
 import { googleLoginEnabled, isSecureCookie } from '../env';
 import { sha256Hex } from '../lib/crypto';
 import { HttpError, readJson } from '../lib/http';
@@ -58,6 +60,7 @@ export function meResponse(a: AuthContext) {
       id: a.user.id,
       username: a.user.username,
       fullName: a.user.fullName,
+      nickname: a.user.nickname,
       roleName: a.user.roleName,
       avatarUrl: a.user.avatarAttachmentId ? `/files/${a.user.avatarAttachmentId}/original` : null,
       email: a.primaryEmail,
@@ -65,19 +68,29 @@ export function meResponse(a: AuthContext) {
     },
     permissions: a.permissions,
     verification: { email: a.emailVerified, whatsapp: a.whatsappVerified, any: isVerified(a) },
-    /** FR-004: perangkat trusted wajib punya PIN setelah verifikasi; sesi terkunci → layar PIN. */
     device: a.device ? { hasPin: a.device.hasPin, trusted: a.session.trusted } : null,
-    pinRequired: isVerified(a) && a.session.trusted && Boolean(a.device) && !a.device?.hasPin,
+    onboardingNext: a.user.onboardingCompletedAt
+      ? null
+      : !a.whatsappVerified
+        ? '/verifikasi'
+        : !a.device?.hasPin && !a.user.pinSetupSkippedAt
+          ? '/pin'
+          : '/sambutan',
     locked: a.locked,
     /** Klien mengunci saat aplikasi dibuka ulang (sessionStorage kosong) — kecuali sesi baru. */
     sessionStartedAt: a.session.createdAt,
   };
 }
 
-/** D2: akses dibuka bila ada kontak (email/WA) terverifikasi. */
+/** Akun baru wajib WA; akun lama yang sudah selesai boleh memakai kontak terverifikasi. */
 async function hasVerifiedContact(db: Deps['db'], userId: string): Promise<boolean> {
+  const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
   const row = await db.query.userContacts.findFirst({
-    where: and(eq(userContacts.userId, userId), sql`${userContacts.verifiedAt} is not null`),
+    where: and(
+      eq(userContacts.userId, userId),
+      sql`${userContacts.verifiedAt} is not null`,
+      user?.onboardingCompletedAt ? undefined : eq(userContacts.kind, 'whatsapp'),
+    ),
   });
   return Boolean(row);
 }
@@ -315,9 +328,9 @@ export const authRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  /** FR-002: set password → akun aktif → sesi baru → alur verifikasi email. */
+  /** Aktivasi undangan → verifikasi WhatsApp; email dikonfigurasi setelah masuk. */
   .post('/activation/complete', async (c) => {
-    const { db, env, mail, limits } = c.var.deps;
+    const { db, env } = c.var.deps;
     const body = await readJson(c, activateSchema);
     const act = await findActivation(db, body.token);
     const user = await db.query.users.findFirst({ where: eq(users.id, act.userId) });
@@ -354,16 +367,8 @@ export const authRoutes = new Hono<AppEnv>()
       userAgent: ua,
     });
 
-    let mailSent = false;
-    if (contact && !contact.verifiedAt) {
-      limits.emailSend.take(user.id);
-      ({ sent: mailSent } = await issueEmailVerification(
-        { db, env, mail },
-        { userId: user.id, contactId: contact.id, email: contact.value, name: user.fullName },
-      ));
-    }
     const verified = await hasVerifiedContact(db, act.userId);
-    return c.json({ next: verified ? '/' : '/verifikasi', mailSent });
+    return c.json({ next: verified ? '/' : '/verifikasi', mailSent: false });
   })
 
   /** Kirim ulang kode verifikasi email (5/jam per user). */
@@ -426,13 +431,10 @@ export const authRoutes = new Hono<AppEnv>()
     return c.json({ ok: true, signedIn: c.var.auth?.user.id === userId });
   })
 
-  /**
-   * FR-003 AC2: status verifikasi WA untuk halaman /verifikasi (dipoll tiap beberapa detik
-   * selama menunggu pesan user masuk lewat webhook).
-   */
+  /** Pulihkan tantangan OTP saat halaman dimuat ulang. */
   .get('/verify-whatsapp', requireAuth, async (c) => {
     const a = authOf(c);
-    const { db, env } = c.var.deps;
+    const { db } = c.var.deps;
     const pending = await db.query.userContacts.findFirst({
       where: and(
         eq(userContacts.userId, a.user.id),
@@ -441,27 +443,58 @@ export const authRoutes = new Hono<AppEnv>()
       ),
       orderBy: (t, { desc }) => desc(t.createdAt),
     });
+    const challenge = await db.query.verificationCodes.findFirst({
+      where: and(
+        eq(verificationCodes.userId, a.user.id),
+        eq(verificationCodes.purpose, 'verify_whatsapp'),
+        sql`${verificationCodes.consumedAt} is null and ${verificationCodes.expiresAt} > now() and ${verificationCodes.attempts} < 5`,
+      ),
+      orderBy: (t, { desc }) => desc(t.createdAt),
+    });
+    const challengeContact = challenge?.contactId
+      ? await db.query.userContacts.findFirst({ where: eq(userContacts.id, challenge.contactId) })
+      : null;
     return c.json({
       verified: a.whatsappVerified,
       phone: a.whatsapp,
       pendingPhone: pending?.value ?? null,
-      reinNumberSet: Boolean(env.REIN_WA_NUMBER),
+      challenge:
+        challenge && challengeContact
+          ? {
+              challengeId: challenge.id,
+              phone: challengeContact.value,
+              expiresAt: challenge.expiresAt,
+              resendAt: new Date(challenge.createdAt.getTime() + 60_000),
+            }
+          : null,
     });
   })
 
-  /** Buat kode REIN-XXXXXX + tautan wa.me (maks. 5 per nomor per 24 jam, PRD §5). */
+  /** Bot mengirim OTP ke nomor pengguna. */
   .post('/verify-whatsapp/start', requireAuth, async (c) => {
     const a = authOf(c);
-    const { db, env, limits } = c.var.deps;
+    const { db, env, limits, wa } = c.var.deps;
     const { phone } = await readJson(c, whatsappStartSchema);
-    if (!limits.waStart.take(phone)) {
+    const phoneKey = `phone:${phone}`;
+    const userKey = `user:${a.user.id}`;
+    if (limits.waStart.blockedFor(phoneKey) || limits.waStart.blockedFor(userKey)) {
       throw new HttpError(
         429,
         'RATE_LIMITED',
         'Batas permintaan kode untuk nomor ini tercapai (5 per 24 jam). Hubungi Admin.',
       );
     }
-    const r = await issueWhatsAppVerification(db, env, a.user.id, phone);
+    const r = await issueWhatsAppVerification(db, env, wa, a.user.id, phone).catch(
+      (err: unknown) => {
+        if (err instanceof HttpError && err.code === 'WA_SEND_FAILED') {
+          limits.waStart.record(phoneKey);
+          limits.waStart.record(userKey);
+        }
+        throw err;
+      },
+    );
+    limits.waStart.record(phoneKey);
+    limits.waStart.record(userKey);
     await audit(db, {
       actorId: a.user.id,
       action: 'contact.whatsapp_code_issued',
@@ -473,9 +506,64 @@ export const authRoutes = new Hono<AppEnv>()
     });
     return c.json({
       phone: r.phone,
-      code: r.code,
-      link: r.link,
+      challengeId: r.challengeId,
       expiresAt: r.expiresAt.toISOString(),
-      ttlSeconds: WA_CODE_TTL_MS / 1000,
+      resendAt: r.resendAt.toISOString(),
     });
+  })
+  .post('/verify-whatsapp/code', requireAuth, async (c) => {
+    const a = authOf(c);
+    const { db, env } = c.var.deps;
+    const body = await readJson(c, whatsappVerifySchema);
+    const result = await verifyWhatsAppCode(db, env, a.user.id, body.challengeId, body.code);
+    if (!a.device && body.deviceId) {
+      const deviceRowId = await registerDevice(
+        db,
+        a.user.id,
+        body.deviceId,
+        deviceLabel(userAgent(c)),
+        a.session.trusted,
+      );
+      await db.update(sessions).set({ deviceId: deviceRowId }).where(eq(sessions.id, a.session.id));
+      setDeviceCookie(c, body.deviceId, isSecureCookie(env));
+    }
+    await audit(db, {
+      actorId: a.user.id,
+      action: 'contact.whatsapp_verified',
+      entityType: 'user_contact',
+      entityId: result.contactId,
+      diff: { method: 'otp' },
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+    return c.json({ ok: true });
+  })
+  .post('/onboarding/complete', requireVerified, async (c) => {
+    const a = authOf(c);
+    const { db } = c.var.deps;
+    const { nickname } = await readJson(c, nicknameSchema);
+    if (
+      !a.user.onboardingCompletedAt &&
+      (!a.whatsappVerified || (!a.device?.hasPin && !a.user.pinSetupSkippedAt))
+    ) {
+      throw new HttpError(
+        409,
+        'ONBOARDING_REQUIRED',
+        'Selesaikan verifikasi WhatsApp dan pilihan PIN dahulu.',
+      );
+    }
+    await db
+      .update(users)
+      .set({ nickname, onboardingCompletedAt: a.user.onboardingCompletedAt ?? new Date() })
+      .where(eq(users.id, a.user.id));
+    await audit(db, {
+      actorId: a.user.id,
+      action: 'user.onboarding_completed',
+      entityType: 'user',
+      entityId: a.user.id,
+      diff: { nickname },
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+    return c.json({ ok: true });
   });

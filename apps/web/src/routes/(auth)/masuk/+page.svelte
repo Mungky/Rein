@@ -121,7 +121,7 @@
   </a>
 {/if}
 
-<p class="hint faint">Belum punya akun? Akun dibuat oleh Admin lewat undangan email.</p>
+<p class="hint faint">Belum punya akun? Minta tautan undangan dari Admin.</p>
 
 <style>
   header {

@@ -29,7 +29,9 @@ Hierarki konten: **Project → Work Order (WO) → Logbook entry → Attachment*
 >
 > **Revisi 1.4:** batas lampiran **50 MB per file**. Lampiran dan foto profil disimpan di **Google Cloud Storage** (bucket privat, region Jakarta). Email dikirim lewat **Gmail API**. Ditambah **Login dengan Google** (FR-006). Backup database ke GCS (§7, §11.4).
 >
-> **Revisi 1.3:** WhatsApp memakai **OpenWA** self-host (engine `baileys`) dengan nomor baru khusus; verifikasi nomor dibalik (§10.4, FR-003). Checklist persiapan dan stack final ada di `BUILD-KICKOFF.md`.
+> **Revisi 1.5 (16 Nov 2026, permintaan pengguna):** onboarding hanya nomor WhatsApp → OTP dikirim bot dan diinput di aplikasi → PIN opsional → nama panggilan dan foto opsional. Email dikonfigurasi setelah masuk dari Profil. Revisi ini menggantikan verifikasi WA dibalik dan kewajiban PIN pada revisi sebelumnya. Akun lama yang sudah dipakai tetap dapat masuk.
+>
+> **Revisi 1.3:** WhatsApp memakai **OpenWA** self-host (engine `baileys`) dengan nomor baru khusus; mekanisme verifikasi mengikuti revisi 1.5 (§10.4, FR-003). Checklist persiapan dan stack final ada di `BUILD-KICKOFF.md`.
 >
 > **Revisi 1.2:** kategori diringkas menjadi **6 kategori berwarna**: Engineering, Pengadaan, Produksi, QC & Testing, Pengiriman & Serah Terima, Umum (§4.2, §9.9). Form Buat WO mendukung lampiran (FR-030).
 
@@ -137,7 +139,7 @@ Format AC: *Given / When / Then* atau poin yang bisa diuji. Prioritas: **P0** = 
 
 ### 3.1 Autentikasi & akun (Figma `D/01a–d`, `M/01a–d`, `D/09`, `M/09`)
 
-**US-01.** Sebagai karyawan, saya masuk dengan email/username + password lalu memverifikasi email & WhatsApp agar menerima notifikasi.
+**US-01.** Sebagai karyawan, saya masuk dengan email/username + password lalu memverifikasi WhatsApp, memilih PIN opsional, dan melengkapi nama panggilan serta foto profil. Email dapat dihubungkan setelah masuk.
 
 - **FR-001 (P0) Login password.**
   - AC1: Login dengan `email` **atau** `username` + password benar → sesi dibuat → redirect ke Beranda (atau ke URL `next` yang aman, path internal saja).
@@ -147,16 +149,16 @@ Format AC: *Given / When / Then* atau poin yang bisa diuji. Prioritas: **P0** = 
 - **FR-002 (P0) Aktivasi akun dari undangan.** Admin mengundang user (FR-090) → user menerima email berisi tautan aktivasi (berlaku 72 jam) → set password → masuk ke alur verifikasi.
   - AC: tautan bekas atau kedaluwarsa → halaman "Tautan tidak berlaku" + tombol "Minta tautan baru".
 - **FR-003 (P0) Verifikasi email & WhatsApp** (`D/01b`, `M/01b`).
-  - AC1: Email diverifikasi lewat kode 6 digit **atau** magic link (keduanya dikirim dalam satu email). Berlaku 15 menit, maksimal 5 percobaan per kode.
-  - AC2 (revisi 1.3, gateway OpenWA): nomor WA dinormalisasi ke E.164 (`+62…`). REIN menampilkan kode `REIN-XXXXXX` dan tombol **"Kirim via WhatsApp"** (`https://wa.me/<nomor REIN>?text=REIN-XXXXXX`). User **mengirim** kode itu ke nomor REIN. Webhook `message.received` mencocokkan kode + nomor pengirim → nomor terverifikasi. Kode berlaku 10 menit. Alasannya: setiap karyawan memulai chat duluan, sehingga risiko blokir nomor gateway turun. Fallback jika gagal: Admin memverifikasi manual.
+  - AC1: Email dihubungkan setelah masuk melalui Profil, bukan tahap onboarding. Email diverifikasi lewat kode 6 digit **atau** magic link (keduanya dikirim dalam satu email). Berlaku 15 menit, maksimal 5 percobaan per kode.
+  - AC2 (revisi 1.5): nomor WA dinormalisasi ke E.164 (`+62…`). Bot OpenWA mengirim OTP 6 digit ke nomor tersebut; pengguna memasukkan OTP di aplikasi. Tidak ada kode dalam respons API atau tautan `wa.me`. Berlaku 10 menit, jeda kirim ulang 60 detik, maksimal 5 kode per akun/nomor per 24 jam dan 5 kode salah per tantangan. OTP terikat akun, disimpan sebagai HMAC, dan sekali pakai. Fallback jika gagal: Admin memverifikasi manual.
   - AC3: Notifikasi email/WA **hanya** dikirim ke kontak yang `verified_at` tidak null. Jika WA belum terverifikasi, kanal WA dilewati dan dicatat di log pengiriman.
-  - AC4: User yang belum menyelesaikan verifikasi email dan WA hanya bisa membuka halaman verifikasi.
+  - AC4: Akun baru wajib memverifikasi WhatsApp sebelum mengakses aplikasi; email tidak wajib. Akun aktif lama yang sudah memiliki kontak terverifikasi tetap dapat masuk, termasuk Admin bootstrap untuk menyiapkan bot.
   - AC5: Mengubah email/WA (`D/09`) membuat kontak baru berstatus *pending*. Kontak lama tetap dipakai sampai yang baru terverifikasi.
 - **FR-004 (P0) PIN & fast login** (`D/01c–d`, `M/01c–d`).
-  - AC1: Setelah verifikasi pertama di sebuah perangkat, user wajib membuat PIN 6 digit (dua kali input). PIN yang berurutan (123456, 654321) atau semua digitnya sama ditolak.
+  - AC1: Setelah verifikasi WA, pengguna dapat membuat PIN 6 digit (dua kali input) atau memilih **Lewati dulu**. Pilihan disimpan dan tidak diminta ulang setelah onboarding selesai. Setelah pilihan PIN, pengguna mengisi nama panggilan (1–40 karakter) dan foto profil opsional, lalu **Mulai**. Nama resmi tidak berubah. PIN yang berurutan (123456, 654321) atau semua digitnya sama ditolak.
   - AC2: PIN **terikat ke perangkat**. Server menyimpan `device_id` + hash PIN (argon2id) per perangkat. PIN di perangkat A tidak berlaku di perangkat B.
   - AC3: Fast login: perangkat trusted yang sesinya terkunci (idle > 15 menit atau aplikasi dibuka ulang) menampilkan layar PIN berisi nama & avatar user.
-  - AC4: 5 PIN salah berturut-turut → PIN perangkat itu dinonaktifkan dan user wajib login dengan password, lalu membuat PIN baru.
+  - AC4: 5 PIN salah berturut-turut → PIN perangkat itu dinonaktifkan dan user wajib login dengan password; PIN baru dapat dibuat dari Profil.
   - AC5: "Lupa PIN" → login password → buat PIN baru. Admin dapat mereset PIN semua perangkat user (FR-091).
   - AC6: Trusted device kedaluwarsa 30 hari tanpa aktivitas. Setelah itu wajib login password.
 - **FR-005 (P0) Profil & keamanan** (`D/09`, `M/09`).
@@ -165,7 +167,7 @@ Format AC: *Given / When / Then* atau poin yang bisa diuji. Prioritas: **P0** = 
   - Halaman login (`D/01a`, `M/01a`) punya tombol **"Masuk dengan Google"** selain email/username + password.
   - AC1: Hanya akun yang **sudah terdaftar** di REIN (email Google cocok dengan `user_contacts` email yang aktif) yang bisa masuk. Email tidak dikenal → pesan "Akun Google ini belum terdaftar di REIN. Hubungi Admin." Tidak ada pendaftaran mandiri.
   - AC2: Login Google pertama kali otomatis menandai email sebagai terverifikasi (`verified_at`) dan menautkan `google_sub` ke user.
-  - AC3: Setelah login Google, aturan perangkat tetap sama: buat PIN di perangkat baru (FR-004), sesi dan trusted device seperti login password.
+  - AC3: Setelah login Google, akun baru tetap wajib memverifikasi WA dan menjalani onboarding dengan PIN opsional (FR-003/004); sesi dan trusted device seperti login password.
   - AC4: Scope hanya `openid email profile`. Parameter `state` + PKCE wajib; `id_token` diverifikasi (issuer, audience, expiry, `email_verified = true`).
   - AC5: User tetap bisa login dengan password. Admin bisa menonaktifkan login password per user [P1].
 
@@ -743,7 +745,7 @@ infra/          docker-compose.yml, Dockerfile, backup scripts, Caddy/Traefik la
 | Setup | Verifikasi Meta Business, nomor khusus (bukan nomor WA personal aktif), display name "REIN · Remula" | Cepat (menit) |
 
 **Keputusan (revisi 1.3):** user memilih **OpenWA** (https://github.com/rmyndharis/OpenWA, lisensi MIT, NestJS) dengan **nomor baru khusus REIN**. Engine `baileys` dipilih karena jauh lebih ringan daripada `whatsapp-web.js` (yang butuh Chromium). Mitigasi wajib:
-- nomor khusus yang "dipanaskan" 1–2 minggu, dan verifikasi nomor dibalik (karyawan chat duluan, FR-003 AC2);
+- nomor khusus yang "dipanaskan" 1–2 minggu; OTP dikirim hanya atas permintaan pengguna (FR-003 AC2 revisi 1.5);
 - `SEND_PACING_ENABLED=true`, batas 20 WA/user/hari, batching 15 menit, jam tenang;
 - email selalu sebagai fallback; webhook `session.status` terputus → alert ke Admin dan semua WA dialihkan ke email;
 - OpenWA hanya di jaringan Docker internal (`http://openwa:2785`, header `X-API-Key`), webhook diverifikasi HMAC;
@@ -836,7 +838,7 @@ File: https://www.figma.com/design/m6TD7AHjnmgljGiPNT00f7
 | Frame (Desktop / Mobile) | Fitur / FR | Komponen utama |
 |---|---|---|
 | `D/01a Login` / `M/01a Login` | FR-001, FR-006 | Input, Button, Checkbox. Tombol "Masuk dengan Google" belum ada di frame: tambahkan di bawah tombol Masuk, dipisah garis "atau" |
-| `D/01b Verifikasi Kontak` / `M/01b` | FR-003 | Email: input kode (Digit). WA: frame masih menampilkan OTP masuk, implementasi mengikuti AC2 revisi 1.3 (kode + tombol "Kirim via WhatsApp"). Badge Terverifikasi |
+| `D/01b Verifikasi Kontak` / `M/01b` | FR-003 | Onboarding: nomor WA → OTP dari bot → input kode. Email di Profil setelah masuk (revisi 1.5). |
 | `D/01c Buat PIN` / `M/01c Buat PIN` (keypad) | FR-004 | Digit / PIN Dots, Keypad |
 | `D/01d Fast Login PIN` / `M/01d` | FR-004 AC3–4 | Avatar 64, PIN Dots, pesan error |
 | `D/02 Beranda` / `M/02 Beranda` | FR-010 | Stat Card, Callout Butuh bantuan, WO Row / WO List Item, Sidebar / Bottom Nav |

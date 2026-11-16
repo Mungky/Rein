@@ -89,6 +89,9 @@ export const users = pgTable(
     id: id(),
     username: citext('username').notNull().unique(),
     fullName: text('full_name').notNull(),
+    nickname: text('nickname'),
+    onboardingCompletedAt: tz('onboarding_completed_at'),
+    pinSetupSkippedAt: tz('pin_setup_skipped_at'),
     avatarAttachmentId: uuid('avatar_attachment_id').references((): AnyPgColumn => attachments.id, {
       onDelete: 'set null',
     }),

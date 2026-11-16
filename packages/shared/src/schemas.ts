@@ -94,6 +94,14 @@ export const pinUnlockSchema = z.object({
 });
 
 export const whatsappStartSchema = z.object({ phone: phoneSchema });
+export const whatsappVerifySchema = z.object({
+  challengeId: z.uuid(),
+  code: z.string().regex(/^\d{6}$/, 'Masukkan 6 digit kode dari WhatsApp'),
+  deviceId: z.uuid().optional(),
+});
+export const nicknameSchema = z.object({
+  nickname: z.string().trim().min(1, 'Isi nama panggilan Anda').max(40, 'Maksimal 40 karakter'),
+});
 
 /** FR-092: role & izin. */
 export const roleCreateSchema = z.object({

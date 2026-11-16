@@ -85,6 +85,7 @@ export async function createUser(
     password?: string | null;
     verified?: boolean;
     status?: 'invited' | 'active' | 'disabled';
+    onboardingComplete?: boolean;
   } = {},
 ) {
   const db = testDb();
@@ -99,6 +100,7 @@ export async function createUser(
       fullName: `User ${id}`,
       roleId: await roleId(opts.role ?? 'engineering'),
       status: opts.status ?? 'active',
+      onboardingCompletedAt: opts.onboardingComplete === false ? null : new Date(),
       passwordHash: password ? await hashSecret(password, PEPPER) : null,
     })
     .returning({ id: users.id });

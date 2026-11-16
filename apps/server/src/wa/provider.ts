@@ -38,7 +38,7 @@ export class NullWhatsApp implements WhatsAppProvider {
   async sendText(to: string, text: string, key: string) {
     this.outbox.push({ to, text, key });
     if (this.outbox.length > 200) this.outbox.shift();
-    this.logger?.info({ to, text }, 'whatsapp (NullWhatsApp) — tidak dikirim');
+    this.logger?.info({ to }, 'whatsapp (NullWhatsApp) — tidak dikirim');
     return { id: `null-${key}` };
   }
   async session(): Promise<WaSessionInfo> {

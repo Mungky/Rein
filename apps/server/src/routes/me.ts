@@ -9,10 +9,26 @@ import { attachments, devices, sessions, users } from '../db/schema';
 import { isSecureCookie } from '../env';
 import { HttpError, notFound, readJson } from '../lib/http';
 import { userAgent } from '../lib/ip';
+import { nicknameSchema } from '@rein/shared';
 
 /** FR-005: profil & keamanan — foto profil, daftar perangkat, cabut perangkat. */
 export const meRoutes = new Hono<AppEnv>()
   .use(requireVerified)
+  .post('/nickname', async (c) => {
+    const a = authOf(c);
+    const { nickname } = await readJson(c, nicknameSchema);
+    await c.var.deps.db.update(users).set({ nickname }).where(eq(users.id, a.user.id));
+    await audit(c.var.deps.db, {
+      actorId: a.user.id,
+      action: 'user.nickname_changed',
+      entityType: 'user',
+      entityId: a.user.id,
+      diff: { nickname },
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+    return c.json({ ok: true });
+  })
   /** Foto dipotong & dikompres 256×256 WebP di klien. */
   .post('/avatar', async (c) => {
     const a = authOf(c);

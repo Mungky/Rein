@@ -103,7 +103,7 @@ openwa     OpenWA, ENGINE_TYPE=baileys, tanpa Redis       ~150–250 MB
 - Kirim pesan: `POST /api/sessions/{sessionId}/messages/send-text` dengan `chatId` = `628xxxxxxxxxx@c.us` dan `text`.
 - Gateway tidak resmi tidak punya tombol, jadi **tautan ditulis di teks**: `Buka WO: https://rein.remula.co.id/w/8F3K2`. Template pesan di PRD §6.3 dipakai sebagai teks biasa.
 - Aktifkan `SEND_PACING_ENABLED=true`. Batas REIN tetap berlaku: maksimal 20 WA per user per hari, batching 15 menit, dan jam tenang.
-- **Verifikasi nomor WA karyawan dibalik:** REIN menampilkan kode, lalu karyawan **mengirim kode itu ke nomor REIN** (tautan `wa.me/62xxx?text=REIN-482913`). Webhook `message.received` mencocokkan kodenya. Dengan cara ini setiap karyawan memulai chat duluan, sehingga risiko blokir turun, dan nomor karyawan otomatis terverifikasi.
+- **Verifikasi nomor WA (revisi 16 November 2026):** bot mengirim OTP 6 digit ke nomor yang dimasukkan pengguna. Pengguna mengisi OTP di aplikasi; webhook pesan masuk tidak memverifikasi nomor. Berlaku 10 menit, jeda kirim ulang 60 detik, maksimal 5 kode per akun/nomor per hari dan 5 kode salah per tantangan. PIN setelahnya opsional; nama panggilan dan foto profil menyelesaikan onboarding. Email dihubungkan dari Profil setelah masuk.
 - Status sesi: webhook `session.status` → jika terputus, notifikasi email ke Admin dan semua WA dialihkan ke email sampai tersambung lagi.
 
 ---

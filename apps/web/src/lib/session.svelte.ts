@@ -6,17 +6,17 @@ export interface Me {
     id: string;
     username: string;
     fullName: string;
+    nickname: string | null;
     roleName: string;
     avatarUrl: string | null;
     email: string | null;
     whatsapp: string | null;
   };
   permissions: PermissionMap;
-  /** D2: akses dibuka bila `any` (email ATAU WhatsApp terverifikasi). */
+  /** Keputusan server: akun baru wajib WA; kontak terverifikasi akun lama tetap berlaku. */
   verification: { email: boolean; whatsapp: boolean; any: boolean };
   device: { hasPin: boolean; trusted: boolean } | null;
-  /** FR-004 AC1: perangkat trusted wajib membuat PIN. */
-  pinRequired: boolean;
+  onboardingNext: '/verifikasi' | '/pin' | '/sambutan' | null;
   /** FR-004 AC3: sesi terkunci → layar PIN. */
   locked: boolean;
   sessionStartedAt: string;

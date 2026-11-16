@@ -36,8 +36,7 @@
       if (err instanceof ApiError && err.code === 'PIN_DISABLED') {
         invalidateMe();
         // eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve() + query string
-        // eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve() + query string
-    await goto(resolve('/masuk') + `?next=${encodeURIComponent(next)}&pin=disabled`, {
+        await goto(resolve('/masuk') + `?next=${encodeURIComponent(next)}&pin=disabled`, {
           replaceState: true,
         });
         return;
@@ -51,6 +50,7 @@
 
   async function forgot() {
     await logout();
+    // eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve() + query string
     await goto(resolve('/masuk') + `?next=${encodeURIComponent(next)}`);
   }
 </script>
@@ -59,7 +59,7 @@
 
 <header>
   <Avatar name={data.me.user.fullName} src={data.me.user.avatarUrl} size={64} />
-  <h1>{data.me.user.fullName}</h1>
+  <h1>{data.me.user.nickname ?? data.me.user.fullName}</h1>
   <p class="muted">Masukkan PIN untuk melanjutkan</p>
 </header>
 

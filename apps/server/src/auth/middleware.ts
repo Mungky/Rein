@@ -59,10 +59,11 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
 };
 
 /**
- * FR-003 AC4 + keputusan D2 (docs/M1-RENCANA.md): selama email ditunda, akses dibuka bila
- * MINIMAL SATU kontak (email atau WhatsApp) terverifikasi. Selain itu hanya alur verifikasi.
+ * Akun baru wajib memverifikasi WA. Akun lama yang sudah dipakai tetap menerima email
+ * terverifikasi agar Admin tidak terkunci sebelum bot disiapkan.
  */
-export const isVerified = (a: AuthContext): boolean => a.emailVerified || a.whatsappVerified;
+export const isVerified = (a: AuthContext): boolean =>
+  a.whatsappVerified || (Boolean(a.user.onboardingCompletedAt) && a.emailVerified);
 
 export const requireVerified: MiddlewareHandler<AppEnv> = async (c, next) => {
   const a = authOf(c);
@@ -70,7 +71,7 @@ export const requireVerified: MiddlewareHandler<AppEnv> = async (c, next) => {
     throw new HttpError(
       403,
       'VERIFICATION_REQUIRED',
-      'Verifikasi nomor WhatsApp atau email Anda terlebih dahulu',
+      'Verifikasi nomor WhatsApp Anda terlebih dahulu',
     );
   }
   await next();

@@ -93,8 +93,7 @@
     <h1>Aktifkan akun</h1>
     <p class="muted">
       Halo <b>{info.fullName}</b>. Buat password untuk username
-      <b>{info.username}</b>{#if info.email}
-        &nbsp;({info.email}){/if}.
+      <b>{info.username}</b>.
     </p>
   </header>
   {#if errors.form && !errors.password}<p class="err" role="alert">{errors.form}</p>{/if}

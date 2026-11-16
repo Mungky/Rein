@@ -5,7 +5,8 @@
   import { api, ApiError } from '$lib/api';
   import Icon from '$lib/components/Icon.svelte';
   import PinPad from '$lib/components/PinPad.svelte';
-  import { invalidateMe } from '$lib/session.svelte';
+  import Button from '$lib/components/Button.svelte';
+  import { loadMe } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
 
   /**
@@ -48,15 +49,30 @@
       } catch {
         // tanpa sessionStorage: layar PIN muncul lagi saat aplikasi dibuka ulang
       }
-      invalidateMe();
+      const me = await loadMe(true);
       toast('PIN dibuat');
       // eslint-disable-next-line svelte/no-navigation-without-resolve -- next = path internal (safeNextPath)
-      await goto(next, { replaceState: true });
+      await goto(me?.onboardingNext ?? next, { replaceState: true });
     } catch (err) {
       error = err instanceof ApiError ? err.message : 'Terjadi kesalahan';
       value = '';
       first = '';
       step = 1;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function skip() {
+    busy = true;
+    error = null;
+    try {
+      await api('/api/auth/pin/skip', { body: {} });
+      const me = await loadMe(true);
+      // eslint-disable-next-line svelte/no-navigation-without-resolve -- path dari server sendiri
+      await goto(me?.onboardingNext ?? next, { replaceState: true });
+    } catch (err) {
+      error = err instanceof ApiError ? err.message : 'Gagal melanjutkan';
     } finally {
       busy = false;
     }
@@ -75,9 +91,9 @@
   </p>
 </header>
 
-<PinPad bind:value {error} disabled={busy} oncomplete={complete} />
-
-<p class="faint hint">PIN hanya berlaku di perangkat ini. Hindari 123456 atau 111111.</p>
+{#if page.data.me?.device}<PinPad bind:value {error} disabled={busy} oncomplete={complete} />
+{:else}<p class="muted">PIN belum tersedia di browser ini. Anda tetap bisa melanjutkan.</p>{/if}
+<Button variant="ghost" disabled={busy} onclick={skip}>Lewati dulu</Button>
 
 <style>
   header {
@@ -96,9 +112,5 @@
     background: var(--color-accent-subtle);
     color: var(--color-accent-default);
     margin-bottom: 4px;
-  }
-  .hint {
-    font: var(--text-caption);
-    text-align: center;
   }
 </style>

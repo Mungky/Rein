@@ -52,6 +52,9 @@ export interface LoadedSession {
     id: string;
     username: string;
     fullName: string;
+    nickname: string | null;
+    onboardingCompletedAt: Date | null;
+    pinSetupSkippedAt: Date | null;
     status: 'invited' | 'active' | 'disabled';
     roleId: string;
     roleName: string;
@@ -74,6 +77,9 @@ export async function loadSession(db: Db, token: string): Promise<LoadedSession 
         id: users.id,
         username: users.username,
         fullName: users.fullName,
+        nickname: users.nickname,
+        onboardingCompletedAt: users.onboardingCompletedAt,
+        pinSetupSkippedAt: users.pinSetupSkippedAt,
         status: users.status,
         roleId: users.roleId,
         roleName: roles.name,

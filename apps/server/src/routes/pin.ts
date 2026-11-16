@@ -22,7 +22,7 @@ import {
   unlockSession,
 } from '../auth/session';
 import type { AppEnv, AuthContext } from '../context';
-import { devices } from '../db/schema';
+import { devices, users } from '../db/schema';
 import { isSecureCookie } from '../env';
 import { safeEqual } from '../lib/crypto';
 import { HttpError, readJson } from '../lib/http';
@@ -44,6 +44,22 @@ function boundDevice(c: Parameters<typeof getCookie>[0], a: AuthContext) {
 }
 
 export const pinRoutes = new Hono<AppEnv>()
+  .post('/skip', requireVerified, async (c) => {
+    const a = authOf(c);
+    await c.var.deps.db
+      .update(users)
+      .set({ pinSetupSkippedAt: new Date() })
+      .where(eq(users.id, a.user.id));
+    await audit(c.var.deps.db, {
+      actorId: a.user.id,
+      action: 'auth.pin.skipped',
+      entityType: 'user',
+      entityId: a.user.id,
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+    return c.json({ ok: true });
+  })
   .post('/setup', requireVerified, async (c) => {
     const a = authOf(c);
     const { db, env } = c.var.deps;
