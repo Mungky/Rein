@@ -188,8 +188,11 @@
             >Ubah nama / divisi</Button
           >
           <Button onclick={() => openForm('copy')} disabled={busy || dirty}>Duplikat</Button>
-          {#if !selected.systemKey && selected.userCount === 0}
-            <Button onclick={() => (deleteOpen = true)} disabled={busy || dirty}>Hapus role</Button>
+          {#if selected.systemKey !== 'admin'}
+            <Button
+              onclick={() => (deleteOpen = true)}
+              disabled={busy || dirty || selected.userCount > 0}>Hapus role</Button
+            >
           {/if}
         </div>
       </div>
@@ -197,6 +200,12 @@
         {selected.divisionLabel || 'Divisi belum diisi'} · {selected.userCount} pengguna. Pilih cakupan
         untuk setiap izin, lalu simpan.
       </p>
+      {#if selected.systemKey !== 'admin' && selected.userCount > 0}
+        <p class="hint">
+          Untuk menghapus role ini, pindahkan semua penggunanya ke role lain melalui Admin →
+          Pengguna.
+        </p>
+      {/if}
       <p class="hint">
         Untuk membuat project, aktifkan <strong>Buat project</strong>. Scope pengelola berlaku
         ketika pengguna ditandai sebagai pengelola di anggota project.

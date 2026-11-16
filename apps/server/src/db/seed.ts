@@ -14,7 +14,7 @@ import {
 import { hashSecret } from '../auth/password';
 import type { Db } from './client';
 
-import { rolePermissions, roles, userContacts, users, woTypes } from './schema';
+import { rolePermissions, roles, systemState, userContacts, users, woTypes } from './schema';
 
 /** Jenis WO bawaan (PRD §4.2, frame D/10c). Jenis yang sudah ada tidak diubah. */
 export async function seedWoTypes(db: Db): Promise<number> {
@@ -38,6 +38,11 @@ export async function seedWoTypes(db: Db): Promise<number> {
 export async function seedRoles(db: Db): Promise<Map<string, string>> {
   const ids = new Map<string, string>();
   for (const key of SYSTEM_ROLES) {
+    if (
+      key !== 'admin' &&
+      (await db.query.systemState.findFirst({ where: eq(systemState.key, `deleted_role:${key}`) }))
+    )
+      continue;
     const meta = SYSTEM_ROLE_META[key];
     const existing = await db.query.roles.findFirst({ where: eq(roles.systemKey, key) });
     if (existing) {

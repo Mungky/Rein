@@ -143,17 +143,24 @@ export const adminSettingsRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  /** Hanya role tanpa user; role bawaan (seed) tidak bisa dihapus. */
+  /** Hanya role tanpa user; Admin wajib tetap tersedia. */
   .delete('/roles/:id', requirePermission('admin.roles'), async (c) => {
     const a = authOf(c);
     const { db } = c.var.deps;
     const role = await roleOr404(db, c.req.param('id'));
-    if (role.systemKey) throw conflict('ROLE_SYSTEM', 'Role bawaan tidak bisa dihapus');
+    if (role.systemKey === 'admin') throw conflict('ROLE_SYSTEM', 'Role Admin tidak bisa dihapus');
     const [used] = await db.select({ n: count() }).from(users).where(eq(users.roleId, role.id));
     if ((used?.n ?? 0) > 0) {
       throw conflict('ROLE_IN_USE', `Role masih dipakai ${used!.n} pengguna`);
     }
-    await db.delete(roles).where(eq(roles.id, role.id));
+    await db.transaction(async (tx) => {
+      if (role.systemKey)
+        await tx
+          .insert(systemState)
+          .values({ key: `deleted_role:${role.systemKey}`, value: { name: role.name } })
+          .onConflictDoNothing();
+      await tx.delete(roles).where(eq(roles.id, role.id));
+    });
     invalidatePermissionCache(role.id);
     await audit(db, {
       actorId: a.user.id,
