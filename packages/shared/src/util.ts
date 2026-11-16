@@ -21,3 +21,18 @@ export function safeNextPath(next: string | null | undefined, fallback = '/'): s
   for (let i = 0; i < next.length; i++) if (next.charCodeAt(i) < 0x20) return fallback;
   return next;
 }
+
+/** Label nomor WO per project: 1 → "WO 01", 120 → "WO 120" (PRD §4.2). */
+export function woNumberLabel(seq: number): string {
+  return `WO ${String(seq).padStart(2, '0')}`;
+}
+
+/** Tanggal hari ini di zona Asia/Jakarta (UTC+7, tanpa DST) sebagai "YYYY-MM-DD". */
+export function todayWib(now: Date = new Date()): string {
+  return new Date(now.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+}
+
+/** Terlambat = deadline < hari ini dan status bukan Selesai/Dibatalkan (PRD §4.5). */
+export function isOverdue(deadline: string, status: string, today: string = todayWib()): boolean {
+  return deadline < today && status !== 'done' && status !== 'canceled';
+}

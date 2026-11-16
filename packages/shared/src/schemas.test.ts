@@ -42,3 +42,20 @@ describe('schema', () => {
     expect(loginSchema.parse({ identifier: 'rina', password: 'x' }).remember).toBe(false);
   });
 });
+
+describe('util WO', async () => {
+  const { woNumberLabel, todayWib, isOverdue } = await import('./util');
+  it('label nomor WO', () => {
+    expect(woNumberLabel(1)).toBe('WO 01');
+    expect(woNumberLabel(120)).toBe('WO 120');
+  });
+  it('hari ini WIB: 17:00 UTC sudah berganti hari', () => {
+    expect(todayWib(new Date('2026-11-15T16:59:00Z'))).toBe('2026-11-15');
+    expect(todayWib(new Date('2026-11-15T17:00:00Z'))).toBe('2026-11-16');
+  });
+  it('terlambat', () => {
+    expect(isOverdue('2026-11-10', 'in_progress', '2026-11-16')).toBe(true);
+    expect(isOverdue('2026-11-10', 'done', '2026-11-16')).toBe(false);
+    expect(isOverdue('2026-11-16', 'todo', '2026-11-16')).toBe(false);
+  });
+});
