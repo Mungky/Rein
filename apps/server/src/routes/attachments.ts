@@ -11,7 +11,8 @@ import { z } from 'zod';
 import { authOf, requireVerified } from '../auth/middleware';
 import type { AppEnv, AuthContext, Deps } from '../context';
 import { attachments } from '../db/schema';
-import { forbidden, HttpError, validate } from '../lib/http';
+import { forbidden, HttpError, notFound, validate } from '../lib/http';
+import { assertCan, loadProjectAccess, resolveOwner } from '../auth/project-access';
 import { isImageMime, sniffAllowed, SNIFF_BYTES } from '../storage/sniff';
 
 const VARIANTS = ['file', 'display', 'thumb'] as const;
@@ -40,15 +41,27 @@ const badType = (name: string) =>
   new HttpError(415, 'FILE_TYPE', `Tipe file "${name}" tidak diizinkan atau isinya tidak cocok`);
 
 /**
- * Izin unggah. M0 hanya mendukung lampiran milik user sendiri (foto profil).
- * Project/WO/logbook menyusul di M1 dengan cek `attachment.upload` per project.
+ * Izin unggah (dicek sebelum byte pertama disimpan):
+ *  - `user`: hanya milik sendiri — foto profil, atau *staging* lampiran form Buat WO / logbook
+ *    yang dipindah ke WO/entri saat dibuat (FR-030 AC0).
+ *  - `project` / `wo`: `attachment.upload` pada project pemilik (PRD §2.4, scope member).
+ *  - `logbook`: hanya penulis entri.
  */
-function assertCanUpload(a: AuthContext, f: Fields): void {
+async function assertCanUpload(db: Deps['db'], a: AuthContext, f: Fields): Promise<void> {
   if (f.ownerType === 'user') {
-    if (f.ownerId !== a.user.id) throw forbidden('Hanya bisa mengunggah foto profil sendiri');
+    if (f.ownerId !== a.user.id) throw forbidden('Hanya bisa mengunggah lampiran milik sendiri');
     return;
   }
-  throw new HttpError(422, 'UNSUPPORTED_OWNER', 'Jenis pemilik lampiran ini belum didukung');
+  if (f.ownerType === 'client') {
+    throw new HttpError(422, 'UNSUPPORTED_OWNER', 'Jenis pemilik lampiran ini belum didukung');
+  }
+  const owner = await resolveOwner(db, f.ownerType, f.ownerId);
+  if (!owner) throw notFound('Pemilik lampiran tidak ditemukan');
+  if (f.ownerType === 'logbook' && owner.authorId !== a.user.id) {
+    throw forbidden('Hanya penulis entri yang bisa menambah lampiran');
+  }
+  const acc = await loadProjectAccess(db, a, owner.projectId);
+  assertCan(a, 'attachment.upload', acc.res);
 }
 
 function storageKey(ownerType: string, id: string, variant: 'original' | 'display' | 'thumb') {
@@ -141,6 +154,7 @@ export const attachmentRoutes = new Hono<AppEnv>()
     const id = uuidv7();
     const raw: Record<string, string> = {};
     let fields: Fields | null = null;
+    let permission: Promise<void> | null = null;
     const stored: Partial<Record<Variant, Stored>> = {};
 
     try {
@@ -164,26 +178,30 @@ export const attachmentRoutes = new Hono<AppEnv>()
             stream.resume();
             return;
           }
+          let f: Fields;
           try {
-            fields ??= validate(fieldsSchema, raw);
-            assertCanUpload(a, fields);
+            f = fields ??= validate(fieldsSchema, raw);
           } catch (err) {
             stream.resume();
             fail(err);
             return;
           }
+          // Izin dicek sekali (async) sebelum stream file pertama ditulis; stream menunggu.
+          permission ??= assertCanUpload(deps.db, a, f);
           const variant = name as Variant;
-          const key = storageKey(fields.ownerType, id, variant === 'file' ? 'original' : variant);
+          const key = storageKey(f.ownerType, id, variant === 'file' ? 'original' : variant);
           jobs.push(
-            storeFile(deps, key, info.filename || `${variant}.bin`, stream).then(
-              (s) => {
-                stored[variant] = s;
-              },
-              (err) => {
-                stream.resume();
-                fail(err);
-              },
-            ),
+            permission
+              .then(() => storeFile(deps, key, info.filename || `${variant}.bin`, stream))
+              .then(
+                (s) => {
+                  stored[variant] = s;
+                },
+                (err) => {
+                  stream.resume();
+                  fail(err);
+                },
+              ),
           );
         });
         bb.on('error', fail);

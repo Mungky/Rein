@@ -5,7 +5,8 @@ import { Hono } from 'hono';
 import { audit } from '../audit';
 import { authOf, requireVerified } from '../auth/middleware';
 import type { AppEnv } from '../context';
-import { attachments, type Attachment } from '../db/schema';
+import { loadProjectAccess, resolveOwner } from '../auth/project-access';
+import { attachments, users, type Attachment } from '../db/schema';
 import { forbidden, notFound } from '../lib/http';
 import { userAgent } from '../lib/ip';
 import { contentDisposition } from '../storage/driver';
@@ -44,9 +45,20 @@ export const fileRoutes = new Hono<AppEnv>()
     });
     if (!att) throw notFound('Lampiran tidak ditemukan');
 
-    // M0: foto profil boleh dilihat semua user aktif; jenis lain hanya pengunggah.
-    // M1: lampiran project/WO/logbook dicek lewat can(user, 'project.view', project).
-    if (att.ownerType !== 'user' && att.uploadedBy !== a.user.id) throw forbidden();
+    // Izin di server (PRD §7 "Akses"):
+    //  - milik user: foto profil terlihat semua user aktif; staging lampiran hanya pengunggah.
+    //  - logo klien: semua user aktif.
+    //  - project/WO/logbook: `project.view` pada project pemilik (404 jika tidak boleh).
+    if (att.ownerType === 'user') {
+      if (att.uploadedBy !== a.user.id) {
+        const owner = await db.query.users.findFirst({ where: eq(users.id, att.ownerId) });
+        if (owner?.avatarAttachmentId !== att.id) throw forbidden();
+      }
+    } else if (att.ownerType !== 'client') {
+      const owner = await resolveOwner(db, att.ownerType, att.ownerId);
+      if (!owner) throw notFound('Lampiran tidak ditemukan');
+      await loadProjectAccess(db, a, owner.projectId);
+    }
 
     if (att.category === 'bast' || att.category === 'contract') {
       await audit(db, {

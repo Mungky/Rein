@@ -9,6 +9,7 @@ import { adminUserRoutes } from './routes/admin-users';
 import { attachmentRoutes } from './routes/attachments';
 import { fileRoutes } from './routes/files';
 import { meRoutes } from './routes/me';
+import { directoryRoutes, projectRoutes } from './routes/projects';
 import { authRoutes } from './routes/auth';
 import { googleRoutes } from './routes/google';
 import { healthRoutes } from './routes/health';
@@ -65,6 +66,8 @@ export function createApp(deps: Deps) {
   app.route('/api/admin', adminUserRoutes);
   app.route('/api/attachments', attachmentRoutes);
   app.route('/api/me', meRoutes);
+  app.route('/api/projects', projectRoutes);
+  app.route('/api/directory', directoryRoutes);
   app.route('/files', fileRoutes);
   app.route('/auth/google', googleRoutes);
 
