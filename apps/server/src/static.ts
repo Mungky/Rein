@@ -51,19 +51,15 @@ export function mountSpa(app: Hono<AppEnv>, distDir: string): void {
     await next();
     if (c.res.ok) c.res.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
   });
-  app.use(
-    '*',
-    serveStatic({
-      root,
-      precompressed: true,
-      onFound: (p, c) => {
-        if (p.endsWith('.html')) {
-          c.header('Cache-Control', 'no-cache');
-          c.header('Content-Security-Policy', csp);
-        }
-      },
-    }),
-  );
+  app.use('*', async (c, next) => {
+    await next();
+    // onFound dipanggil sesudah Response dibuat; pasang header pada respons final, termasuk HTML terkompresi.
+    if (c.res.headers.get('Content-Type')?.startsWith('text/html')) {
+      c.res.headers.set('Cache-Control', 'no-cache');
+      c.res.headers.set('Content-Security-Policy', csp);
+    }
+  });
+  app.use('*', serveStatic({ root, precompressed: true }));
   app.get('*', (c) => {
     const p = c.req.path;
     if (API_PREFIXES.some((x) => p.startsWith(x))) return c.notFound();
