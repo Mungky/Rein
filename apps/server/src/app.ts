@@ -9,6 +9,7 @@ import { adminUserRoutes } from './routes/admin-users';
 import { attachmentRoutes } from './routes/attachments';
 import { fileRoutes } from './routes/files';
 import { meRoutes } from './routes/me';
+import { notificationRoutes, streamRoutes } from './routes/notifications';
 import { directoryRoutes, projectRoutes } from './routes/projects';
 import { homeRoutes, projectWoRoutes, woRoutes } from './routes/work-orders';
 import { authRoutes } from './routes/auth';
@@ -16,6 +17,7 @@ import { googleRoutes } from './routes/google';
 import { healthRoutes } from './routes/health';
 import { csrfGuard, securityHeaders } from './security';
 import { mountSpa } from './static';
+import { webhookRoutes } from './routes/webhooks';
 
 const JSON_LIMIT = 64 * 1024;
 
@@ -48,6 +50,8 @@ export function createApp(deps: Deps) {
   });
 
   app.route('/', healthRoutes);
+  // Webhook dari OpenWA (HMAC, tanpa sesi/CSRF) — sebelum middleware /api/*.
+  app.route('/webhooks', webhookRoutes);
 
   app.use('/api/*', csrfGuard);
   const jsonLimit = bodyLimit({
@@ -72,6 +76,8 @@ export function createApp(deps: Deps) {
   app.route('/api/projects', projectWoRoutes);
   app.route('/api/work-orders', woRoutes);
   app.route('/api/home', homeRoutes);
+  app.route('/api/notifications', notificationRoutes);
+  app.route('/api/stream', streamRoutes);
   app.route('/files', fileRoutes);
   app.route('/auth/google', googleRoutes);
 

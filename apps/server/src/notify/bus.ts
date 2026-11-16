@@ -10,7 +10,9 @@ emitter.setMaxListeners(0);
 export type BusEvent =
   | { type: 'notification' }
   | { type: 'wo'; woId: string; projectId: string }
-  | { type: 'project'; projectId: string };
+  | { type: 'project'; projectId: string }
+  /** Kontak user baru terverifikasi (mis. lewat webhook WA) → halaman verifikasi lanjut sendiri. */
+  | { type: 'verification' };
 
 export function publishToUsers(userIds: Iterable<string>, event: BusEvent): void {
   const ids = new Set(userIds);
