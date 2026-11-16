@@ -36,3 +36,16 @@ export function todayWib(now: Date = new Date()): string {
 export function isOverdue(deadline: string, status: string, today: string = todayWib()): boolean {
   return deadline < today && status !== 'done' && status !== 'canceled';
 }
+
+/**
+ * FR-004 AC1: PIN 6 digit; tolak semua digit sama (111111) dan deret berurutan naik/turun
+ * (123456, 654321). Mengembalikan pesan kesalahan atau null bila PIN boleh dipakai.
+ */
+export function pinProblem(pin: string): string | null {
+  if (!/^\d{6}$/.test(pin)) return 'PIN harus 6 digit angka';
+  const d = [...pin].map(Number);
+  if (d.every((x) => x === d[0])) return 'PIN tidak boleh berisi digit yang sama semua';
+  const step = (s: number) => d.every((x, i) => i === 0 || x - d[i - 1]! === s);
+  if (step(1) || step(-1)) return 'PIN tidak boleh berupa angka berurutan';
+  return null;
+}

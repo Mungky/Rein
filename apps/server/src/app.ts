@@ -5,10 +5,13 @@ import type { AppEnv, Deps } from './context';
 import { isSecureCookie } from './env';
 import { HttpError } from './lib/http';
 import { clientIp } from './lib/ip';
+import { adminSettingsRoutes } from './routes/admin-settings';
 import { adminUserRoutes } from './routes/admin-users';
 import { attachmentRoutes } from './routes/attachments';
+import { devRoutes } from './routes/dev';
 import { fileRoutes } from './routes/files';
 import { meRoutes } from './routes/me';
+import { pinRoutes } from './routes/pin';
 import { notificationRoutes, streamRoutes } from './routes/notifications';
 import { directoryRoutes, projectRoutes } from './routes/projects';
 import { homeRoutes, projectWoRoutes, woRoutes } from './routes/work-orders';
@@ -67,8 +70,10 @@ export function createApp(deps: Deps) {
   app.use('/api/*', sessionMiddleware);
   app.use('/files/*', sessionMiddleware);
 
+  app.route('/api/auth/pin', pinRoutes);
   app.route('/api/auth', authRoutes);
   app.route('/api/admin', adminUserRoutes);
+  app.route('/api/admin', adminSettingsRoutes);
   app.route('/api/attachments', attachmentRoutes);
   app.route('/api/me', meRoutes);
   app.route('/api/projects', projectRoutes);
@@ -79,6 +84,8 @@ export function createApp(deps: Deps) {
   app.route('/api/notifications', notificationRoutes);
   app.route('/api/stream', streamRoutes);
   app.route('/files', fileRoutes);
+  // Alat bantu dev/test — tidak pernah dipasang di produksi.
+  if (deps.env.NODE_ENV !== 'production') app.route('/api/dev', devRoutes);
   app.route('/auth/google', googleRoutes);
 
   app.notFound((c) =>

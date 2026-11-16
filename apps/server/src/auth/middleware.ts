@@ -4,7 +4,16 @@ import { getCookie } from 'hono/cookie';
 import type { AppEnv, AuthContext } from '../context';
 import { forbidden, HttpError, unauthorized } from '../lib/http';
 import { permissionsForRole } from './permissions';
-import { loadSession, SESSION_COOKIE, touchSession } from './session';
+import { IDLE_LOCK_MS, loadSession, lockSession, SESSION_COOKIE, touchSession } from './session';
+
+/** Rute yang tetap bisa dipakai saat sesi terkunci PIN. */
+const LOCK_ALLOWED = new Set([
+  '/api/auth/me',
+  '/api/auth/config',
+  '/api/auth/login',
+  '/api/auth/logout',
+  '/api/auth/pin/unlock',
+]);
 
 /** Muat sesi dari cookie (jika ada) ke `c.var.auth`. Tidak menolak request. */
 export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
@@ -14,14 +23,25 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     const { db } = c.var.deps;
     const loaded = await loadSession(db, token);
     if (loaded) {
-      await touchSession(db, loaded.session);
+      const idle = Date.now() - loaded.session.lastSeenAt.getTime() > IDLE_LOCK_MS;
+      // Hanya perangkat ber-PIN yang bisa dikunci; PIN dinonaktifkan → kunci lama tidak berlaku.
+      const locked = Boolean(loaded.device?.hasPin) && (loaded.session.locked || idle);
+      if (locked && !loaded.session.locked) await lockSession(db, loaded.session.id);
+      if (!locked) await touchSession(db, loaded.session);
       c.set('auth', {
         user: loaded.user,
         session: loaded.session,
         permissions: await permissionsForRole(db, loaded.user.roleId),
         primaryEmail: loaded.primaryEmail,
         emailVerified: loaded.emailVerified,
+        whatsapp: loaded.whatsapp,
+        whatsappVerified: Boolean(loaded.whatsapp),
+        device: loaded.device,
+        locked,
       });
+      if (locked && !LOCK_ALLOWED.has(c.req.path)) {
+        throw new HttpError(423, 'LOCKED', 'Sesi terkunci. Masukkan PIN untuk melanjutkan.');
+      }
     }
   }
   await next();
@@ -38,11 +58,20 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
-/** FR-003 AC4: user yang belum memverifikasi email hanya boleh membuka alur verifikasi. */
+/**
+ * FR-003 AC4 + keputusan D2 (docs/M1-RENCANA.md): selama email ditunda, akses dibuka bila
+ * MINIMAL SATU kontak (email atau WhatsApp) terverifikasi. Selain itu hanya alur verifikasi.
+ */
+export const isVerified = (a: AuthContext): boolean => a.emailVerified || a.whatsappVerified;
+
 export const requireVerified: MiddlewareHandler<AppEnv> = async (c, next) => {
   const a = authOf(c);
-  if (!a.emailVerified) {
-    throw new HttpError(403, 'VERIFICATION_REQUIRED', 'Verifikasi email Anda terlebih dahulu');
+  if (!isVerified(a)) {
+    throw new HttpError(
+      403,
+      'VERIFICATION_REQUIRED',
+      'Verifikasi nomor WhatsApp atau email Anda terlebih dahulu',
+    );
   }
   await next();
 };

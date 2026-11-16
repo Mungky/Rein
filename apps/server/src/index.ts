@@ -58,6 +58,8 @@ const deps: Deps = {
   limits: {
     loginIp: new FixedWindowLimiter(30, 15 * MINUTE, 15 * MINUTE),
     emailSend: new FixedWindowLimiter(5, 60 * MINUTE),
+    waStart: new FixedWindowLimiter(5, 24 * 60 * MINUTE),
+    pinUnlock: new FixedWindowLimiter(20, 15 * MINUTE),
   },
   webDist: e.NODE_ENV === 'development' && !e.WEB_DIST_DIR ? null : resolveWebDist(),
 };

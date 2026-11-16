@@ -185,10 +185,13 @@ describe.skipIf(!hasDb)('FR-002 undangan + aktivasi, FR-003 verifikasi email', (
       whatsapp: '0812-3456-7890',
     });
     expect(inv.status).toBe(201);
-    expect((await inv.json()).mailSent).toBe(true);
+    // D1/D3: email ditunda → tidak benar-benar terkirim; Admin menerima tautan untuk disalin.
+    const invBody = (await inv.json()) as { mailSent: boolean; activationLink: string };
+    expect(invBody.mailSent).toBe(false);
     const invite = mail.outbox.find((m) => m.to === email)!;
     expect(invite.subject).toContain('Aktivasi');
     const token = decodeURIComponent(/token=([^\s"&<]+)/.exec(invite.text)![1]!);
+    expect(invBody.activationLink).toContain(encodeURIComponent(token));
 
     const user = agent(app);
     const insp = await user.post('/api/auth/activation/inspect', { token });

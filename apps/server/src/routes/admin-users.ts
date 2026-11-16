@@ -1,16 +1,21 @@
-import { inviteUserSchema } from '@rein/shared';
+import { adminVerifyWhatsAppSchema, inviteUserSchema } from '@rein/shared';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { audit } from '../audit';
 import { authOf, requirePermission, requireVerified } from '../auth/middleware';
 import { revokeAllSessions } from '../auth/session';
 import { issueActivation, primaryEmailContact } from '../auth/verification';
+import { markWhatsAppVerified } from '../auth/wa-verification';
 import type { AppEnv } from '../context';
-import { roles, userContacts, users } from '../db/schema';
+import { devices, roles, userContacts, users } from '../db/schema';
 import { userAgent } from '../lib/ip';
 import { HttpError, notFound, readJson } from '../lib/http';
 
-/** FR-090 / FR-091 (sebagian, M0): daftar pengguna, undang, kirim ulang, aktif/nonaktif. */
+/**
+ * FR-090 / FR-091: daftar pengguna, undang, kirim ulang, aktif/nonaktif, reset PIN, verifikasi
+ * WA manual. D3: selama email ditunda, respons undang/kirim ulang membawa `activationLink`
+ * (token hanya ditampilkan sekali) untuk dibagikan Admin sendiri.
+ */
 export const adminUserRoutes = new Hono<AppEnv>()
   .use(requireVerified)
 
@@ -35,6 +40,13 @@ export const adminUserRoutes = new Hono<AppEnv>()
         createdAt: users.createdAt,
         email: userContacts.value,
         emailVerifiedAt: userContacts.verifiedAt,
+        whatsapp: sql<string | null>`(
+          select uc.value from user_contacts uc
+           where uc.user_id = ${users.id} and uc.kind = 'whatsapp'
+           order by uc.verified_at desc nulls last, uc.created_at desc limit 1)`,
+        whatsappVerified: sql<boolean>`exists(
+          select 1 from user_contacts uc
+           where uc.user_id = ${users.id} and uc.kind = 'whatsapp' and uc.verified_at is not null)`,
       })
       .from(users)
       .innerJoin(roles, eq(roles.id, users.roleId))
@@ -109,7 +121,7 @@ export const adminUserRoutes = new Hono<AppEnv>()
       return { userId: u.id, contactId: contact!.id };
     });
 
-    const { sent } = await issueActivation(
+    const { sent, link } = await issueActivation(
       { db, env, mail },
       {
         userId: created.userId,
@@ -120,7 +132,7 @@ export const adminUserRoutes = new Hono<AppEnv>()
         inviterName: a.user.fullName,
       },
     );
-    return c.json({ id: created.userId, mailSent: sent }, 201);
+    return c.json({ id: created.userId, mailSent: sent, activationLink: link }, 201);
   })
 
   .post('/users/:id/resend-invite', requirePermission('admin.users'), async (c) => {
@@ -133,7 +145,7 @@ export const adminUserRoutes = new Hono<AppEnv>()
     }
     const contact = await primaryEmailContact(db, user.id);
     if (!contact) throw new HttpError(409, 'NO_EMAIL', 'Pengguna tidak punya email');
-    const { sent } = await issueActivation(
+    const { sent, link } = await issueActivation(
       { db, env, mail },
       {
         userId: user.id,
@@ -152,7 +164,7 @@ export const adminUserRoutes = new Hono<AppEnv>()
       ip: c.var.ip,
       userAgent: userAgent(c),
     });
-    return c.json({ mailSent: sent });
+    return c.json({ mailSent: sent, activationLink: link });
   })
 
   /** FR-090 AC: user disabled langsung kehilangan semua sesi. */
@@ -178,6 +190,73 @@ export const adminUserRoutes = new Hono<AppEnv>()
       userAgent: userAgent(c),
     });
     return c.json({ ok: true });
+  })
+
+  /** FR-091: reset PIN semua perangkat user (wajib login password lalu buat PIN baru). */
+  .post('/users/:id/reset-pin', requirePermission('admin.users'), async (c) => {
+    const a = authOf(c);
+    const { db } = c.var.deps;
+    const id = c.req.param('id');
+    const user = await db.query.users.findFirst({ where: eq(users.id, id) });
+    if (!user) throw notFound('Pengguna tidak ditemukan');
+    const res = await db
+      .update(devices)
+      .set({ pinHash: null, pinFailedCount: 0, pinDisabledAt: null, updatedAt: new Date() })
+      .where(eq(devices.userId, id));
+    await audit(db, {
+      actorId: a.user.id,
+      action: 'auth.pin.reset_by_admin',
+      entityType: 'user',
+      entityId: id,
+      diff: { devices: res.rowCount ?? 0 },
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+    return c.json({ ok: true, devices: res.rowCount ?? 0 });
+  })
+
+  /** FR-003 AC2 fallback: Admin memverifikasi nomor WA secara manual. */
+  .post('/users/:id/verify-whatsapp', requirePermission('admin.users'), async (c) => {
+    const a = authOf(c);
+    const { db } = c.var.deps;
+    const id = c.req.param('id');
+    const user = await db.query.users.findFirst({ where: eq(users.id, id) });
+    if (!user) throw notFound('Pengguna tidak ditemukan');
+    const { phone } = await readJson(c, adminVerifyWhatsAppSchema);
+    let contact = phone
+      ? await db.query.userContacts.findFirst({
+          where: and(
+            eq(userContacts.userId, id),
+            eq(userContacts.kind, 'whatsapp'),
+            eq(userContacts.value, phone),
+          ),
+        })
+      : await db.query.userContacts.findFirst({
+          where: and(eq(userContacts.userId, id), eq(userContacts.kind, 'whatsapp')),
+          orderBy: (t, { desc }) => desc(t.createdAt),
+        });
+    if (!contact && phone) {
+      [contact] = await db
+        .insert(userContacts)
+        .values({ userId: id, kind: 'whatsapp', value: phone, pending: true })
+        .returning();
+    }
+    if (!contact) {
+      throw new HttpError(422, 'VALIDATION', 'Isi nomor WhatsApp pengguna', {
+        phone: 'Nomor WhatsApp wajib diisi',
+      });
+    }
+    await markWhatsAppVerified(db, contact.id);
+    await audit(db, {
+      actorId: a.user.id,
+      action: 'contact.whatsapp_verified',
+      entityType: 'user',
+      entityId: id,
+      diff: { method: 'admin', phone: contact.value },
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+    return c.json({ ok: true, phone: contact.value });
   })
 
   .post('/users/:id/enable', requirePermission('admin.users'), async (c) => {

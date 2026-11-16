@@ -4,7 +4,13 @@ import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { audit } from '../audit';
 import { generateCodeVerifier, generateState } from '../auth/google';
-import { createSession, setSessionCookie } from '../auth/session';
+import {
+  createSession,
+  deviceLabel,
+  registerDevice,
+  setDeviceCookie,
+  setSessionCookie,
+} from '../auth/session';
 import type { AppEnv } from '../context';
 import { userContacts, users, verificationCodes } from '../db/schema';
 import { isSecureCookie } from '../env';
@@ -12,12 +18,15 @@ import { safeEqual } from '../lib/crypto';
 import { userAgent } from '../lib/ip';
 
 const FLOW_COOKIE = 'rein_g';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface Flow {
   state: string;
   verifier: string;
   next: string;
   remember: boolean;
+  /** device_id klien (FR-006 AC3: aturan perangkat & PIN sama dengan login password). */
+  deviceId?: string;
 }
 
 function parseFlow(raw: string | undefined): Flow | null {
@@ -44,6 +53,7 @@ export const googleRoutes = new Hono<AppEnv>()
       verifier,
       next: safeNextPath(c.req.query('next')),
       remember: c.req.query('remember') === '1',
+      ...(UUID.test(c.req.query('device') ?? '') ? { deviceId: c.req.query('device')! } : {}),
     };
     setCookie(c, FLOW_COOKIE, Buffer.from(JSON.stringify(flow)).toString('base64url'), {
       httpOnly: true,
@@ -151,13 +161,18 @@ export const googleRoutes = new Hono<AppEnv>()
       }
     });
 
+    const deviceRowId = flow.deviceId
+      ? await registerDevice(db, user.id, flow.deviceId, deviceLabel(ua), flow.remember)
+      : null;
     const { token } = await createSession(db, {
       userId: user.id,
       trusted: flow.remember,
+      deviceRowId,
       ip,
       userAgent: ua,
     });
     setSessionCookie(c, token, flow.remember, isSecureCookie(env));
+    if (flow.deviceId) setDeviceCookie(c, flow.deviceId, isSecureCookie(env));
     await audit(db, {
       actorId: user.id,
       action: 'auth.login.success',

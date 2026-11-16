@@ -25,6 +25,10 @@ export interface Deps {
     loginIp: FixedWindowLimiter;
     /** Kirim ulang email verifikasi: 5 / jam per user (PRD §5). */
     emailSend: FixedWindowLimiter;
+    /** Kode verifikasi WA: 5 / 24 jam per nomor (PRD §5). */
+    waStart: FixedWindowLimiter;
+    /** Unlock PIN per sesi (cadangan; batas utama 5 salah per perangkat). */
+    pinUnlock: FixedWindowLimiter;
   };
   /** Folder build SPA; null = server hanya API (dev memakai Vite). */
   webDist: string | null;
@@ -46,6 +50,11 @@ export interface AuthContext {
   permissions: PermissionMap;
   primaryEmail: string | null;
   emailVerified: boolean;
+  whatsapp: string | null;
+  whatsappVerified: boolean;
+  device: { id: string; deviceId: string; hasPin: boolean } | null;
+  /** Sesi terkunci PIN (idle > 15 menit atau aplikasi dibuka ulang) → 423 kecuali rute PIN. */
+  locked: boolean;
 }
 
 export type AppEnv = {

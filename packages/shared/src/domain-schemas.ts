@@ -145,3 +145,13 @@ export const woTypeSchema = z.object({
   isPunchList: z.boolean().default(false),
   active: z.boolean().default(true),
 });
+
+/** FR-093: ubah sebagian field jenis WO; urutan lewat `woTypeOrderSchema`. */
+export const woTypeUpdateSchema = z.object({
+  name: woTypeSchema.shape.name.optional(),
+  code: woTypeSchema.shape.code.optional(),
+  category: z.enum(WO_CATEGORIES).optional(),
+  isPunchList: z.boolean().optional(),
+  active: z.boolean().optional(),
+});
+export const woTypeOrderSchema = z.object({ ids: z.array(z.uuid()).min(1).max(200) });

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { PERMISSION_KEYS, SCOPES } from './permissions';
-import { normalizePhoneId } from './util';
+import { normalizePhoneId, pinProblem } from './util';
 
 /** Pesan validasi dalam Bahasa Indonesia. */
 const req = (label: string) => `${label} wajib diisi`;
@@ -75,3 +75,36 @@ export const rolePermissionSchema = z.object({
   permission: z.enum(PERMISSION_KEYS as [string, ...string[]]),
   scope: z.enum(SCOPES),
 });
+
+export const pinSetupSchema = z
+  .object({ pin: z.string(), pinConfirm: z.string() })
+  .superRefine((v, ctx) => {
+    const problem = pinProblem(v.pin);
+    if (problem) ctx.addIssue({ code: 'custom', path: ['pin'], message: problem });
+    else if (v.pin !== v.pinConfirm) {
+      ctx.addIssue({ code: 'custom', path: ['pinConfirm'], message: 'PIN tidak sama' });
+    }
+  });
+
+export const pinUnlockSchema = z.object({
+  pin: z.string().regex(/^\d{6}$/, 'PIN harus 6 digit angka'),
+});
+
+export const whatsappStartSchema = z.object({ phone: phoneSchema });
+
+/** FR-092: role & izin. */
+export const roleCreateSchema = z.object({
+  name: z.string().trim().min(2, req('Nama role')).max(60),
+  divisionLabel: z.string().trim().max(60).default(''),
+  /** Duplikat izin dari role lain. */
+  copyFrom: z.uuid().optional(),
+});
+export const roleUpdateSchema = z.object({
+  name: z.string().trim().min(2, req('Nama role')).max(60).optional(),
+  divisionLabel: z.string().trim().max(60).optional(),
+});
+export const rolePermissionsSchema = z.object({
+  permissions: z.array(rolePermissionSchema).max(PERMISSION_KEYS.length),
+});
+
+export const adminVerifyWhatsAppSchema = z.object({ phone: phoneSchema.optional() });

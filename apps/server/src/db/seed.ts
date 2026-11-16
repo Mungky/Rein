@@ -18,6 +18,8 @@ import { rolePermissions, roles, userContacts, users, woTypes } from './schema';
 
 /** Jenis WO bawaan (PRD §4.2, frame D/10c). Jenis yang sudah ada tidak diubah. */
 export async function seedWoTypes(db: Db): Promise<number> {
+  // Hanya saat tabel kosong — jenis yang diubah/dihapus Admin (FR-093) tidak muncul lagi.
+  if (await db.query.woTypes.findFirst()) return 0;
   const rows = WO_TYPE_SEED.map((t, i) => ({
     name: t.name,
     code: t.code,

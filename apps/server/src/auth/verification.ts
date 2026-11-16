@@ -43,7 +43,7 @@ export async function issueActivation(
     username: string;
     inviterName: string;
   },
-): Promise<{ sent: boolean }> {
+): Promise<{ sent: boolean; link: string }> {
   const { db, env, mail } = deps;
   await expireOutstanding(db, p.userId, 'activate');
   const token = randomToken(32);
@@ -60,9 +60,11 @@ export async function issueActivation(
       to: p.email,
       ...activationMail({ name: p.name, inviterName: p.inviterName, username: p.username, link }),
     });
-    return { sent: true };
+    // D1: selama email ditunda (NullProvider) tidak ada yang benar-benar terkirim → Admin
+    // menyalin tautan aktivasi (D3).
+    return { sent: mail.name !== 'null', link };
   } catch {
-    return { sent: false };
+    return { sent: false, link };
   }
 }
 

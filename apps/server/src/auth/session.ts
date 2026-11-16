@@ -59,6 +59,10 @@ export interface LoadedSession {
   };
   primaryEmail: string | null;
   emailVerified: boolean;
+  /** Nomor WA terverifikasi (E.164) atau null. */
+  whatsapp: string | null;
+  /** Perangkat sesi ini; `hasPin` = PIN aktif (belum dinonaktifkan karena 5× salah). */
+  device: { id: string; deviceId: string; hasPin: boolean } | null;
 }
 
 /** Sesi sah: belum dicabut, belum kedaluwarsa, dan user masih aktif. */
@@ -77,10 +81,21 @@ export async function loadSession(db: Db, token: string): Promise<LoadedSession 
       },
       email: userContacts.value,
       emailVerifiedAt: userContacts.verifiedAt,
+      whatsapp: sql<string | null>`(
+        select uc.value from user_contacts uc
+         where uc.user_id = ${users.id} and uc.kind = 'whatsapp' and uc.verified_at is not null
+         order by uc.is_primary desc limit 1)`,
+      device: {
+        id: devices.id,
+        deviceId: devices.deviceId,
+        pinHash: devices.pinHash,
+        pinDisabledAt: devices.pinDisabledAt,
+      },
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
     .innerJoin(roles, eq(roles.id, users.roleId))
+    .leftJoin(devices, eq(devices.id, sessions.deviceId))
     .leftJoin(
       userContacts,
       and(
@@ -105,7 +120,34 @@ export async function loadSession(db: Db, token: string): Promise<LoadedSession 
     user: r.user,
     primaryEmail: r.email ?? null,
     emailVerified: r.emailVerifiedAt != null,
+    whatsapp: r.whatsapp ?? null,
+    device: r.device?.id
+      ? {
+          id: r.device.id,
+          deviceId: r.device.deviceId,
+          hasPin: Boolean(r.device.pinHash) && !r.device.pinDisabledAt,
+        }
+      : null,
   };
+}
+
+/** FR-004 AC3 / PRD §5: sesi berperangkat ber-PIN terkunci setelah idle > 15 menit. */
+export const IDLE_LOCK_MS = 15 * MINUTE;
+
+export async function lockSession(db: Db, id: string): Promise<void> {
+  await db.update(sessions).set({ locked: true }).where(eq(sessions.id, id));
+}
+
+export async function unlockSession(db: Db, s: Session): Promise<void> {
+  const now = Date.now();
+  await db
+    .update(sessions)
+    .set({
+      locked: false,
+      lastSeenAt: new Date(now),
+      ...(s.trusted ? { expiresAt: new Date(now + TRUSTED_TTL_MS) } : {}),
+    })
+    .where(eq(sessions.id, s.id));
 }
 
 /** Perbarui last_seen (maks. 1×/menit) dan geser masa berlaku sesi trusted. */

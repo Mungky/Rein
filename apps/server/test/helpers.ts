@@ -62,6 +62,8 @@ export function makeApp(
     limits: {
       loginIp: new FixedWindowLimiter(30, 15 * 60_000),
       emailSend: new FixedWindowLimiter(5, 60 * 60_000),
+      waStart: new FixedWindowLimiter(5, 24 * 60 * 60_000),
+      pinUnlock: new FixedWindowLimiter(20, 15 * 60_000),
     },
     webDist: null,
   };

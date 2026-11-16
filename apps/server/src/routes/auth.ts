@@ -4,12 +4,14 @@ import {
   safeNextPath,
   tokenOnlySchema,
   verifyEmailCodeSchema,
+  whatsappStartSchema,
 } from '@rein/shared';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { audit } from '../audit';
-import { authOf, requireAuth } from '../auth/middleware';
+import { authOf, isVerified, requireAuth } from '../auth/middleware';
+import { issueWhatsAppVerification, WA_CODE_TTL_MS } from '../auth/wa-verification';
 import { burnVerifyTime, hashSecret, verifySecret } from '../auth/password';
 import { passwordProblem } from '../auth/password-policy';
 import {
@@ -58,10 +60,23 @@ export function meResponse(a: AuthContext) {
       roleName: a.user.roleName,
       avatarUrl: a.user.avatarAttachmentId ? `/files/${a.user.avatarAttachmentId}/original` : null,
       email: a.primaryEmail,
+      whatsapp: a.whatsapp,
     },
     permissions: a.permissions,
-    verification: { email: a.emailVerified },
+    verification: { email: a.emailVerified, whatsapp: a.whatsappVerified, any: isVerified(a) },
+    /** FR-004: perangkat trusted wajib punya PIN setelah verifikasi; sesi terkunci → layar PIN. */
+    device: a.device ? { hasPin: a.device.hasPin, trusted: a.session.trusted } : null,
+    pinRequired: isVerified(a) && a.session.trusted && Boolean(a.device) && !a.device?.hasPin,
+    locked: a.locked,
   };
+}
+
+/** D2: akses dibuka bila ada kontak (email/WA) terverifikasi. */
+async function hasVerifiedContact(db: Deps['db'], userId: string): Promise<boolean> {
+  const row = await db.query.userContacts.findFirst({
+    where: and(eq(userContacts.userId, userId), sql`${userContacts.verifiedAt} is not null`),
+  });
+  return Boolean(row);
 }
 
 /** Cari user dari email (kontak utama/terverifikasi) atau username. */
@@ -196,8 +211,7 @@ export const authRoutes = new Hono<AppEnv>()
       userAgent: ua,
     });
 
-    const contact = await primaryEmailContact(db, user.id);
-    const verified = Boolean(contact?.verifiedAt);
+    const verified = await hasVerifiedContact(db, user.id);
     return c.json({ next: verified ? safeNextPath(body.next) : '/verifikasi' });
   })
 
@@ -339,7 +353,8 @@ export const authRoutes = new Hono<AppEnv>()
         { userId: user.id, contactId: contact.id, email: contact.value, name: user.fullName },
       ));
     }
-    return c.json({ next: contact?.verifiedAt ? '/' : '/verifikasi', mailSent });
+    const verified = await hasVerifiedContact(db, act.userId);
+    return c.json({ next: verified ? '/' : '/verifikasi', mailSent });
   })
 
   /** Kirim ulang kode verifikasi email (5/jam per user). */
@@ -400,4 +415,58 @@ export const authRoutes = new Hono<AppEnv>()
       userAgent: userAgent(c),
     });
     return c.json({ ok: true, signedIn: c.var.auth?.user.id === userId });
+  })
+
+  /**
+   * FR-003 AC2: status verifikasi WA untuk halaman /verifikasi (dipoll tiap beberapa detik
+   * selama menunggu pesan user masuk lewat webhook).
+   */
+  .get('/verify-whatsapp', requireAuth, async (c) => {
+    const a = authOf(c);
+    const { db, env } = c.var.deps;
+    const pending = await db.query.userContacts.findFirst({
+      where: and(
+        eq(userContacts.userId, a.user.id),
+        eq(userContacts.kind, 'whatsapp'),
+        sql`${userContacts.verifiedAt} is null`,
+      ),
+      orderBy: (t, { desc }) => desc(t.createdAt),
+    });
+    return c.json({
+      verified: a.whatsappVerified,
+      phone: a.whatsapp,
+      pendingPhone: pending?.value ?? null,
+      reinNumberSet: Boolean(env.REIN_WA_NUMBER),
+    });
+  })
+
+  /** Buat kode REIN-XXXXXX + tautan wa.me (maks. 5 per nomor per 24 jam, PRD §5). */
+  .post('/verify-whatsapp/start', requireAuth, async (c) => {
+    const a = authOf(c);
+    const { db, env, limits } = c.var.deps;
+    const { phone } = await readJson(c, whatsappStartSchema);
+    if (!limits.waStart.take(phone)) {
+      throw new HttpError(
+        429,
+        'RATE_LIMITED',
+        'Batas permintaan kode untuk nomor ini tercapai (5 per 24 jam). Hubungi Admin.',
+      );
+    }
+    const r = await issueWhatsAppVerification(db, env, a.user.id, phone);
+    await audit(db, {
+      actorId: a.user.id,
+      action: 'contact.whatsapp_code_issued',
+      entityType: 'user_contact',
+      entityId: r.contactId,
+      diff: { phone: r.phone },
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+    return c.json({
+      phone: r.phone,
+      code: r.code,
+      link: r.link,
+      expiresAt: r.expiresAt.toISOString(),
+      ttlSeconds: WA_CODE_TTL_MS / 1000,
+    });
   });

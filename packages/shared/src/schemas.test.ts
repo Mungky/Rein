@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { loginSchema, passwordSchema, usernameSchema } from './schemas';
-import { normalizePhoneId, safeNextPath } from './util';
+import { loginSchema, passwordSchema, pinSetupSchema, usernameSchema } from './schemas';
+import { normalizePhoneId, pinProblem, safeNextPath } from './util';
 
 describe('normalizePhoneId', () => {
   it.each([
@@ -57,5 +57,24 @@ describe('util WO', async () => {
     expect(isOverdue('2026-11-10', 'in_progress', '2026-11-16')).toBe(true);
     expect(isOverdue('2026-11-10', 'done', '2026-11-16')).toBe(false);
     expect(isOverdue('2026-11-16', 'todo', '2026-11-16')).toBe(false);
+  });
+});
+
+describe('PIN (FR-004 AC1)', () => {
+  it('menolak semua digit sama dan deret berurutan', () => {
+    for (const bad of ['111111', '000000', '123456', '654321', '345678', '987654']) {
+      expect(pinProblem(bad), bad).not.toBeNull();
+    }
+    for (const bad of ['12345', '1234567', '12a456', '']) expect(pinProblem(bad)).not.toBeNull();
+  });
+  it('menerima PIN biasa', () => {
+    for (const ok of ['482915', '135790', '112233', '123465'])
+      expect(pinProblem(ok), ok).toBeNull();
+  });
+  it('pinSetupSchema: konfirmasi harus sama', () => {
+    expect(pinSetupSchema.safeParse({ pin: '482915', pinConfirm: '482915' }).success).toBe(true);
+    const r = pinSetupSchema.safeParse({ pin: '482915', pinConfirm: '482916' });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues[0]?.path).toEqual(['pinConfirm']);
   });
 });
