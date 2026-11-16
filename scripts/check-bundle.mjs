@@ -40,7 +40,14 @@ for (const f of readdirSync(nodesDir)) {
     if (key) nodeKeys.push(key);
   }
 }
-const entryKeys = Object.keys(manifest).filter((k) => manifest[k].isEntry);
+// Vite juga menandai node setiap route sebagai entry; route lain dimuat saat navigasi.
+const entryKeys = Object.keys(manifest).filter(
+  (k) => manifest[k].isEntry && !k.includes('/client-optimized/nodes/'),
+);
+if (entryKeys.length !== 2) {
+  console.error(`Entry runtime SvelteKit tidak lengkap (ditemukan ${entryKeys.length}/2).`);
+  process.exit(1);
+}
 if (nodeKeys.length < 3) {
   console.error(`Node route Beranda tidak lengkap (ditemukan ${nodeKeys.length}/3).`);
   process.exit(1);
