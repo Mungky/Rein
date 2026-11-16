@@ -10,6 +10,7 @@ import { attachmentRoutes } from './routes/attachments';
 import { fileRoutes } from './routes/files';
 import { meRoutes } from './routes/me';
 import { directoryRoutes, projectRoutes } from './routes/projects';
+import { homeRoutes, projectWoRoutes, woRoutes } from './routes/work-orders';
 import { authRoutes } from './routes/auth';
 import { googleRoutes } from './routes/google';
 import { healthRoutes } from './routes/health';
@@ -68,6 +69,9 @@ export function createApp(deps: Deps) {
   app.route('/api/me', meRoutes);
   app.route('/api/projects', projectRoutes);
   app.route('/api/directory', directoryRoutes);
+  app.route('/api/projects', projectWoRoutes);
+  app.route('/api/work-orders', woRoutes);
+  app.route('/api/home', homeRoutes);
   app.route('/files', fileRoutes);
   app.route('/auth/google', googleRoutes);
 
