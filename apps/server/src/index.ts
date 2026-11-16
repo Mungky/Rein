@@ -8,6 +8,7 @@ import { createGoogleOidc } from './auth/google';
 import type { Deps } from './context';
 import { closeDb, getDb } from './db/client';
 import { runMigrations } from './db/migrate';
+import { seedRoles, seedWoTypes } from './db/seed';
 import { env, googleLoginEnabled } from './env';
 import { FixedWindowLimiter } from './lib/rate-limit';
 import { createMailProvider } from './mail/provider';
@@ -23,6 +24,9 @@ if (e.NODE_ENV === 'production' || process.env.MIGRATE_ON_START === 'true') {
   await runMigrations(e.DATABASE_URL);
   logger.info('migrasi database selesai');
 }
+// Data bawaan idempoten (role + izin default, jenis WO) — tidak menimpa perubahan Admin.
+await seedRoles(getDb());
+await seedWoTypes(getDb());
 
 function resolveWebDist(): string | null {
   const here = path.dirname(fileURLToPath(import.meta.url));

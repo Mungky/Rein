@@ -7,13 +7,31 @@ import {
   DEFAULT_ROLE_PERMISSIONS,
   SYSTEM_ROLES,
   SYSTEM_ROLE_META,
+  WO_TYPE_SEED,
   emailSchema,
   usernameSchema,
 } from '@rein/shared';
 import { hashSecret } from '../auth/password';
 import type { Db } from './client';
 
-import { rolePermissions, roles, userContacts, users } from './schema';
+import { rolePermissions, roles, userContacts, users, woTypes } from './schema';
+
+/** Jenis WO bawaan (PRD §4.2, frame D/10c). Jenis yang sudah ada tidak diubah. */
+export async function seedWoTypes(db: Db): Promise<number> {
+  const rows = WO_TYPE_SEED.map((t, i) => ({
+    name: t.name,
+    code: t.code,
+    category: t.category,
+    isPunchList: Boolean(t.isPunchList),
+    sortOrder: (i + 1) * 10,
+  }));
+  const inserted = await db
+    .insert(woTypes)
+    .values(rows)
+    .onConflictDoNothing()
+    .returning({ id: woTypes.id });
+  return inserted.length;
+}
 
 export async function seedRoles(db: Db): Promise<Map<string, string>> {
   const ids = new Map<string, string>();

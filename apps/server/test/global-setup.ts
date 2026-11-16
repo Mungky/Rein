@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { createDb } from '../src/db/client';
 import { runMigrations } from '../src/db/migrate';
-import { seedRoles } from '../src/db/seed';
+import { seedRoles, seedWoTypes } from '../src/db/seed';
 
 /**
  * Siapkan database test yang bersih: HANYA DATABASE_URL_TEST (mis. db `rein_test`).
@@ -23,5 +23,6 @@ export default async function setup(): Promise<void> {
   await runMigrations(url);
   const { db, pool } = createDb(url);
   await seedRoles(db);
+  await seedWoTypes(db);
   await pool.end();
 }
