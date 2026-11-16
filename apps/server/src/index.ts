@@ -13,7 +13,9 @@ import { env, googleLoginEnabled } from './env';
 import { FixedWindowLimiter } from './lib/rate-limit';
 import { createMailProvider } from './mail/provider';
 import { MAX_ATTACHMENT_BYTES } from '@rein/shared';
+import { startJobs } from './jobs';
 import { createStorage } from './storage';
+import { createWhatsApp } from './wa/provider';
 
 const MINUTE = 60_000;
 const e = env();
@@ -44,6 +46,7 @@ const deps: Deps = {
   logger,
   mail: createMailProvider(e, logger),
   storage: await createStorage(e),
+  wa: createWhatsApp(e, logger),
   uploadMaxBytes: MAX_ATTACHMENT_BYTES,
   google: googleLoginEnabled(e)
     ? createGoogleOidc({
@@ -60,12 +63,23 @@ const deps: Deps = {
 };
 
 const app = createApp(deps);
+const jobs = await startJobs(deps);
+
+// Sesi & webhook OpenWA dibuat otomatis (idempoten); bila gagal, Admin bisa mengulang dari
+// halaman Admin → WhatsApp.
+if (deps.wa.name === 'openwa') {
+  deps.wa
+    .ensureSetup(e.OPENWA_WEBHOOK_URL, e.OPENWA_WEBHOOK_SECRET!)
+    .then((s) => logger.info({ status: s.status }, 'sesi OpenWA'))
+    .catch((err: unknown) => logger.warn({ err: String(err) }, 'setup OpenWA gagal'));
+}
 const server = serve({ fetch: app.fetch, port: e.PORT }, (info) => {
   logger.info(
     {
       port: info.port,
       mail: deps.mail.name,
       storage: deps.storage.name,
+      wa: deps.wa.name,
       google: Boolean(deps.google),
       spa: deps.webDist,
     },
@@ -76,6 +90,7 @@ const server = serve({ fetch: app.fetch, port: e.PORT }, (info) => {
 async function shutdown(signal: string) {
   logger.info({ signal }, 'mematikan server');
   server.close();
+  await jobs.stop().catch(() => {});
   await closeDb();
   process.exit(0);
 }

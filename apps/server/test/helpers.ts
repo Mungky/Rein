@@ -11,6 +11,7 @@ import { loadEnv, type Env } from '../src/env';
 import { FixedWindowLimiter } from '../src/lib/rate-limit';
 import { NullProvider } from '../src/mail/provider';
 import { LocalDriver } from '../src/storage/local';
+import { NullWhatsApp } from '../src/wa/provider';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -48,12 +49,14 @@ export function makeApp(
   opts: { google?: GoogleOidc | null; env?: Record<string, string>; uploadMaxBytes?: number } = {},
 ) {
   const mail = new NullProvider();
+  const wa = new NullWhatsApp();
   const deps: Deps = {
     db: testDb(),
     env: testEnv(opts.env),
     logger: pino({ level: 'silent' }),
     mail,
     storage: new LocalDriver(storageRoot),
+    wa,
     uploadMaxBytes: opts.uploadMaxBytes ?? 50 * 1024 * 1024,
     google: opts.google ?? null,
     limits: {
@@ -62,7 +65,7 @@ export function makeApp(
     },
     webDist: null,
   };
-  return { app: createApp(deps), mail, deps };
+  return { app: createApp(deps), mail, wa, deps };
 }
 
 export const uniq = () => randomUUID().slice(0, 8);

@@ -42,23 +42,12 @@ import {
 import { forbidden, HttpError, notFound, readJson } from '../lib/http';
 import { userAgent } from '../lib/ip';
 import { publishToUsers } from '../notify/bus';
+import { longDate, shortDate } from '../lib/format';
 import { enqueueNotifications, type Tx } from '../notify/outbox';
 import { avatarUrl } from './projects';
 
 type Db = Deps['db'];
 
-const longDate = (d: string) =>
-  new Intl.DateTimeFormat('id-ID', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(`${d}T00:00:00Z`));
-const shortDate = (d: string) =>
-  new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(
-    new Date(`${d}T00:00:00Z`),
-  );
 const hashOf = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const stale = () =>
   new HttpError(409, 'STALE', 'WO sudah diubah orang lain. Muat ulang lalu coba lagi.');

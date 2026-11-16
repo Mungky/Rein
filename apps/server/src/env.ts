@@ -28,10 +28,15 @@ const schema = z
     GCS_BUCKET: z.string().optional(),
     GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
 
+    /** Kosong = otomatis: `openwa` bila OPENWA_URL & OPENWA_API_KEY terisi, selain itu `null`. */
+    WA_PROVIDER: z.enum(['openwa', 'null']).optional(),
     OPENWA_URL: z.string().optional(),
     OPENWA_API_KEY: z.string().optional(),
+    /** Nama sesi OpenWA (id sesi berupa UUID dibuat OpenWA, dicari lewat nama ini). */
     OPENWA_SESSION_ID: z.string().default('rein'),
     OPENWA_WEBHOOK_SECRET: z.string().optional(),
+    /** URL REIN yang dipanggil OpenWA (harus masuk SSRF_ALLOWED_HOSTS OpenWA). */
+    OPENWA_WEBHOOK_URL: z.url().default('http://host.docker.internal:3000/webhooks/openwa'),
     REIN_WA_NUMBER: z.string().optional(),
 
     /** Lokasi hasil build SPA yang disajikan server. */
@@ -52,6 +57,18 @@ const schema = z
         path: ['GCS_BUCKET'],
         message: 'wajib untuk STORAGE_DRIVER=gcs',
       });
+    }
+    if (waProviderOf(e) === 'openwa') {
+      for (const k of ['OPENWA_URL', 'OPENWA_API_KEY'] as const) {
+        if (!e[k]) ctx.addIssue({ code: 'custom', path: [k], message: 'wajib untuk WhatsApp' });
+      }
+      if (!e.OPENWA_WEBHOOK_SECRET || e.OPENWA_WEBHOOK_SECRET.length < 16) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['OPENWA_WEBHOOK_SECRET'],
+          message: 'wajib, minimal 16 karakter (HMAC webhook OpenWA)',
+        });
+      }
     }
     if (e.NODE_ENV === 'production' && !e.APP_URL.startsWith('https://')) {
       ctx.addIssue({ code: 'custom', path: ['APP_URL'], message: 'APP_URL produksi wajib https' });
@@ -86,6 +103,15 @@ export function env(): Env {
 /** Hanya untuk test. */
 export function setEnvForTest(value: Env | undefined): void {
   cached = value;
+}
+
+export function waProviderOf(e: {
+  WA_PROVIDER?: 'openwa' | 'null' | undefined;
+  OPENWA_URL?: string | undefined;
+  OPENWA_API_KEY?: string | undefined;
+}): 'openwa' | 'null' {
+  if (e.WA_PROVIDER) return e.WA_PROVIDER;
+  return e.OPENWA_URL && e.OPENWA_API_KEY ? 'openwa' : 'null';
 }
 
 export const googleLoginEnabled = (e: Env): boolean =>

@@ -7,6 +7,7 @@ import type { Env } from './env';
 import type { FixedWindowLimiter } from './lib/rate-limit';
 import type { MailProvider } from './mail/provider';
 import type { StorageDriver } from './storage/driver';
+import type { WhatsAppProvider } from './wa/provider';
 
 export interface Deps {
   db: Db;
@@ -14,6 +15,8 @@ export interface Deps {
   logger: Logger;
   mail: MailProvider;
   storage: StorageDriver;
+  /** WhatsApp lewat OpenWA (PRD §10.4); NullWhatsApp saat dev/test. */
+  wa: WhatsAppProvider;
   /** Batas per file (PRD §7: 50 MB). */
   uploadMaxBytes: number;
   google: GoogleOidc | null;

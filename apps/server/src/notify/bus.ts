@@ -13,7 +13,16 @@ export type BusEvent =
   | { type: 'project'; projectId: string };
 
 export function publishToUsers(userIds: Iterable<string>, event: BusEvent): void {
-  for (const id of new Set(userIds)) emitter.emit(`user:${id}`, event);
+  const ids = new Set(userIds);
+  for (const id of ids) emitter.emit(`user:${id}`, event);
+  // Notifikasi baru mungkin membawa delivery WA `queued` → bangunkan worker tanpa menunggu cron.
+  if (event.type === 'notification' && ids.size) emitter.emit('deliver');
+}
+
+/** Dipakai worker kirim (jobs.ts) untuk mengirim segera setelah transaksi commit. */
+export function onDeliveryKick(fn: () => void): () => void {
+  emitter.on('deliver', fn);
+  return () => emitter.off('deliver', fn);
 }
 
 export function subscribeUser(userId: string, fn: (e: BusEvent) => void): () => void {
