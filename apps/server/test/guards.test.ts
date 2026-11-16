@@ -29,7 +29,6 @@ const PENDING: Record<string, string> = {
   'logbook.edit.own': 'edit/hapus entri logbook menyusul (endpoint belum ada)',
   'logbook.delete.any': 'hapus entri logbook orang lain menyusul (endpoint belum ada)',
   'attachment.delete.any': 'hapus lampiran menyusul (endpoint belum ada)',
-  'view.scurve': 'S-Curve = M2',
   'admin.audit': 'audit log viewer = FR-094 (P1, M3)',
 };
 

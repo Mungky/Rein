@@ -1,6 +1,6 @@
 /**
  * Project (PRD §3.3, FR-020–FR-025): daftar, buat, detail, edit, status, anggota,
- * progres per kategori, syarat Selesai. Izin selalu lewat can() + resource project.
+ * progres per kategori, penutupan manual. Izin selalu lewat can() + resource project.
  */
 import {
   categorySummaries,
@@ -13,9 +13,12 @@ import {
   projectUpdateSchema,
   PROJECT_STATUS_LABEL,
   type WoProgressInput,
+  buildSCurve,
+  WO_CATEGORIES,
 } from '@rein/shared';
 import { and, asc, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { audit } from '../audit';
 import { authOf, requireVerified } from '../auth/middleware';
 import {
@@ -36,15 +39,17 @@ import {
   users,
   woTypes,
   workOrders,
+  logbookEntries,
+  progressEvents,
 } from '../db/schema';
-import { HttpError, notFound, readJson } from '../lib/http';
+import { HttpError, notFound, readJson, validate } from '../lib/http';
 import { userAgent } from '../lib/ip';
 import { claimProjectImage } from '../lib/project-media';
 import { publishToUsers } from '../notify/bus';
 import { enqueueNotifications, type Tx } from '../notify/outbox';
 
 type Db = Deps['db'];
-type ProgressRow = WoProgressInput & { urgent: boolean; isPunchList: boolean };
+type ProgressRow = WoProgressInput & { urgent: boolean };
 
 const conflict = (message: string, field?: string) =>
   new HttpError(409, 'CONFLICT', message, field ? { [field]: message } : undefined);
@@ -64,7 +69,6 @@ export async function progressInputs(db: Db, projectIds: string[]) {
       progress: workOrders.progress,
       category: woTypes.category,
       urgent: workOrders.urgent,
-      isPunchList: woTypes.isPunchList,
     })
     .from(workOrders)
     .innerJoin(woTypes, eq(woTypes.id, workOrders.typeId))
@@ -93,46 +97,6 @@ async function assertRpoFree(db: Db, rpo: string, exceptId?: string) {
   if (other) throw conflict(`No RPO sudah dipakai project ${other.name}`, 'rpoNumber');
 }
 
-/** FR-024: syarat Selesai — punch list habis, tanggal serah terima, minimal 1 BAST. */
-async function completion(db: Db, p: { id: string; handoverDate: string | null }) {
-  const [punch] = await db
-    .select({ n: sql<number>`count(*)::int` })
-    .from(workOrders)
-    .innerJoin(woTypes, eq(woTypes.id, workOrders.typeId))
-    .where(
-      and(
-        eq(workOrders.projectId, p.id),
-        isNull(workOrders.deletedAt),
-        eq(woTypes.isPunchList, true),
-        sql`${workOrders.status} not in ('done','canceled')`,
-      ),
-    );
-  const [bast] = await db
-    .select({ n: sql<number>`count(*)::int` })
-    .from(attachments)
-    .where(
-      and(
-        eq(attachments.ownerType, 'project'),
-        eq(attachments.ownerId, p.id),
-        eq(attachments.category, 'bast'),
-        isNull(attachments.deletedAt),
-      ),
-    );
-  const openPunch = punch?.n ?? 0;
-  const bastCount = bast?.n ?? 0;
-  const checks = {
-    punchListClear: openPunch === 0,
-    handoverDate: Boolean(p.handoverDate),
-    bastUploaded: bastCount > 0,
-  };
-  return {
-    ...checks,
-    openPunch,
-    bastCount,
-    ready: checks.punchListClear && checks.handoverDate && checks.bastUploaded,
-  };
-}
-
 export async function memberList(db: Db, projectId: string) {
   const rows = await db
     .select({
@@ -158,7 +122,6 @@ async function projectDetail(db: Db, a: AuthContext, acc: ProjectAccess) {
   const p = acc.project;
   const client = await db.query.clients.findFirst({ where: eq(clients.id, p.clientId) });
   const wos = (await progressInputs(db, [p.id])).get(p.id) ?? [];
-  const nonPunch = wos.filter((w) => !w.isPunchList && w.status !== 'canceled');
   return {
     id: p.id,
     name: p.name,
@@ -172,16 +135,12 @@ async function projectDetail(db: Db, a: AuthContext, acc: ProjectAccess) {
     bannerUrl: avatarUrl(p.bannerAttachmentId),
     status: p.status,
     onHoldReason: p.onHoldReason,
-    handoverDate: p.handoverDate,
     doneAt: p.doneAt,
     updatedAt: p.updatedAt,
     progress: projectProgress(wos),
     categories: categorySummaries(wos),
     woCount: wos.length,
     members: await memberList(db, p.id),
-    completion: await completion(db, p),
-    /** Hint PRD §4.4: semua WO non-punch-list selesai. */
-    allWorkDone: nonPunch.length > 0 && nonPunch.every((w) => w.status === 'done'),
     can: projectCapabilities(a, acc),
   };
 }
@@ -485,13 +444,6 @@ export const projectRoutes = new Hono<AppEnv>()
     if (check.reasonRequired && !body.note) {
       throw new HttpError(422, 'VALIDATION', 'Isi alasan', { note: 'Alasan wajib diisi' });
     }
-    if (body.status === 'done' && !(await completion(db, p)).ready) {
-      throw new HttpError(
-        422,
-        'COMPLETION_REQUIRED',
-        'Syarat Selesai belum terpenuhi: punch list habis, tanggal serah terima, dan BAST',
-      );
-    }
     const recipients = (await memberList(db, p.id)).map((m) => m.userId);
     const notified = await db.transaction(async (tx) => {
       await tx
@@ -637,11 +589,85 @@ export const projectRoutes = new Hono<AppEnv>()
     return c.json({ members: await memberList(db, p.id) });
   })
 
-  /** Lampiran tingkat project (FR-023). */
+  .get('/:id/scurve', async (c) => {
+    const a = authOf(c);
+    const { db } = c.var.deps;
+    const acc = await loadProjectAccess(db, a, c.req.param('id'));
+    assertCan(a, 'view.scurve', acc.res);
+    const query = validate(
+      z.object({
+        category: z.enum(WO_CATEGORIES).optional(),
+        assignee: z.uuid().optional(),
+        urgent: z.enum(['true']).optional(),
+      }),
+      c.req.query(),
+    );
+    const rows = await db
+      .select({
+        id: workOrders.id,
+        title: workOrders.title,
+        numberLabel: workOrders.numberLabel,
+        plannedStart: workOrders.plannedStart,
+        deadline: workOrders.deadline,
+        weight: workOrders.weight,
+        progress: workOrders.progress,
+        status: workOrders.status,
+        category: woTypes.category,
+      })
+      .from(workOrders)
+      .innerJoin(woTypes, eq(woTypes.id, workOrders.typeId))
+      .where(
+        and(
+          eq(workOrders.projectId, acc.project.id),
+          isNull(workOrders.deletedAt),
+          query.category ? eq(woTypes.category, query.category) : undefined,
+          query.assignee ? eq(workOrders.assigneeId, query.assignee) : undefined,
+          query.urgent ? eq(workOrders.urgent, true) : undefined,
+        ),
+      );
+    const ids = rows.map((w) => w.id);
+    const history = ids.length
+      ? await db
+          .select({
+            woId: progressEvents.woId,
+            progress: progressEvents.progress,
+            status: progressEvents.status,
+            recordedAt: progressEvents.recordedAt,
+          })
+          .from(progressEvents)
+          .where(inArray(progressEvents.woId, ids))
+          .orderBy(asc(progressEvents.recordedAt), asc(progressEvents.id))
+      : [];
+    const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+    const result = buildSCurve(
+      rows,
+      history.map((event) => ({ ...event, recordedAt: event.recordedAt.toISOString() })),
+      today,
+    );
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return c.json({
+      ...result,
+      weights: result.weights.map((w) => ({
+        ...w,
+        title: byId.get(w.id)!.title,
+        numberLabel: byId.get(w.id)!.numberLabel,
+      })),
+    });
+  })
+
+  /** Lampiran project mencakup WO dan logbook yang masih aktif. */
   .get('/:id/attachments', async (c) => {
     const a = authOf(c);
     const { db } = c.var.deps;
     const acc = await loadProjectAccess(db, a, c.req.param('id'));
+    const woIds = db
+      .select({ id: workOrders.id })
+      .from(workOrders)
+      .where(and(eq(workOrders.projectId, acc.project.id), isNull(workOrders.deletedAt)));
+    const logIds = db
+      .select({ id: logbookEntries.id })
+      .from(logbookEntries)
+      .where(and(inArray(logbookEntries.woId, woIds), isNull(logbookEntries.deletedAt)));
     const rows = await db
       .select({
         id: attachments.id,
@@ -649,6 +675,8 @@ export const projectRoutes = new Hono<AppEnv>()
         mime: attachments.mime,
         sizeBytes: attachments.sizeBytes,
         category: attachments.category,
+        ownerType: attachments.ownerType,
+        ownerId: attachments.ownerId,
         createdAt: attachments.createdAt,
         uploadedBy: users.fullName,
         hasThumb: sql<boolean>`${attachments.thumbKey} is not null`,
@@ -657,8 +685,11 @@ export const projectRoutes = new Hono<AppEnv>()
       .innerJoin(users, eq(users.id, attachments.uploadedBy))
       .where(
         and(
-          eq(attachments.ownerType, 'project'),
-          eq(attachments.ownerId, acc.project.id),
+          or(
+            and(eq(attachments.ownerType, 'project'), eq(attachments.ownerId, acc.project.id)),
+            and(eq(attachments.ownerType, 'wo'), inArray(attachments.ownerId, woIds)),
+            and(eq(attachments.ownerType, 'logbook'), inArray(attachments.ownerId, logIds)),
+          ),
           isNull(attachments.deletedAt),
         ),
       )

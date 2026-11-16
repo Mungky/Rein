@@ -2,7 +2,6 @@
   import { resolve } from '$app/paths';
   import { page } from '$app/state';
   import type { NavItem } from '$lib/nav';
-  import { effectiveTheme, theme, toggleTheme } from '$lib/theme.svelte';
   import Avatar from './Avatar.svelte';
   import Icon from './Icon.svelte';
   import Kbd from './Kbd.svelte';
@@ -21,13 +20,25 @@
   }
   let { user, items, adminItems = [], onpalette, onlogout }: Props = $props();
 
-  const isDark = $derived(theme.pref !== undefined && effectiveTheme() === 'dark');
+  let account = $state<HTMLDetailsElement>();
+  function closeAccount(e: PointerEvent) {
+    if (account?.open && e.target instanceof Node && !account.contains(e.target))
+      account.open = false;
+  }
+  function onEscape(e: KeyboardEvent) {
+    if (e.key === 'Escape' && account?.open) {
+      account.open = false;
+      account.querySelector('summary')?.focus();
+    }
+  }
 
   function active(href: string): boolean {
     const p = page.url.pathname;
     return href === '/' ? p === '/' : p === href || p.startsWith(`${href}/`);
   }
 </script>
+
+<svelte:window onpointerdown={closeAccount} onkeydown={onEscape} />
 
 <aside class="sidebar" aria-label="Navigasi">
   <div class="ws"><span class="logo">R</span>REIN<span class="org">Remula</span></div>
@@ -72,21 +83,70 @@
   {/if}
 
   <div class="flex"></div>
-  <button class="nav" onclick={(e) => toggleTheme(e.currentTarget)}>
-    <Icon name={isDark ? 'sun' : 'moon'} />{isDark ? 'Tema terang' : 'Tema gelap'}
-  </button>
-  {#if onlogout}
-    <button class="nav" onclick={onlogout}><Icon name="logout" />Keluar</button>
-  {/if}
-  <a class="me" href={resolve('/profil')}>
-    <Avatar name={user.fullName} src={user.avatarUrl} size={24} />
-    <span class="who"
-      ><b>{user.nickname ?? user.fullName}</b><span class="faint">{user.roleName}</span></span
-    >
-  </a>
+  <details class="account" bind:this={account}>
+    <summary class="me">
+      <Avatar name={user.fullName} src={user.avatarUrl} size={24} />
+      <span class="who"
+        ><b>{user.nickname ?? user.fullName}</b><span class="faint">{user.roleName}</span></span
+      >
+      <Icon name="chevron-down" size={14} />
+    </summary>
+    <div class="account-menu">
+      <a
+        href={resolve('/profil')}
+        onclick={() => {
+          if (account) account.open = false;
+        }}><Icon name="user" />Konfigurasi profil</a
+      >
+      {#if onlogout}<button onclick={onlogout}><Icon name="logout" />Keluar akun</button>{/if}
+    </div>
+  </details>
 </aside>
 
 <style>
+  .account {
+    position: relative;
+  }
+  .account summary {
+    list-style: none;
+    cursor: pointer;
+  }
+  .account summary::-webkit-details-marker {
+    display: none;
+  }
+  .account summary > :global(svg) {
+    margin-left: auto;
+    flex: none;
+  }
+  .account-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    padding: 4px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-surface);
+    box-shadow: var(--shadow-2);
+  }
+  .account-menu a,
+  .account-menu button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    color: var(--color-text-primary);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    text-align: left;
+  }
+  .account-menu a:hover,
+  .account-menu button:hover {
+    background: var(--color-bg-hover);
+  }
+
   .sidebar {
     display: flex;
     flex-direction: column;

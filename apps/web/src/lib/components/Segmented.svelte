@@ -9,7 +9,12 @@
     label?: string;
   }
   let { value = $bindable(), options, label = 'Tampilan' }: Props = $props();
-  const idx = $derived(Math.max(0, options.findIndex((o) => o.value === value)));
+  const idx = $derived(
+    Math.max(
+      0,
+      options.findIndex((o) => o.value === value),
+    ),
+  );
 </script>
 
 <div class="seg" role="tablist" aria-label={label} style:--n={options.length} style:--i={idx}>
@@ -28,9 +33,10 @@
 
 <style>
   .seg {
+    --item-width: 84px;
     position: relative;
     display: inline-grid;
-    grid-template-columns: repeat(var(--n), auto);
+    grid-template-columns: repeat(var(--n), var(--item-width));
     padding: 2px;
     gap: 2px;
     border-radius: var(--radius-md);
@@ -44,7 +50,7 @@
     align-items: center;
     justify-content: center;
     gap: 6px;
-    min-width: 84px;
+    min-width: 0;
     height: 24px;
     padding: 0 8px;
     border-radius: var(--radius-sm);
@@ -59,12 +65,26 @@
     position: absolute;
     z-index: 0;
     top: 2px;
-    left: calc(2px + var(--i) * (84px + 2px));
-    width: 84px;
+    left: calc(2px + var(--i) * (var(--item-width) + 2px));
+    width: var(--item-width);
     height: 24px;
     border-radius: var(--radius-sm);
     background: var(--color-bg-surface);
     box-shadow: var(--shadow-1);
     transition: left 0.22s var(--ease);
+  }
+  @media (max-width: 767px) {
+    .seg {
+      --item-width: 68px;
+    }
+    button {
+      height: 44px;
+      padding: 0 4px;
+      gap: 4px;
+      font-size: 11px;
+    }
+    .pill {
+      height: 44px;
+    }
   }
 </style>

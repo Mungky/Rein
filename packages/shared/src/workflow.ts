@@ -127,7 +127,7 @@ export function checkProjectTransition(
   if (from === 'on_hold' && to === 'active') {
     return actor.canEdit ? { ok: true, reasonRequired: false } : deny;
   }
-  if (from === 'active' && to === 'done') {
+  if ((from === 'active' || from === 'on_hold') && to === 'done') {
     return actor.canClose ? { ok: true, reasonRequired: false } : deny;
   }
   if (from === 'done' && to === 'active') {

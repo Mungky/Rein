@@ -53,25 +53,18 @@
 
   const userId = $derived(session.me?.user.id ?? '');
   const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
-  const daysLeft = $derived(
-    Math.round((Date.parse(wo.deadline) - Date.parse(today)) / 86_400_000),
-  );
+  const daysLeft = $derived(Math.round((Date.parse(wo.deadline) - Date.parse(today)) / 86_400_000));
 
   // ---------------------------------------------------------------- composer
   let body = $state('');
   let files = $state<Staged[]>([]);
-  let progress = $state<number | null>(null);
-  let toStatus = $state<WoStatus | ''>('');
   let posting = $state(false);
-  const progressOptions = $derived(
-    Array.from({ length: 21 }, (_, i) => i * 5).filter((p) => p > wo.progress),
-  );
   const uploading = $derived(files.some((f) => !f.id && !f.error));
 
   // ---------------------------------------------------------------- modals
   let reasonOpen = $state(false);
   let reason = $state('');
-  let reasonFor = $state<{ to: WoStatus; via: 'prop' | 'composer' } | null>(null);
+  let reasonFor = $state<{ to: WoStatus; via: 'prop' } | null>(null);
   let helpOpen = $state(false);
   let helpBody = $state('');
   let replyOpen = $state(false);
@@ -79,7 +72,14 @@
   let replyResolve = $state(true);
   let editOpen = $state(false);
   let members = $state<Member[]>([]);
-  let edit = $state({ title: '', assigneeId: '', deadline: '', urgent: false, weight: '', detail: '' });
+  let edit = $state({
+    title: '',
+    assigneeId: '',
+    deadline: '',
+    urgent: false,
+    weight: '',
+    detail: '',
+  });
   let busy = $state(false);
 
   function fail(err: unknown) {
@@ -93,30 +93,19 @@
 
   async function post() {
     if (posting || uploading) return;
-    if (!body.trim() && progress == null && !toStatus && !files.some((f) => f.id)) return;
-    if (toStatus && woReasonRequired(wo.status, toStatus) && !reasonOpen) {
-      reasonFor = { to: toStatus, via: 'composer' };
-      reason = '';
-      reasonOpen = true;
-      return;
-    }
+    if (!body.trim() && !files.some((f) => f.id)) return;
     posting = true;
     try {
       await api(`/api/work-orders/${wo.id}/logbook`, {
         body: {
           clientId: crypto.randomUUID(),
           body: body.trim(),
-          ...(progress != null ? { progress } : {}),
-          ...(toStatus ? { status: toStatus } : {}),
-          ...(reasonFor?.via === 'composer' && reason ? { reason } : {}),
           attachmentIds: files.filter((f) => f.id).map((f) => f.id!),
           clientCreatedAt: new Date().toISOString(),
         },
       });
       body = '';
       files = [];
-      progress = null;
-      toStatus = '';
       reasonFor = null;
       await invalidate('app:wo');
     } catch (err) {
@@ -148,13 +137,9 @@
     e?.preventDefault();
     if (!reason.trim() || !reasonFor) return;
     reasonOpen = false;
-    if (reasonFor.via === 'prop') {
-      const to = reasonFor.to;
-      reasonFor = null;
-      await changeStatus(to, reason.trim());
-    } else {
-      await post();
-    }
+    const to = reasonFor.to;
+    reasonFor = null;
+    await changeStatus(to, reason.trim());
   }
 
   async function requestHelp(e?: SubmitEvent) {
@@ -296,37 +281,34 @@
 
     {#if wo.attachments.length}
       <div class="files">
-        <span class="faint lbl"><Icon name="paperclip" size={14} />Lampiran WO · {wo.attachments.length}</span>
+        <span class="faint lbl"
+          ><Icon name="paperclip" size={14} />Lampiran WO · {wo.attachments.length}</span
+        >
         {@render thumbs(wo.attachments)}
       </div>
     {/if}
 
     <div class="sep"></div>
-    <div class="sec-h"><Icon name="logbook" /><h2>Logbook</h2><span class="faint">{entries.length}{cursor ? '+' : ''} entri</span></div>
+    <div class="sec-h">
+      <Icon name="logbook" />
+      <h2>Logbook</h2>
+      <span class="faint">{entries.length}{cursor ? '+' : ''} entri</span>
+    </div>
 
     {#if wo.can.writeLogbook}
       <div class="composer">
         <textarea
           aria-label="Tulis logbook"
-          placeholder="Tulis progres, kendala, atau catatan… (Ctrl+Enter untuk kirim)"
+          placeholder="Tulis pekerjaan, kendala, atau catatan… (Ctrl+Enter untuk kirim)"
           bind:value={body}
           {onkeydown}
-          rows="3"
-        ></textarea>
+          rows="3"></textarea>
         <div class="row">
-          <StagedFiles userId={userId} bind:items={files} compact camera />
-          <select aria-label="Progres" bind:value={progress}>
-            <option value={null}>Progres {wo.progress}% (tetap)</option>
-            {#each progressOptions as p (p)}<option value={p}>Progres {wo.progress}% → {p}%</option>{/each}
-          </select>
-          {#if wo.can.statusTargets.length}
-            <select aria-label="Status" bind:value={toStatus}>
-              <option value="">Status tetap</option>
-              {#each wo.can.statusTargets as s (s)}<option value={s}>→ {WO_STATUS_LABEL[s]}</option>{/each}
-            </select>
-          {/if}
+          <StagedFiles {userId} bind:items={files} compact camera />
           <span class="sp"></span>
-          <Button variant="primary" onclick={post} loading={posting} disabled={uploading}>Kirim</Button>
+          <Button variant="primary" onclick={post} loading={posting} disabled={uploading}
+            >Kirim</Button
+          >
         </div>
       </div>
     {/if}
@@ -374,7 +356,8 @@
             }}
           >
             <option value="">{WO_STATUS_LABEL[wo.status]}</option>
-            {#each wo.can.statusTargets as s (s)}<option value={s}>→ {WO_STATUS_LABEL[s]}</option>{/each}
+            {#each wo.can.statusTargets as s (s)}<option value={s}>→ {WO_STATUS_LABEL[s]}</option
+              >{/each}
           </select>
         {:else}
           {WO_STATUS_LABEL[wo.status]}
@@ -383,21 +366,33 @@
     </div>
     <div class="prop">
       <span>PIC</span>
-      <span class="v"><Avatar name={wo.assignee.fullName} src={wo.assignee.avatarUrl} size={20} />{wo.assignee.fullName}</span>
+      <span class="v"
+        ><Avatar name={wo.assignee.fullName} src={wo.assignee.avatarUrl} size={20} />{wo.assignee
+          .fullName}</span
+      >
     </div>
     <div class="prop"><span>Pembuat</span><span class="v">{wo.creator.fullName}</span></div>
     <div class="prop">
       <span>Deadline</span>
       <span class="v" class:late={wo.overdue}>
         {shortDate(wo.deadline)} ·
-        {#if wo.status === 'done'}selesai{:else if daysLeft >= 0}{daysLeft} hari lagi{:else}terlambat {-daysLeft} hari{/if}
+        {#if wo.status === 'done'}selesai{:else if daysLeft >= 0}{daysLeft} hari lagi{:else}terlambat
+          {-daysLeft} hari{/if}
       </span>
     </div>
     <div class="prop"><span>Urgent</span><span class="v">{wo.urgent ? 'Ya' : 'Tidak'}</span></div>
-    <div class="prop"><span>Bobot</span><span class="v tnum">{wo.weight != null ? `${wo.weight}%` : 'otomatis'}</span></div>
+    <div class="prop">
+      <span>Bobot</span><span class="v tnum"
+        >{wo.weight != null ? `${wo.weight}%` : 'otomatis'}</span
+      >
+    </div>
     <div class="prop">
       <span>Progres</span>
-      <span class="v"><Progress value={wo.status === 'done' ? 100 : wo.progress} width={96} /><b class="tnum">{wo.status === 'done' ? 100 : wo.progress}%</b></span>
+      <span class="v"
+        ><Progress value={wo.status === 'done' ? 100 : wo.progress} width={96} /><b class="tnum"
+          >{wo.status === 'done' ? 100 : wo.progress}%</b
+        ></span
+      >
     </div>
     {#if wo.can.editDetail}
       <Button icon="edit" onclick={openEdit}>Edit WO</Button>
@@ -407,13 +402,17 @@
     <div class="help" class:active={!!wo.help}>
       {#if wo.help}
         <b class="hb"><Icon name="flag" />Bantuan diminta</b>
-        <span class="muted small">Pengelola project sudah dinotifikasi lewat in-app dan WhatsApp.</span>
+        <span class="muted small"
+          >Pengelola project sudah dinotifikasi lewat in-app dan WhatsApp.</span
+        >
         {#if wo.can.resolveHelp}
           <Button icon="comment" onclick={() => (replyOpen = true)}>Balas / tandai selesai</Button>
         {/if}
       {:else}
         <b class="hb plain"><Icon name="flag" />Ada kendala?</b>
-        <span class="muted small">Tandai "Butuh bantuan" agar pengelola project langsung mendapat notifikasi.</span>
+        <span class="muted small"
+          >Tandai "Butuh bantuan" agar pengelola project langsung mendapat notifikasi.</span
+        >
         {#if wo.can.requestHelp}
           <Button icon="flag" onclick={() => (helpOpen = true)}>Minta bantuan</Button>
         {/if}
@@ -423,9 +422,15 @@
     <div class="watch">
       <span class="faint small">Pengikut · {wo.watchers.length}</span>
       <div class="stack">
-        {#each wo.watchers.slice(0, 6) as p (p.id)}<Avatar name={p.fullName} src={p.avatarUrl} size={24} />{/each}
+        {#each wo.watchers.slice(0, 6) as p (p.id)}<Avatar
+            name={p.fullName}
+            src={p.avatarUrl}
+            size={24}
+          />{/each}
       </div>
-      <Button variant="ghost" onclick={toggleWatch}>{wo.isWatching ? 'Berhenti ikuti' : 'Ikuti'}</Button>
+      <Button variant="ghost" onclick={toggleWatch}
+        >{wo.isWatching ? 'Berhenti ikuti' : 'Ikuti'}</Button
+      >
     </div>
   </aside>
 </div>
@@ -436,7 +441,14 @@
       <!-- eslint-disable svelte/no-navigation-without-resolve -- /files/* disajikan server, bukan route SPA -->
       <a class="thumb" href={fileUrl(f.id)} target="_blank" rel="noopener">
         {#if thumbUrl(f)}
-          <img src={thumbUrl(f)} alt={f.fileName} width="112" height="84" loading="lazy" decoding="async" />
+          <img
+            src={thumbUrl(f)}
+            alt={f.fileName}
+            width="112"
+            height="84"
+            loading="lazy"
+            decoding="async"
+          />
         {:else}
           <span class="im"><Icon name="file" size={20} /></span>
         {/if}
@@ -455,19 +467,31 @@
   </form>
   {#snippet footer()}
     <Button onclick={() => (reasonOpen = false)}>Batal</Button>
-    <Button variant="primary" type="submit" form="reason-f" disabled={!reason.trim()}>Simpan</Button>
+    <Button variant="primary" type="submit" form="reason-f" disabled={!reason.trim()}>Simpan</Button
+    >
   {/snippet}
 </Modal>
 
 <Modal bind:open={helpOpen} title="Butuh bantuan" width={480}>
   <form id="help-f" onsubmit={requestHelp}>
-    <Field label="Apa kendalanya?" id="help-b" hint="Pengelola project & pembuat WO menerima notifikasi segera, termasuk di jam tenang.">
+    <Field
+      label="Apa kendalanya?"
+      id="help-b"
+      hint="Pengelola project & pembuat WO menerima notifikasi segera, termasuk di jam tenang."
+    >
       <textarea id="help-b" bind:value={helpBody} rows="4" required maxlength="1000"></textarea>
     </Field>
   </form>
   {#snippet footer()}
     <Button onclick={() => (helpOpen = false)}>Batal</Button>
-    <Button variant="danger" icon="flag" type="submit" form="help-f" loading={busy} disabled={!helpBody.trim()}>Kirim permintaan</Button>
+    <Button
+      variant="danger"
+      icon="flag"
+      type="submit"
+      form="help-f"
+      loading={busy}
+      disabled={!helpBody.trim()}>Kirim permintaan</Button
+    >
   {/snippet}
 </Modal>
 
@@ -480,7 +504,13 @@
   </form>
   {#snippet footer()}
     <Button onclick={() => (replyOpen = false)}>Batal</Button>
-    <Button variant="primary" type="submit" form="reply-f" loading={busy} disabled={!replyBody.trim()}>Kirim</Button>
+    <Button
+      variant="primary"
+      type="submit"
+      form="reply-f"
+      loading={busy}
+      disabled={!replyBody.trim()}>Kirim</Button
+    >
   {/snippet}
 </Modal>
 
@@ -490,7 +520,9 @@
     {#if wo.can.editAny}
       <Field label="PIC" id="e-pic">
         <select id="e-pic" bind:value={edit.assigneeId}>
-          {#each members as m (m.userId)}<option value={m.userId}>{m.fullName} · {m.projectRole}</option>{/each}
+          {#each members as m (m.userId)}<option value={m.userId}
+              >{m.fullName} · {m.projectRole}</option
+            >{/each}
           {#if !members.length}<option value={wo.assignee.id}>{wo.assignee.fullName}</option>{/if}
         </select>
       </Field>
@@ -498,7 +530,12 @@
       <Toggle bind:checked={edit.urgent} label="Urgent" showLabel />
     {/if}
     {#if wo.can.editWeight}
-      <Input label="Bobot (%)" inputmode="decimal" bind:value={edit.weight} hint="Kosongkan = otomatis" />
+      <Input
+        label="Bobot (%)"
+        inputmode="decimal"
+        bind:value={edit.weight}
+        hint="Kosongkan = otomatis"
+      />
     {/if}
     <Field label="Detail" id="e-det">
       <textarea id="e-det" bind:value={edit.detail} rows="4" maxlength="5000"></textarea>
@@ -591,7 +628,6 @@
     padding: 8px;
     border-top: 1px solid var(--color-border-default);
   }
-  .row select,
   .prop select {
     height: 28px;
     padding: 0 6px;

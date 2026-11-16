@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { PROJECT_STATUS_LABEL, WO_CATEGORY_META, type ProjectStatus } from '@rein/shared';
+  import { PROJECT_STATUS_LABEL, type ProjectStatus } from '@rein/shared';
   import { goto, invalidate } from '$app/navigation';
   import { resolve } from '$app/paths';
   import { api, ApiError } from '$lib/api';
@@ -12,7 +12,6 @@
   import Modal from '$lib/components/Modal.svelte';
   import Progress from '$lib/components/Progress.svelte';
   import ProjectImagePicker from '$lib/components/ProjectImagePicker.svelte';
-  import Segmented from '$lib/components/Segmented.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
   import { shortDate } from '$lib/format';
   import { session } from '$lib/session.svelte';
@@ -23,25 +22,21 @@
   /** Daftar project (Figma D/03, M/03; FR-025) + Buat project 2 langkah (D/04a–b; FR-020). */
   let { data } = $props();
 
-  let view = $state<'table' | 'kanban'>('table');
+  let status = $state<ProjectStatus | ''>('');
   let q = $state('');
   const STATUSES: ProjectStatus[] = ['active', 'on_hold', 'done'];
   const list = $derived(
     data.projects.filter((p) => {
       const t = q.trim().toLowerCase();
       return (
-        !t ||
-        p.name.toLowerCase().includes(t) ||
-        p.rpoNumber.toLowerCase().includes(t) ||
-        p.clientName.toLowerCase().includes(t)
+        (!status || p.status === status) &&
+        (!t ||
+          p.name.toLowerCase().includes(t) ||
+          p.rpoNumber.toLowerCase().includes(t) ||
+          p.clientName.toLowerCase().includes(t))
       );
     }),
   );
-  const groups = $derived(STATUSES.map((s) => ({ s, items: list.filter((p) => p.status === s) })));
-  let closed = $state<Record<string, boolean>>({ done: true });
-  const catText = (cats: (typeof data.projects)[number]['activeCategories']) =>
-    cats.map((c) => WO_CATEGORY_META[c].label).join(' · ') || '—';
-
   // ---------------------------------------------------------------- Buat project
   interface DirUser {
     id: string;
@@ -151,13 +146,10 @@
 <svelte:head><title>Project · REIN</title></svelte:head>
 
 <div class="toolbar">
-  <Segmented
-    bind:value={view}
-    options={[
-      { value: 'table', label: 'Table', icon: 'table' },
-      { value: 'kanban', label: 'Kanban', icon: 'kanban' },
-    ]}
-  />
+  <select class="status-filter" aria-label="Status project" bind:value={status}>
+    <option value="">Semua status</option>
+    {#each STATUSES as st (st)}<option value={st}>{PROJECT_STATUS_LABEL[st]}</option>{/each}
+  </select>
   <label class="search">
     <Icon name="search" size={14} />
     <input placeholder="Cari project, RPO, klien" bind:value={q} aria-label="Cari project" />
@@ -182,91 +174,50 @@
       <Button href={resolve('/admin/role')}>Atur izin role</Button>
     {/if}
   </EmptyState>
-{:else if view === 'table'}
-  <div class="tbl">
-    {#each groups as g (g.s)}
-      <button
-        class="grp"
-        class:closed={closed[g.s]}
-        onclick={() => (closed[g.s] = !closed[g.s])}
-        aria-expanded={!closed[g.s]}
-      >
-        <Icon name="chevron-down" size={14} class="chev" /><span class="st st-{g.s}"></span>
-        {PROJECT_STATUS_LABEL[g.s]}<span class="n">{g.items.length}</span>
-      </button>
-      <div class="rows" class:closed={closed[g.s]}>
-        <div>
-          {#each g.items as p (p.id)}
-            <a class="pr" href={resolve('/(app)/project/[id]', { id: p.id })}>
-              <span class="nm"
-                ><b
-                  >{#if p.logoUrl}<img
-                      class="project-logo"
-                      src={p.logoUrl}
-                      alt=""
-                    />{/if}{p.name}</b
-                ><span>{p.clientName}</span></span
-              >
-              <span class="faint tnum rpo">{p.rpoNumber}</span>
-              <span class="cell cats">{catText(p.activeCategories)}</span>
-              <span class="cell prog">
-                <Progress value={p.progress} /><span class="tnum faint pc">{p.progress}%</span>
-              </span>
-              <span class="stack">
-                {#each p.team as t (t.id)}<Avatar
-                    name={t.fullName}
-                    src={t.avatarUrl}
-                    size={20}
-                  />{/each}
-              </span>
-              <span class="cell">
-                <Icon name="calendar" size={12} />{shortDate(p.startDate)} – {shortDate(p.endDate)}
-              </span>
-              <span>
-                {#if p.urgentCount}
-                  <span class="urg" title={`${p.urgentCount} WO urgent`}>{p.urgentCount}</span>
-                {/if}
-              </span>
-            </a>
-          {:else}
-            <p class="faint none">Tidak ada project.</p>
-          {/each}
-        </div>
-      </div>
-    {/each}
-  </div>
 {:else}
-  <div class="board">
-    {#each groups as g (g.s)}
-      <div class="col">
-        <div class="col-h">
-          <span class="st st-{g.s}"></span>{PROJECT_STATUS_LABEL[g.s]}<span class="n"
-            >{g.items.length}</span
+  <div class="cards">
+    {#each list as p (p.id)}
+      <a class="project-card" href={resolve('/(app)/project/[id]', { id: p.id })}>
+        <div class="card-head">
+          <span class="client-logo"
+            >{#if p.logoUrl}<img src={p.logoUrl} alt="" />{:else}{p.clientName
+                .split(/\s+/)
+                .slice(0, 2)
+                .map((word) => word[0] ?? '')
+                .join('')
+                .toUpperCase()}{/if}</span
+          >
+          <span class="rpo tnum">{p.rpoNumber}</span>
+          <span class="project-status" class:done={p.status === 'done'}
+            >{PROJECT_STATUS_LABEL[p.status]}</span
+          >
+          {#if p.urgentCount}<span class="urgent" title={`${p.urgentCount} WO urgent`}
+              ><Icon name="alert" size={14} /></span
+            >{/if}
+        </div>
+        <div class="card-title">
+          <h2>{p.name}</h2>
+          <p>{p.clientName}</p>
+        </div>
+        <div class="card-progress">
+          <Progress value={p.progress} /><span class="tnum">{p.progress}%</span>
+        </div>
+        <div class="card-foot">
+          <span class="team" aria-label={`${p.memberCount} anggota`}
+            >{#each p.team as t (t.id)}<Avatar
+                name={t.fullName}
+                src={t.avatarUrl}
+                size={20}
+              />{/each}{#if p.memberCount > p.team.length}<span class="faint"
+                >+{p.memberCount - p.team.length}</span
+              >{/if}</span
+          >
+          <span class="dates" title={`${shortDate(p.startDate)} – ${shortDate(p.endDate)}`}
+            ><Icon name="calendar" size={12} />{shortDate(p.endDate)}</span
           >
         </div>
-        {#each g.items as p (p.id)}
-          <a class="pc" href={resolve('/(app)/project/[id]', { id: p.id })}>
-            <div class="top">
-              {#if p.logoUrl}<img
-                  class="project-logo"
-                  src={p.logoUrl}
-                  alt={'Foto/logo ' + p.clientName}
-                />{/if}
-              <span class="tnum">{p.rpoNumber}</span>{#if p.urgentCount}<span class="urg">!</span
-                >{/if}
-            </div>
-            <div>
-              <b>{p.name}</b>
-              <div class="faint small">{p.clientName}</div>
-            </div>
-            <div class="cell prog">
-              <Progress value={p.progress} /><span class="tnum faint pc">{p.progress}%</span>
-            </div>
-            <div class="faint small">{catText(p.activeCategories)}</div>
-          </a>
-        {/each}
-      </div>
-    {/each}
+      </a>
+    {:else}<p class="faint">Tidak ada project yang cocok.</p>{/each}
   </div>
 {/if}
 
@@ -346,218 +297,153 @@
 </Modal>
 
 <style>
-  .project-logo {
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-md);
-    object-fit: cover;
-    flex: none;
-    vertical-align: middle;
-    margin-right: 8px;
-  }
   .toolbar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 24px;
-    border-bottom: 1px solid var(--color-border-default);
     flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--color-border-default);
   }
   .search {
     display: flex;
     align-items: center;
-    gap: 6px;
-    height: 28px;
-    padding: 0 8px;
+    gap: 8px;
+    color: var(--color-text-tertiary);
+    padding: 6px 10px;
     border: 1px solid var(--color-border-default);
     border-radius: var(--radius-md);
-    color: var(--color-icon-default);
+    background: var(--color-bg-surface);
+  }
+  .search:focus-within {
+    border-color: var(--color-accent-default);
   }
   .search input {
-    border: 0;
+    width: 240px;
+    max-width: 100%;
     outline: none;
+    border: 0;
+    padding: 0;
     background: transparent;
     color: var(--color-text-primary);
-    width: 200px;
   }
   .sp {
     flex: 1;
   }
-  .grp {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    height: 32px;
-    padding: 0 24px;
-    background: var(--color-bg-subtle);
-    border-bottom: 1px solid var(--color-border-default);
-    font-weight: 500;
-    color: var(--color-text-primary);
-  }
-  .grp :global(.chev) {
-    transition: transform 0.2s var(--ease);
-  }
-  .grp.closed :global(.chev) {
-    transform: rotate(-90deg);
-  }
-  .n {
-    color: var(--color-text-tertiary);
-    font-weight: 400;
-  }
-  .rows {
+  .cards {
     display: grid;
-    grid-template-rows: 1fr;
-    transition: grid-template-rows 0.25s var(--ease);
-  }
-  .rows > div {
-    overflow: hidden;
-  }
-  .rows.closed {
-    grid-template-rows: 0fr;
-  }
-  .pr {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 112px 190px 120px 64px 130px 28px;
+    grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
     gap: 12px;
-    align-items: center;
-    height: 44px;
-    padding: 0 24px;
-    border-bottom: 1px solid var(--color-border-default);
-    color: inherit;
-    text-decoration: none;
-    transition: background var(--dur);
+    padding: 24px;
+    align-items: start;
   }
-  .pr:hover {
-    background: var(--color-bg-hover);
-    text-decoration: none;
-  }
-  .nm {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-  .nm b {
-    font-weight: 500;
-    white-space: nowrap;
-  }
-  .nm span {
-    color: var(--color-text-tertiary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .rpo {
-    font-size: 12px;
-  }
-  .cell {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    color: var(--color-text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .cats {
-    display: block;
-  }
-  .prog .pc {
-    font-size: 12px;
-    width: 32px;
-    text-align: right;
-  }
-  .stack {
-    display: inline-flex;
-  }
-  .stack :global(.av + .av) {
-    margin-left: -5px;
-  }
-  .urg {
-    display: inline-grid;
-    place-items: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 3px;
-    border-radius: 3px;
-    background: var(--color-danger-default);
-    color: #fff;
-    font-size: 10px;
-    font-weight: 700;
-  }
-  .st {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--color-accent-default);
-  }
-  .st-on_hold {
-    background: var(--color-text-tertiary);
-  }
-  .st-done {
-    background: var(--color-success-default);
-  }
-  .none {
-    padding: 10px 24px;
-  }
-  .board {
-    display: flex;
-    gap: 12px;
-    padding: 16px 24px;
-    overflow-x: auto;
-    align-items: flex-start;
-  }
-  .col {
-    width: 300px;
-    flex: none;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .col-h {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 6px;
-    font-weight: 500;
-  }
-  .pc {
+  .project-card {
     display: flex;
     flex-direction: column;
     gap: 8px;
     padding: 12px;
     border: 1px solid var(--color-border-default);
     border-radius: var(--radius-lg);
-    background: var(--color-bg-surface);
-    box-shadow: var(--shadow-1);
     color: inherit;
     text-decoration: none;
+    background: var(--color-bg-surface);
+    box-shadow: var(--shadow-1);
     transition:
       border-color var(--dur),
-      transform var(--dur);
+      background var(--dur);
   }
-  .pc:hover {
-    border-color: var(--color-border-strong);
-    transform: translateY(-1px);
-    text-decoration: none;
+  .project-card:hover {
+    border-color: var(--color-accent-default);
+    background: var(--color-bg-hover);
   }
-  .pc b {
+  .card-head,
+  .card-progress,
+  .card-foot,
+  .team,
+  .dates {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .client-logo {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    flex: none;
+    overflow: hidden;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-bg-subtle);
+    color: var(--color-text-secondary);
+    font-size: 9px;
+  }
+  .client-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .rpo {
+    color: var(--color-text-tertiary);
+    font: var(--text-caption);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .project-status {
+    font: var(--text-micro);
+    color: var(--color-text-secondary);
+  }
+  .project-status.done {
+    color: var(--color-success-default);
+  }
+  .card-title h2 {
+    font: var(--text-body-13);
     font-weight: 500;
   }
-  .top {
+  .card-title p {
+    font: var(--text-caption);
+    color: var(--color-text-secondary);
+    margin-top: 2px;
+  }
+  .card-progress :global(.prog) {
+    flex: 1;
+  }
+  .card-progress > span {
+    font: var(--text-caption);
+    color: var(--color-text-secondary);
+  }
+  .card-foot {
+    justify-content: space-between;
+    color: var(--color-text-secondary);
+    font: var(--text-caption);
+  }
+  .urgent {
+    color: var(--color-danger-default);
     display: flex;
-    gap: 8px;
-    align-items: center;
-    font-size: 12px;
-    color: var(--color-text-tertiary);
   }
-  .top .urg {
-    margin-left: auto;
+  .team {
+    gap: 0;
   }
-  .small {
-    font-size: 12px;
+  .team :global(.av) {
+    margin-right: -4px;
+  }
+  .team > span {
+    margin-left: 8px;
+  }
+  .status-filter {
+    padding: 6px 8px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-surface);
+    color: var(--color-text-primary);
+  }
+  @media (max-width: 767px) {
+    .cards,
+    .toolbar {
+      padding: 16px;
+    }
   }
   .g {
     display: flex;
@@ -618,24 +504,8 @@
     .search input {
       width: 140px;
     }
-    .pr {
-      grid-template-columns: minmax(0, 1fr) 56px;
-      height: auto;
-      padding: 10px 16px;
-    }
-    .pr > :not(.nm):not(.prog) {
-      display: none;
-    }
-    .nm {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 0;
-    }
     .two {
       grid-template-columns: 1fr;
-    }
-    .board {
-      padding: 12px 16px;
     }
   }
 </style>

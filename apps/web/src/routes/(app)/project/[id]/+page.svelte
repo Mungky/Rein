@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     checkWoTransition,
+    checkProjectTransition,
     PROJECT_STATUS_LABEL,
     PROJECT_STATUSES,
     WO_CATEGORY_META,
@@ -32,6 +33,8 @@
   import Toggle from '$lib/components/Toggle.svelte';
   import WoCreateModal from '$lib/components/WoCreateModal.svelte';
   import WoTable from '$lib/components/WoTable.svelte';
+  import WoTimeline from '$lib/components/WoTimeline.svelte';
+  import WoSCurve from '$lib/components/WoSCurve.svelte';
   import { formatBytes, shortDate } from '$lib/format';
   import { onLive } from '$lib/live.svelte';
   import { toast } from '$lib/toast.svelte';
@@ -59,14 +62,21 @@
   onDestroy(off);
 
   const VIEW_KEY = 'rein:wview';
-  function savedView(): 'table' | 'kanban' {
+  type WorkView = 'table' | 'kanban' | 'timeline' | 'scurve';
+  function savedView(): WorkView {
     try {
-      return localStorage.getItem(VIEW_KEY) === 'kanban' ? 'kanban' : 'table';
+      const value = localStorage.getItem(VIEW_KEY);
+      return ['table', 'kanban', 'timeline', 'scurve'].includes(value ?? '')
+        ? (value as WorkView)
+        : 'table';
     } catch {
       return 'table';
     }
   }
-  let view = $state<'table' | 'kanban'>(savedView());
+  let view = $state<WorkView>(savedView());
+  $effect(() => {
+    if (view === 'scurve' && !p.can.scurve) view = 'table';
+  });
   $effect(() => {
     try {
       localStorage.setItem(VIEW_KEY, view);
@@ -146,8 +156,18 @@
   let nextStatus = $state<ProjectStatus>('on_hold');
   let note = $state('');
   let busy = $state(false);
+  const statusTargets = $derived(
+    PROJECT_STATUSES.filter(
+      (status) =>
+        checkProjectTransition(p.status, status, {
+          canEdit: p.can.edit ?? false,
+          canClose: p.can.close ?? false,
+          canCloseAll: p.can.reopen ?? false,
+        }).ok,
+    ),
+  );
   function openStatus() {
-    nextStatus = p.status === 'active' ? 'on_hold' : 'active';
+    nextStatus = statusTargets[0] ?? p.status;
     note = '';
     statusOpen = true;
   }
@@ -165,18 +185,6 @@
       toast(err instanceof ApiError ? err.message : 'Gagal', { tone: 'danger' });
     } finally {
       busy = false;
-    }
-  }
-
-  async function setHandover(v: string) {
-    try {
-      await api(`/api/projects/${p.id}`, {
-        method: 'PATCH',
-        body: { expectedUpdatedAt: p.updatedAt, handoverDate: v || null },
-      });
-      await invalidate('app:project');
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Gagal', { tone: 'danger' });
     }
   }
 
@@ -234,13 +242,20 @@
     category: string;
     createdAt: string;
     uploadedBy: string;
+    ownerType: 'project' | 'wo' | 'logbook';
+    ownerId: string;
   }
   let pfiles = $state<PFile[] | null>(null);
   async function loadFiles() {
-    pfiles = (await api<{ attachments: PFile[] }>(`/api/projects/${p.id}/attachments`)).attachments;
+    try {
+      pfiles = (await api<{ attachments: PFile[] }>(`/api/projects/${p.id}/attachments`))
+        .attachments;
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Lampiran gagal dimuat', { tone: 'danger' });
+    }
   }
   $effect(() => {
-    if (tab === 'files') void loadFiles();
+    if (tab === 'files' && p.updatedAt) void loadFiles();
   });
   let upCat = $state<AttachmentCategory>('general');
   let picker = $state<HTMLInputElement>();
@@ -319,7 +334,7 @@
     <div class="acts">
       {#if p.can.edit}<Button icon="image" onclick={() => (mediaOpen = true)}>Foto & banner</Button
         >{/if}
-      {#if p.can.edit || p.can.close}
+      {#if statusTargets.length}
         <Button icon="refresh" onclick={openStatus}>Status</Button>
       {/if}
       {#if p.can.createWo}
@@ -355,7 +370,7 @@
 </div>
 
 {#if tab === 'worklist'}
-  <div class="layout">
+  <div class="layout" class:wide={view === 'timeline' || view === 'scurve'}>
     <div class="wl">
       <div class="toolbar">
         <Segmented
@@ -363,6 +378,10 @@
           options={[
             { value: 'table', label: 'Table', icon: 'table' },
             { value: 'kanban', label: 'Kanban', icon: 'kanban' },
+            { value: 'timeline', label: 'Timeline', icon: 'timeline' },
+            ...(p.can.scurve
+              ? [{ value: 'scurve' as const, label: 'S-Curve', icon: 's-curve' as const }]
+              : []),
           ]}
         />
         <select class="chip" aria-label="Filter kategori" bind:value={cat}>
@@ -384,7 +403,13 @@
           <Icon name="alert" size={12} />Urgent
         </button>
         <span class="note faint hide-m">
-          {view === 'kanban' ? 'Seret kartu untuk mengubah status' : 'Kelompok: Status'}
+          {view === 'kanban'
+            ? 'Seret kartu untuk mengubah status'
+            : view === 'table'
+              ? 'Kelompok: Status'
+              : view === 'scurve'
+                ? 'Rencana vs aktual'
+                : 'Jadwal Work Order'}
         </span>
       </div>
       {#if !rows.length}
@@ -401,51 +426,37 @@
             {/if}
           </EmptyState>
         </div>
+      {:else if !filtered.length}<p class="filtered-empty faint">
+          Tidak ada WO yang cocok dengan filter.
+        </p>
       {:else if view === 'table'}
         <WoTable rows={filtered} />
+      {:else if view === 'timeline'}
+        <WoTimeline rows={filtered} />
+      {:else if view === 'scurve'}
+        <WoSCurve
+          projectId={p.id}
+          category={cat}
+          assignee={pic}
+          urgent={onlyUrgent}
+          revision={p.updatedAt + rows.map((w) => w.updatedAt).join('')}
+        />
       {:else}
         <Kanban rows={filtered} {canDrag} {onmove} />
       {/if}
     </div>
-    <aside class="side">
-      <h3>Syarat Selesai</h3>
-      <ul class="checks">
-        <li class:ok={p.completion.punchListClear}>
-          <Icon name={p.completion.punchListClear ? 'check' : 'alert'} size={14} />Punch list habis
-          {#if p.completion.openPunch}({p.completion.openPunch} terbuka){/if}
-        </li>
-        <li class:ok={p.completion.handoverDate}>
-          <Icon name={p.completion.handoverDate ? 'check' : 'alert'} size={14} />Tanggal serah
-          terima
-          {#if p.can.edit}
-            <input
-              type="date"
-              aria-label="Tanggal serah terima"
-              value={p.handoverDate ?? ''}
-              onchange={(e) => setHandover(e.currentTarget.value)}
-            />
-          {:else if p.handoverDate}<span class="faint">{shortDate(p.handoverDate)}</span>{/if}
-        </li>
-        <li class:ok={p.completion.bastUploaded}>
-          <Icon name={p.completion.bastUploaded ? 'check' : 'alert'} size={14} />BAST diunggah
-        </li>
-      </ul>
-      {#if p.allWorkDone && p.status !== 'done'}
-        <p class="faint small">
-          Semua WO selesai. Lengkapi syarat di atas untuk menandai project Selesai.
-        </p>
-      {/if}
-      <h3>Anggota <em>{p.members.length}</em></h3>
-      <ul>
-        {#each p.members.slice(0, 6) as mm (mm.userId)}
-          <li>
-            <Avatar name={mm.fullName} src={mm.avatarUrl} size={20} />
-            <span class="f"><b>{mm.fullName}</b></span>
-            <span class="r">{mm.isProjectManager ? 'Pengelola' : mm.projectRole}</span>
-          </li>
-        {/each}
-      </ul>
-    </aside>
+    {#if view === 'table' || view === 'kanban'}<aside class="side">
+        <h3>Anggota <em>{p.members.length}</em></h3>
+        <ul>
+          {#each p.members.slice(0, 6) as mm (mm.userId)}
+            <li>
+              <Avatar name={mm.fullName} src={mm.avatarUrl} size={20} />
+              <span class="f"><b>{mm.fullName}</b></span>
+              <span class="r">{mm.isProjectManager ? 'Pengelola' : mm.projectRole}</span>
+            </li>
+          {/each}
+        </ul>
+      </aside>{/if}
   </div>
 {:else if tab === 'members'}
   <div class="pane">
@@ -504,14 +515,17 @@
           <a class="f" href={fileUrl(f.id)} target="_blank" rel="noopener">
             <b>{f.fileName}</b>
             <small>
-              {catLabel(f.category)} · {f.uploadedBy} · {shortDate(f.createdAt)} · {formatBytes(
-                f.sizeBytes,
-              )}
+              {f.ownerType === 'wo'
+                ? 'Work Order'
+                : f.ownerType === 'logbook'
+                  ? 'Logbook'
+                  : 'Project'} · {catLabel(f.category)} · {f.uploadedBy} · {shortDate(f.createdAt)} ·
+              {formatBytes(f.sizeBytes)}
             </small>
           </a>
         </li>
       {:else}
-        <li class="faint">Belum ada lampiran project.</li>
+        <li class="faint">Belum ada lampiran project, WO, atau logbook.</li>
       {/each}
     </ul>
   </div>
@@ -541,11 +555,9 @@
   <form id="st-f" class="g" onsubmit={saveStatus}>
     <Field label="Status" id="st-s">
       <select id="st-s" bind:value={nextStatus}>
-        {#each PROJECT_STATUSES as s (s)}
-          <option value={s} disabled={s === p.status || (s === 'done' && !p.completion.ready)}>
-            {PROJECT_STATUS_LABEL[s]}{s === 'done' && !p.completion.ready
-              ? ' (syarat belum lengkap)'
-              : ''}
+        {#each statusTargets as s (s)}
+          <option value={s}>
+            {PROJECT_STATUS_LABEL[s]}
           </option>
         {/each}
       </select>
@@ -602,6 +614,12 @@
 {/if}
 
 <style>
+  .layout.wide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .filtered-empty {
+    padding: 24px;
+  }
   .banner {
     overflow: hidden;
     height: 72px;
@@ -684,6 +702,7 @@
   }
   .acts {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
   }
   .hold {
@@ -787,48 +806,6 @@
     align-items: center;
     gap: 8px;
     min-width: 0;
-  }
-  .checks li {
-    color: var(--color-danger-default);
-    flex-wrap: wrap;
-  }
-  .checks li.ok {
-    color: var(--color-success-default);
-  }
-  .checks input {
-    height: 26px;
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-sm);
-    background: var(--color-bg-surface);
-    color: var(--color-text-primary);
-    font: var(--text-caption);
-  }
-  .small {
-    font-size: 12px;
-  }
-  .f {
-    min-width: 0;
-    flex: 1;
-    color: inherit;
-    text-decoration: none;
-  }
-  .f b {
-    display: block;
-    font-weight: 400;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .f small {
-    display: block;
-    color: var(--color-text-tertiary);
-    font-size: 11px;
-  }
-  .r {
-    margin-left: auto;
-    color: var(--color-text-tertiary);
-    font-size: 12px;
-    white-space: nowrap;
   }
   .pane {
     display: flex;

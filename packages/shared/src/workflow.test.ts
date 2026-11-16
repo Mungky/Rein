@@ -69,7 +69,8 @@ describe('state machine project (PRD §4.4)', () => {
     expect(checkProjectTransition('done', 'active', mgr).ok).toBe(false);
     expect(checkProjectTransition('done', 'active', { ...mgr, canCloseAll: true }).ok).toBe(true);
   });
-  it('Ditunda → Selesai tidak sah', () => {
-    expect(checkProjectTransition('on_hold', 'done', mgr).ok).toBe(false);
+  it('Ditunda → Selesai ditentukan manual oleh pengguna dengan izin menutup project', () => {
+    expect(checkProjectTransition('on_hold', 'done', mgr).ok).toBe(true);
+    expect(checkProjectTransition('on_hold', 'done', { ...mgr, canClose: false }).ok).toBe(false);
   });
 });

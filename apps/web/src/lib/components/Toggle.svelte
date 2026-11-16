@@ -5,8 +5,15 @@
     disabled?: boolean;
     /** Tampilkan label di samping toggle (default: hanya untuk pembaca layar). */
     showLabel?: boolean;
+    onchange?: (checked: boolean) => void;
   }
-  let { checked = $bindable(false), label, disabled = false, showLabel = false }: Props = $props();
+  let {
+    checked = $bindable(false),
+    label,
+    disabled = false,
+    showLabel = false,
+    onchange,
+  }: Props = $props();
 </script>
 
 <button
@@ -16,7 +23,10 @@
   aria-checked={checked}
   aria-label={showLabel ? undefined : label}
   {disabled}
-  onclick={() => (checked = !checked)}
+  onclick={() => {
+    checked = !checked;
+    onchange?.(checked);
+  }}
 >
   <span class="tg" class:on={checked} aria-hidden="true"></span>
   {#if showLabel}<span>{label}</span>{/if}

@@ -6,6 +6,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Input from '$lib/components/Input.svelte';
   import Modal from '$lib/components/Modal.svelte';
+  import Toggle from '$lib/components/Toggle.svelte';
   import { hasGlobal, loadMe } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
 
@@ -29,6 +30,12 @@
     member: 'Project yang diikuti',
     own: 'Milik / tugas sendiri',
   };
+  const groups = [
+    { label: 'Project', prefixes: ['project.', 'view.'] },
+    { label: 'Logbook & lampiran', prefixes: ['logbook.', 'attachment.'] },
+    { label: 'Work Order', prefixes: ['wo.'] },
+    { label: 'Administrasi', prefixes: ['admin.'] },
+  ];
   const allowed = $derived(hasGlobal('admin.roles'));
   let roles = $state<Role[]>([]);
   let catalog = $state<Catalog[]>([]);
@@ -161,88 +168,113 @@
   />
 {:else}
   <div class="toolbar">
-    <p>Atur akses berdasarkan role. Setiap pengguna memiliki satu role global.</p>
+    <span class="muted">Kelola role dan cakupan akses pengguna</span>
     <Button icon="plus" variant="primary" onclick={() => openForm('new')} disabled={busy || dirty}
-      >Tambah role</Button
+      >Role baru</Button
     >
   </div>
-  <div class="content">
-    {#if error}<p class="error" role="alert">{error}</p>
-      <Button onclick={() => load()}>Muat ulang</Button>{/if}
-    {#if loading}<p role="status">Memuat role & izin…</p>
-    {:else if selected}
-      <div class="role-header">
-        <label for="selected-role">Role</label>
-        <select
-          id="selected-role"
-          value={selectedId}
-          onchange={(e) => select(e.currentTarget.value)}
-          disabled={busy || dirty}
-        >
-          {#each roles as role (role.id)}<option value={role.id}
-              >{role.name} · {role.userCount} pengguna</option
-            >{/each}
-        </select>
-        <div class="actions">
-          <Button onclick={() => openForm('edit')} disabled={busy || dirty}
-            >Ubah nama / divisi</Button
+  {#if error}<div class="error-banner" role="alert">
+      {error}<Button onclick={() => load()}>Muat ulang</Button>
+    </div>{/if}
+  {#if loading}<p class="loading" role="status">Memuat role & izin…</p>
+  {:else if selected}
+    <div class="role-screen">
+      <nav class="role-list" aria-label="Daftar role">
+        {#each roles as role (role.id)}
+          <button
+            class:active={selectedId === role.id}
+            aria-current={selectedId === role.id ? 'true' : undefined}
+            disabled={busy || dirty}
+            onclick={() => select(role.id)}
           >
-          <Button onclick={() => openForm('copy')} disabled={busy || dirty}>Duplikat</Button>
-          {#if selected.systemKey !== 'admin'}
-            <Button
-              onclick={() => (deleteOpen = true)}
-              disabled={busy || dirty || selected.userCount > 0}>Hapus role</Button
-            >
-          {/if}
-        </div>
-      </div>
-      <p class="hint">
-        {selected.divisionLabel || 'Divisi belum diisi'} · {selected.userCount} pengguna. Pilih cakupan
-        untuk setiap izin, lalu simpan.
-      </p>
-      {#if selected.systemKey !== 'admin' && selected.userCount > 0}
-        <p class="hint">
-          Untuk menghapus role ini, pindahkan semua penggunanya ke role lain melalui Admin →
-          Pengguna.
-        </p>
-      {/if}
-      <p class="hint">
-        Untuk membuat project, aktifkan <strong>Buat project</strong>. Scope pengelola berlaku
-        ketika pengguna ditandai sebagai pengelola di anggota project.
-      </p>
-      <div class="permissions">
-        {#each catalog as p (p.key)}
-          <div class="permission">
-            <label for={'permission-' + p.key}>{p.label}</label>
-            <select
-              id={'permission-' + p.key}
-              value={draft[p.key] ?? 'none'}
-              disabled={busy ||
-                (selected.systemKey === 'admin' && ['admin.roles', 'admin.users'].includes(p.key))}
-              onchange={(e) => (draft[p.key] = e.currentTarget.value as Scope)}
-            >
-              <option value="none">{labels.none}</option>
-              {#each p.scopes as scope (scope)}<option value={scope}>{labels[scope]}</option>{/each}
-            </select>
-          </div>
+            <span>{role.name}</span><small>{role.userCount}</small>
+          </button>
         {/each}
+      </nav>
+      <div class="editor">
+        <header class="editor-header">
+          <div>
+            <h1>{selected.name}</h1>
+            <p class="hint">
+              {selected.divisionLabel || 'Tanpa divisi'} · {selected.userCount} pengguna
+            </p>
+          </div>
+          <div class="actions">
+            <Button variant="ghost" onclick={() => openForm('edit')} disabled={busy || dirty}
+              >Ubah nama</Button
+            >
+            <Button variant="ghost" onclick={() => openForm('copy')} disabled={busy || dirty}
+              >Duplikat</Button
+            >
+            {#if selected.systemKey !== 'admin'}<Button
+                variant="ghost"
+                onclick={() => (deleteOpen = true)}
+                disabled={busy || dirty || selected.userCount > 0}>Hapus</Button
+              >{/if}
+            <Button variant="primary" onclick={savePermissions} loading={busy} disabled={!dirty}
+              >Simpan perubahan</Button
+            >
+          </div>
+        </header>
+        <p class="hint">Aktifkan izin dan pilih cakupannya. Perubahan berlaku setelah disimpan.</p>
+        <div class="permission-groups">
+          {#each groups as group (group.label)}
+            <section class="permission-group">
+              <h2>{group.label}</h2>
+              {#each catalog.filter( (p) => group.prefixes.some( (prefix) => p.key.startsWith(prefix) ) ) as p (p.key)}
+                {@const enabled = (draft[p.key] ?? 'none') !== 'none'}
+                {@const fixed =
+                  selected.systemKey === 'admin' && ['admin.roles', 'admin.users'].includes(p.key)}
+                <div class="permission">
+                  <div class="permission-label">
+                    <span id={'label-' + p.key}>{p.label}</span>
+                    {#if enabled && p.scopes.length > 1}
+                      <select
+                        aria-label={'Cakupan ' + p.label}
+                        value={draft[p.key]}
+                        disabled={busy || fixed}
+                        onchange={(e) => (draft[p.key] = e.currentTarget.value as Scope)}
+                      >
+                        {#each p.scopes as scope (scope)}<option value={scope}
+                            >{labels[scope]}</option
+                          >{/each}
+                      </select>
+                    {:else}<small
+                        >{enabled ? labels[draft[p.key] as Scope] : 'Tidak diizinkan'}</small
+                      >{/if}
+                  </div>
+                  <Toggle
+                    checked={enabled}
+                    label={p.label}
+                    disabled={busy || fixed}
+                    onchange={(on) => (draft[p.key] = on ? (p.scopes[0] ?? 'all') : 'none')}
+                  />
+                </div>
+              {/each}
+            </section>
+          {/each}
+        </div>
+        <div class="save">
+          <span role="status"
+            >{dirty ? 'Ada perubahan yang belum disimpan.' : 'Semua perubahan tersimpan.'}</span
+          >
+          {#if dirty}<Button onclick={() => select(selectedId)} disabled={busy}
+              >Batalkan perubahan</Button
+            >{/if}
+        </div>
+        {#if selected.systemKey === 'admin'}<p class="hint">
+            Izin mengelola pengguna dan role Admin selalu aktif.
+          </p>
+        {:else if selected.userCount > 0}<p class="hint">
+            Pindahkan penggunanya ke role lain sebelum menghapus role ini.
+          </p>{/if}
       </div>
-      {#if selected.systemKey === 'admin'}<p class="hint">
-          Izin Kelola role & izin dan Kelola pengguna wajib aktif agar akses Admin tetap tersedia.
-        </p>{/if}
-      <div class="save">
-        <span role="status"
-          >{dirty ? 'Ada perubahan yang belum disimpan.' : 'Izin sesuai data tersimpan.'}</span
-        >
-        <Button onclick={() => select(selectedId)} disabled={!dirty || busy}
-          >Batalkan perubahan</Button
-        >
-        <Button variant="primary" onclick={savePermissions} loading={busy} disabled={!dirty}
-          >Simpan izin</Button
-        >
-      </div>
-    {/if}
-  </div>
+    </div>
+  {:else}<EmptyState
+      icon="users"
+      title="Belum ada role"
+      message="Tambahkan role untuk mengatur akses."
+    />{/if}
 {/if}
 
 <Modal bind:open={modal} title={editing ? 'Ubah role' : 'Tambah role'} width={480}>
@@ -285,78 +317,161 @@
     border-bottom: 1px solid var(--color-border-default);
     justify-content: space-between;
   }
-  p {
-    margin: 0;
+  .role-screen {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    min-height: calc(100dvh - 102px);
   }
-  .toolbar p,
-  .hint,
-  .save span {
+  .role-list {
+    padding: 16px 12px;
+    border-right: 1px solid var(--color-border-default);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .role-list button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: space-between;
+    text-align: left;
+    min-height: 36px;
+    padding: 8px;
+    border-radius: var(--radius-md);
     color: var(--color-text-secondary);
   }
-  .content {
-    padding: 24px;
-    max-width: 960px;
-    display: grid;
+  .role-list button:hover {
+    background: var(--color-bg-hover);
+  }
+  .role-list button.active {
+    background: var(--color-accent-subtle);
+    color: var(--color-accent-default);
+  }
+  .role-list small {
+    color: var(--color-text-tertiary);
+    font: var(--text-caption);
+  }
+  .editor {
+    padding: 24px 32px;
+    display: flex;
+    flex-direction: column;
     gap: 16px;
+    min-width: 0;
   }
-  .role-header,
-  form {
+  .editor-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .editor-header h1 {
+    font: var(--text-title);
+    margin-bottom: 4px;
+  }
+  .hint,
+  .save {
+    color: var(--color-text-tertiary);
+    font: var(--text-caption);
+  }
+  .permission-groups {
     display: grid;
-    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    align-items: start;
   }
-  .role-header > select {
-    max-width: 400px;
-  }
-  select {
-    width: 100%;
-    min-height: 32px;
-    padding: 4px 8px;
-    color: var(--color-text-primary);
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-md);
-  }
-  select:focus-visible {
-    outline: 2px solid var(--color-accent-default);
-    outline-offset: 2px;
-  }
-  .permissions {
+  .permission-group {
     border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     overflow: hidden;
   }
+  .permission-group h2 {
+    padding: 8px 16px;
+    background: var(--color-bg-subtle);
+    color: var(--color-text-secondary);
+    font: var(--text-label);
+    border-bottom: 1px solid var(--color-border-default);
+  }
   .permission {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 240px;
-    gap: 16px;
+    display: flex;
     align-items: center;
-    padding: 8px 12px;
-    background: var(--color-bg-surface);
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 56px;
+    padding: 8px 16px;
   }
   .permission + .permission {
     border-top: 1px solid var(--color-border-default);
   }
-  .save span {
-    flex: 1;
+  .permission-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
   }
-  .error {
+  .permission-label small {
+    color: var(--color-text-tertiary);
+    font: var(--text-caption);
+  }
+  .permission-label select {
+    font: var(--text-caption);
+    color: var(--color-text-secondary);
+    padding: 2px 4px;
+    max-width: 100%;
+  }
+  select {
+    color: var(--color-text-primary);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+  }
+  .save {
+    justify-content: space-between;
+    border-top: 1px solid var(--color-border-default);
+    padding-top: 16px;
+  }
+  form {
+    display: grid;
+    gap: 12px;
+  }
+  .error,
+  .error-banner {
     color: var(--color-danger-default);
   }
+  .error-banner,
+  .loading {
+    padding: 16px 24px;
+  }
+  @media (max-width: 1100px) {
+    .permission-groups {
+      grid-template-columns: 1fr;
+    }
+    .editor {
+      padding: 20px;
+    }
+  }
   @media (max-width: 767px) {
-    .toolbar,
-    .content {
-      padding: 16px;
+    .role-screen {
+      grid-template-columns: 1fr;
     }
-    .permission {
-      grid-template-columns: minmax(0, 1fr);
-      gap: 8px;
-      padding: 12px;
+    .role-list {
+      border-right: 0;
+      border-bottom: 1px solid var(--color-border-default);
+      flex-direction: row;
+      overflow-x: auto;
     }
-    select {
+    .role-list button {
+      flex: none;
+      max-width: 240px;
       min-height: 44px;
     }
-    .save span {
-      flex-basis: 100%;
+    .editor,
+    .toolbar {
+      padding: 16px;
+    }
+    .permission-label select {
+      min-height: 32px;
     }
   }
 </style>

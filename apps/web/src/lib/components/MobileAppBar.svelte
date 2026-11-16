@@ -16,7 +16,7 @@
     <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- href dari prop; pemanggil wajib memakai resolve() -->
     <a class="ib" href={back} aria-label="Kembali"><Icon name="chevron-left" size={20} /></a>
   {/if}
-  <h1>{title}</h1>
+  <span class="title">{title}</span>
   {#if actions}<div class="act">{@render actions()}</div>{/if}
 </header>
 
@@ -40,7 +40,7 @@
     margin-left: -12px;
     color: var(--color-text-primary);
   }
-  h1 {
+  .title {
     flex: 1;
     min-width: 0;
     font: var(--text-heading-16);

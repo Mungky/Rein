@@ -121,6 +121,7 @@
           <Icon name="camera" />
         </button>
       {/if}
+      <span class="faint">Maks. 50 MB/file</span>
     </div>
   {/if}
   {#if items.length}
@@ -133,12 +134,17 @@
           <span class="nm">
             <b>{it.name}</b>
             <small>
-              {#if it.error}{it.error}{:else if !it.id}Mengunggah {Math.round(it.progress * 100)}%{:else}{formatBytes(
-                  it.size,
-                )}{/if}
+              {#if it.error}{it.error}{:else if !it.id}Mengunggah {Math.round(
+                  it.progress * 100,
+                )}%{:else}{formatBytes(it.size)}{/if}
             </small>
           </span>
-          <button type="button" class="ib" onclick={() => remove(it.key)} aria-label="Hapus lampiran">
+          <button
+            type="button"
+            class="ib"
+            onclick={() => remove(it.key)}
+            aria-label="Hapus lampiran"
+          >
             <Icon name="x" size={14} />
           </button>
         </li>

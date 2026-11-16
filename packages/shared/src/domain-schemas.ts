@@ -45,7 +45,6 @@ export const projectUpdateSchema = z
     startDate: isoDate.optional(),
     endDate: isoDate.optional(),
     description: z.string().trim().max(500).nullable().optional(),
-    handoverDate: isoDate.nullable().optional(),
   })
   .refine((v) => !v.startDate || !v.endDate || v.endDate >= v.startDate, {
     path: ['endDate'],
@@ -116,20 +115,12 @@ export const logbookCreateSchema = z
   .object({
     clientId: z.uuid(),
     body: z.string().trim().max(5000).default(''),
-    progress: z
-      .number()
-      .int()
-      .min(0)
-      .max(100)
-      .refine((v) => v % 5 === 0, 'Progres kelipatan 5')
-      .optional(),
-    status: z.enum(WO_STATUSES).optional(),
-    reason: z.string().trim().max(500).optional(),
     attachmentIds: z.array(z.uuid()).max(10).default([]),
     clientCreatedAt: z.iso.datetime({ offset: true }).optional(),
   })
-  .refine((v) => v.body || v.progress != null || v.status || v.attachmentIds.length, {
-    message: 'Isi catatan, progres, status, atau lampiran',
+  .strict()
+  .refine((v) => v.body || v.attachmentIds.length, {
+    message: 'Isi catatan atau lampiran',
     path: ['body'],
   });
 export type LogbookCreateInput = z.infer<typeof logbookCreateSchema>;

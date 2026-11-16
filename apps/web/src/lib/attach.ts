@@ -5,6 +5,8 @@
  */
 import { compressImage } from './image';
 import { uploadAttachment } from './upload';
+import { MAX_ATTACHMENT_BYTES } from '@rein/shared';
+import { ApiError } from './api';
 
 export interface Staged {
   key: string;
@@ -25,6 +27,8 @@ export async function stageFile(
   userId: string,
   onProgress: (f: number) => void,
 ): Promise<{ id: string; preview: string | null }> {
+  if (file.size > MAX_ATTACHMENT_BYTES)
+    throw new ApiError(413, 'FILE_TOO_LARGE', 'Ukuran file maksimal 50 MB');
   if (!PHOTO.test(file.type)) {
     const r = await uploadAttachment({
       ownerType: 'user',

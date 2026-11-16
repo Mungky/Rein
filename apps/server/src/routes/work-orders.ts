@@ -21,6 +21,7 @@ import {
 } from '@rein/shared';
 import { and, asc, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { audit } from '../audit';
 import { authOf, requireVerified } from '../auth/middleware';
 import { assertCan, canDo, loadProjectAccess, type ProjectAccess } from '../auth/project-access';
@@ -39,7 +40,7 @@ import {
   workOrders,
   type WorkOrder,
 } from '../db/schema';
-import { forbidden, HttpError, notFound, readJson } from '../lib/http';
+import { forbidden, HttpError, notFound, readJson, validate } from '../lib/http';
 import { userAgent } from '../lib/ip';
 import { publishToUsers } from '../notify/bus';
 import { longDate, shortDate } from '../lib/format';
@@ -730,7 +731,7 @@ export const woRoutes = new Hono<AppEnv>()
     });
   })
 
-  /** FR-040: tulis entri logbook (+ progres, status, lampiran). Idempoten per penulis. */
+  /** Catatan logbook + lampiran. Status/progres WO diatur terpisah. Idempoten per penulis. */
   .post('/:id/logbook', async (c) => {
     const a = authOf(c);
     const { db } = c.var.deps;
@@ -751,17 +752,6 @@ export const woRoutes = new Hono<AppEnv>()
       return c.json({ id: dup.id, duplicate: true });
     }
     const actor = actorOf(a, wo, acc);
-    if (body.progress != null && body.progress < wo.progress) {
-      if (!actor.canEditAny) throw forbidden('Progres tidak boleh turun');
-      if (!body.reason) {
-        throw new HttpError(422, 'VALIDATION', 'Alasan wajib saat menurunkan progres', {
-          reason: 'Alasan wajib',
-        });
-      }
-    }
-    if (body.progress != null && !actor.isAssignee && !actor.canEditAny) {
-      throw forbidden('Hanya PIC atau pengelola yang dapat mengubah progres');
-    }
     const kind = actor.isAssignee || wo.createdBy === a.user.id ? 'note' : 'comment';
 
     const result = await db.transaction(async (tx) => {
@@ -775,42 +765,20 @@ export const woRoutes = new Hono<AppEnv>()
           clientUuid: body.clientId,
           requestHash: digest,
           clientCreatedAt: body.clientCreatedAt ? new Date(body.clientCreatedAt) : null,
-          progressFrom: body.progress != null ? wo.progress : null,
-          progressTo: body.progress ?? null,
         })
         .returning({ id: logbookEntries.id });
       await claimAttachments(tx, a.user.id, body.attachmentIds, { type: 'logbook', id: entry!.id });
-      let notified: string[] = [];
-      if (body.status && body.status !== wo.status) {
-        notified = await changeStatus(
-          tx,
-          a,
-          wo,
-          acc,
-          body.status,
-          body.reason,
-          c.var.ip,
-          userAgent(c),
-          {
-            entryId: entry!.id,
-            hasLogbook: true,
-            progress: body.progress,
-          },
-        );
-      } else if (body.progress != null && body.progress !== wo.progress) {
-        await tx
-          .update(workOrders)
-          .set({ progress: body.progress })
-          .where(eq(workOrders.id, wo.id));
-        await tx.insert(progressEvents).values({
-          woId: wo.id,
-          progress: body.progress,
-          status: wo.status,
-          sourceEntryId: entry!.id,
-        });
-      } else {
-        await tx.update(workOrders).set({ updatedAt: new Date() }).where(eq(workOrders.id, wo.id));
-      }
+      await audit(tx, {
+        actorId: a.user.id,
+        action: 'logbook.created',
+        entityType: 'logbook',
+        entityId: entry!.id,
+        diff: { woId: wo.id, attachments: body.attachmentIds.length },
+        ip: c.var.ip,
+        userAgent: userAgent(c),
+      });
+      const notified: string[] = [];
+      await tx.update(workOrders).set({ updatedAt: new Date() }).where(eq(workOrders.id, wo.id));
       notified.push(
         ...(await enqueueNotifications(tx, {
           event: 'logbook.created',
@@ -1058,14 +1026,30 @@ async function changeStatus(
   });
 }
 
-/** FR-010: Beranda — stat, permintaan bantuan, dan 10 tugas teratas dalam satu request. */
+/** Beranda — statistik, permintaan bantuan dan tugas yang masih boleh diakses. */
 export const homeRoutes = new Hono<AppEnv>().use(requireVerified).get('/', async (c) => {
   const a = authOf(c);
   const { db } = c.var.deps;
   if (!a.permissions['project.view'] || a.permissions['project.view'] === 'none')
-    return c.json({ stats: { myTasks: 0, urgent: 0, dueSoon: 0, help: 0 }, help: [], tasks: [] });
+    return c.json({
+      stats: { myTasks: 0, urgent: 0, dueSoon: 0, help: 0 },
+      help: [],
+      tasks: [],
+      nextOffset: null,
+    });
+  const query = validate(
+    z.object({
+      offset: z.coerce.number().int().min(0).default(0),
+      limit: z.coerce.number().int().min(1).max(30).default(10),
+    }),
+    c.req.query(),
+  );
   const today = todayWib();
   const in7 = new Date(Date.now() + 7 * 86_400_000 + 7 * 3600_000).toISOString().slice(0, 10);
+  const visibleProjects = db
+    .select({ id: projectMembers.projectId })
+    .from(projectMembers)
+    .where(eq(projectMembers.userId, a.user.id));
   const mine = await listQuery(db)
     .innerJoin(projects, eq(projects.id, workOrders.projectId))
     .where(
@@ -1073,6 +1057,7 @@ export const homeRoutes = new Hono<AppEnv>().use(requireVerified).get('/', async
         eq(workOrders.assigneeId, a.user.id),
         isNull(workOrders.deletedAt),
         isNull(projects.deletedAt),
+        a.permissions['project.view'] === 'all' ? undefined : inArray(projects.id, visibleProjects),
         sql`${workOrders.status} not in ('done','canceled')`,
       ),
     );
@@ -1108,6 +1093,8 @@ export const homeRoutes = new Hono<AppEnv>().use(requireVerified).get('/', async
       and(
         eq(helpRequests.status, 'open'),
         isNull(workOrders.deletedAt),
+        isNull(projects.deletedAt),
+        a.permissions['project.view'] === 'all' ? undefined : inArray(projects.id, visibleProjects),
         managedIds.length
           ? or(inArray(workOrders.projectId, managedIds), eq(helpRequests.requestedBy, a.user.id))
           : eq(helpRequests.requestedBy, a.user.id),
@@ -1122,6 +1109,7 @@ export const homeRoutes = new Hono<AppEnv>().use(requireVerified).get('/', async
       help: helpRows.length,
     },
     help: helpRows.slice(0, 3),
-    tasks: tasks.slice(0, 10),
+    tasks: tasks.slice(query.offset, query.offset + query.limit),
+    nextOffset: query.offset + query.limit < tasks.length ? query.offset + query.limit : null,
   });
 });

@@ -6,3 +6,4 @@ export * from './util';
 export * from './workflow';
 export * from './progress';
 export * from './domain-schemas';
+export * from './scurve';

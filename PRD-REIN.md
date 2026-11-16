@@ -16,10 +16,7 @@
 ## 1. Ringkasan, tujuan, non-goals
 
 ### 1.1 Ringkasan
-REIN melacak setiap project fabrikasi (mixing tank, storage tank, reaktor, panel, line otomasi) mulai **PO diterima** sampai **Selesai**. Project dianggap Selesai jika tiga syarat terpenuhi:
-1. tidak ada punch list yang tersisa,
-2. serah terima ke klien sudah dilakukan,
-3. Berita Acara Serah Terima (BAST) sudah ditandatangani dan diunggah.
+REIN melacak setiap project fabrikasi (mixing tank, storage tank, reaktor, panel, line otomasi) mulai **PO diterima** sampai **Selesai**. Status Selesai ditentukan manual oleh pengguna yang memiliki izin `project.close`; tidak mensyaratkan punch list habis, tanggal serah terima, ataupun lampiran BAST.
 
 Pelunasan terjadi setelah itu dan **berada di luar REIN**.
 
@@ -28,6 +25,8 @@ Hierarki konten: **Project → Work Order (WO) → Logbook entry → Attachment*
 > **Revisi 1.1 (15 Nov 2026):** project **tidak punya tahapan baku**. Proses berjalan **paralel** dan menjadi **kategori Jenis WO**. Project hanya punya status **Berjalan / Ditunda / Selesai** (§4.4). Progres dirangkum **per kategori** (§8.4).
 >
 > **Revisi 1.4:** batas lampiran **50 MB per file**. Lampiran dan foto profil disimpan di **Google Cloud Storage** (bucket privat, region Jakarta). Email dikirim lewat **Gmail API**. Ditambah **Login dengan Google** (FR-006). Backup database ke GCS (§7, §11.4).
+>
+> **Revisi 1.6 (16 Nov 2026, permintaan pengguna):** project ditutup manual; logbook hanya catatan/lampiran; lampiran project merangkum WO dan logbook; tugas dan notifikasi disatukan di Beranda; daftar project hanya Card. Role & Izin, Timeline dan S-Curve mengikuti frame Figma. Sidebar memakai dropdown akun, tema tetap di topbar, kalender dan jam WIB ditambahkan. Lihat `docs/WORKSPACE-REVISION.md`.
 >
 > **Revisi 1.5 (16 Nov 2026, permintaan pengguna):** onboarding hanya nomor WhatsApp → OTP dikirim bot dan diinput di aplikasi → PIN opsional → nama panggilan dan foto opsional. Email dikonfigurasi setelah masuk dari Profil. Revisi ini menggantikan verifikasi WA dibalik dan kewajiban PIN pada revisi sebelumnya. Akun lama yang sudah dipakai tetap dapat masuk.
 >
@@ -178,7 +177,7 @@ Format AC: *Given / When / Then* atau poin yang bisa diuji. Prioritas: **P0** = 
   - **Callout "Butuh perhatian"**: maksimal 3 permintaan bantuan terbuka terbaru, dengan tombol Balas & Buka WO.
   - **Tabel/daftar "Tugas saya"**: urutan *terlambat → urgent → deadline terdekat*, maksimal 10 item, tautan "Lihat semua".
   - AC: Angka stat dihitung server, sesuai dengan daftar saat filter diterapkan, dan dimuat dalam satu request ≤ 20 KB JSON.
-- **FR-011 (P1)** Halaman **Tugas saya** (`M/11b` empty, `M/11c` skeleton; tab bawah "Tugas" di mobile) = daftar penuh WO saya dengan filter status/project/urgent dan infinite scroll 30 item per halaman.
+- **FR-011 (P1, revisi 1.6)** Tugas saya disatukan di Beranda, menampilkan 10 tugas teratas dan **Lihat semua** untuk membuka daftar lengkap di halaman yang sama. URL lama `/tugas` diarahkan ke `/#tugas`; tidak ada menu Tugas terpisah.
 
 ### 3.3 Project (Figma `D/03a–d`, `D/04a–b`, `D/05a–d`, `M/03a–d`, `M/04`, `M/05`)
 **US-03.** Sebagai Manager, saya membuat project dengan form sederhana lalu mengundang anggota.
@@ -194,14 +193,9 @@ Format AC: *Given / When / Then* atau poin yang bisa diuji. Prioritas: **P0** = 
   - Legenda: titik warna + nama kategori + `selesai/total · progres%`.
   - Status project: Berjalan / Ditunda / Selesai (§4.4). Perubahan dicatat di `project_status_history` + audit log + aktivitas.
   - AC: nilai dihitung otomatis dari WO; kategori tanpa WO tidak ditampilkan; klik item legenda memfilter worklist ke kategori itu (klik lagi untuk melepas).
-- **FR-023 (P0) Lampiran tingkat project** (panel kanan `D/05a`, tab Lampiran): PO klien, kontrak, spesifikasi, foto lokasi, **BAST** (kategori khusus).
-- **FR-024 (P0) Syarat Selesai.** Panel "Syarat Selesai" menampilkan checklist otomatis:
-  1. 0 WO berjenis **Punch List** yang belum Selesai/Dibatalkan,
-  2. tanggal serah terima terisi,
-  3. minimal 1 lampiran kategori BAST.
-
-  AC: Tombol "Tandai Selesai" nonaktif sampai ketiganya terpenuhi. Server menolak dengan 422 jika dipaksa.
-- **FR-025 (P0) Daftar project** dengan 4 view (§8). Default: Table dikelompokkan per **status** (Berjalan, Ditunda, Selesai), grup Selesai di-collapse. Kolom "Kategori aktif" menampilkan kategori yang punya WO belum selesai (mis. "Engineering · Pengadaan").
+- **FR-023 (P0) Lampiran project** merangkum file milik project, WO, dan logbook di project yang sama, dengan label asal. File yang dihapus, logbook yang dihapus, dan WO yang dihapus dikecualikan. PO/kontrak/spesifikasi/foto/BAST tetap dapat diunggah; BAST bukan syarat menutup project.
+- **FR-024 (P0) Penutupan manual.** Pengguna dengan `project.close` dapat menandai project Selesai, termasuk dari status Ditunda. Tidak ada checklist atau validasi punch list/serah terima/BAST. Perubahan tetap dicatat di audit dan histori status; izin membuka kembali tetap berlaku.
+- **FR-025 (P0) Daftar project** hanya memakai Card (komponen Project Card Figma), dengan pencarian dan filter status. Tidak ada Table atau Kanban pada daftar project. Worklist tetap mempunyai empat view.
 - **FR-026 (P1) Arsip project.** Project Selesai > 90 hari tersembunyi dari default view. Filter "Tampilkan arsip" menampilkannya kembali.
 
 ### 3.4 Work Order (Figma `D/06`, `D/07a`, `M/06`, `M/07`)
@@ -219,19 +213,19 @@ Format AC: *Given / When / Then* atau poin yang bisa diuji. Prioritas: **P0** = 
   - AC2: Deadline < Mulai → error.
   - AC3: Setelah disimpan → notifikasi `wo.assigned` ke PIC (in-app + email + WA; pesan menyebut jumlah lampiran) dan toast "WO NN dibuat [dengan N lampiran] · notifikasi WA & email terkirim ke {nama}". Toast diganti "…gagal dikirim, akan dicoba lagi" jika enqueue gagal.
 - **FR-031 (P0) Edit WO.** Semua perubahan field dicatat sebagai entri logbook otomatis bertipe `system`, mis. "Rina mengubah deadline 20 Nov → 24 Nov". Perubahan PIC/deadline/urgent memicu notifikasi ke PIC lama & baru.
-- **FR-032 (P0) Status WO.** Mengikuti state machine §4.5. Perubahan bisa dari properti WO, kartu Kanban (drag), atau composer logbook.
+- **FR-032 (P0) Status WO.** Mengikuti state machine §4.5. Perubahan bisa dari properti WO, kartu Kanban (drag), atau properti status WO; composer logbook tidak mengubah status.
 - **FR-033 (P0) Detail WO** (`D/07a`, `M/07`): judul, jenis, flag Urgent, detail, referensi, lampiran WO, properti (Status, PIC, Pembuat, Jenis, Deadline, Urgent, Bobot, Progres), pengikut, logbook.
 - **FR-034 (P0) Pengikut (watchers).** Pembuat, PIC, dan pengelola project otomatis menjadi pengikut. User lain bisa "Ikuti/Berhenti ikuti". Notifikasi logbook dikirim ke pengikut.
 - **FR-035 (P0) Hapus WO** = soft delete (`deleted_at`). Hanya untuk izin `wo.delete`. Default seed: tidak ada role. WO yang dihapus tidak dihitung di S-Curve. Nomor WO tidak dipakai ulang.
 - **FR-036 (P1) Shortcut.** `C` = buat WO (konteks project aktif), `Ctrl/Cmd+Enter` = simpan form.
 
 ### 3.5 Logbook (Figma `D/07a`, `M/07`, `P4-1`)
-**US-05.** Sebagai Engineer, saya mencatat pekerjaan, progres, dan foto di logbook WO serta mengubah status.
+**US-05.** Sebagai Engineer, saya mencatat pekerjaan dan foto di logbook WO. Status WO diubah terpisah melalui properti WO.
 - **FR-040 (P0) Tulis entri.**
-  - Isi entri: teks (plain text + baris baru; tautan otomatis; `@mention` anggota project [P1]), progres opsional (0–100, kelipatan 5), perubahan status opsional, dan lampiran (≤ 10 per entri).
+  - Isi entri: teks (plain text + baris baru; tautan otomatis; `@mention` anggota project [P1]), dan lampiran (≤ 10 per entri).
   - AC1: Entri tersimpan dengan `author_id` dan `created_at` server (bukan waktu klien). Untuk entri yang dikirim dari antrean offline, waktu klien disimpan di `client_created_at`.
-  - AC2: Jika progres diisi → `work_orders.progress` diperbarui dan baris `progress_events` dibuat (dipakai S-Curve). Progres tidak boleh turun kecuali oleh `wo.edit.any` (dengan alasan wajib).
-  - AC3: Status `Selesai` otomatis membuat progres 100. Progres 100 **tidak** otomatis membuat status Selesai (bisa Review dulu).
+  - AC2: Pembuatan logbook tidak menerima progres/status dan tidak mengubah `work_orders.progress` atau status WO. Payload lama berisi progres/status ditolak 422. Perubahan status WO tetap melalui endpoint terpisah dan menulis `progress_events` untuk S-Curve.
+  - AC3: Mengubah status WO menjadi `Selesai` melalui properti status membuat progres 100. Histori progres/status lama tetap dipertahankan.
   - AC4: Entri bisa diedit/dihapus oleh penulis ≤ 24 jam (`logbook.edit.own`). Edit menyimpan riwayat (`edited_at`) dan menampilkan label "diedit".
 - **FR-041 (P0) Jenis entri:** `note` (catatan biasa), `comment` (balasan/komentar, mis. dari manager), `system` (perubahan field otomatis), `help_request`, `help_resolved`.
 - **FR-042 (P0) Urutan & paginasi.** Terbaru di atas, 20 entri per halaman, tombol "Muat lebih lama". Lampiran ditampilkan sebagai thumbnail 96–120 px.
@@ -251,14 +245,14 @@ Format AC: *Given / When / Then* atau poin yang bisa diuji. Prioritas: **P0** = 
 - **FR-062 (P0)** Pratinjau: gambar dibuka di lightbox (versi `display`), PDF di tab baru, file lain langsung diunduh. Semua akses lewat endpoint yang terautentikasi.
 
 ### 3.8 View & pencarian
-- **FR-070 (P0)** Worklist project & daftar project: Table, Kanban (P0); Timeline, S-Curve (P1). Detail di §8.
+- **FR-070 (revisi 1.6)** Worklist: Table, Kanban, Timeline, S-Curve. Daftar project: Card saja. Detail visual mengacu frame D/05a–d dan komponen Project Card.
 - **FR-071 (P0)** Filter: kategori, jenis, PIC/assignee, urgent, status, deadline (terlambat / 7 hari / rentang), dan Butuh bantuan. Pengelompokan worklist: status, **kategori**, jenis, PIC, atau tanpa grup. Daftar project: status, klien, atau PIC. Urutan: deadline, nomor WO, terakhir diubah.
 - **FR-072 (P1) View tersimpan per user.** View terakhir (tipe, filter, grup, urutan, grup ter-collapse) disimpan server-side per `user × context` dan dipulihkan di perangkat mana pun.
 - **FR-073 (P1) Command palette** (`D/11a`, `M/11a`) dengan `Ctrl/Cmd+K` dan `/`. Cari WO (nomor/judul), project (nama/RPO/klien), dan orang. Aksi: Buat WO, Buat project, Tulis logbook di WO terakhir, Ganti tema, Buka notifikasi. Hasil ≤ 150 ms dari server (Postgres trigram).
 - **FR-074 (P1) Shortcut keyboard:** `G B` Beranda, `G P` Project, `G N` Notifikasi, `C` buat WO, `?` daftar shortcut, `Esc` tutup.
 
 ### 3.9 Notifikasi (Figma `D/08a–b`, `M/08a–b`, `D/12a–b`, `M/12`)
-- **FR-080 (P0)** Inbox in-app: tab Semua / Belum dibaca / Butuh bantuan / Disebut; dikelompokkan per hari; "Tandai semua dibaca"; badge jumlah di sidebar & bottom nav; pembaruan real-time via SSE.
+- **FR-080 (P0, revisi 1.6)** Inbox in-app berada di Beranda; URL lama `/notifikasi` diarahkan ke `/#notifikasi`. Inbox: tab Semua / Belum dibaca / Butuh bantuan / Disebut; dikelompokkan per hari; "Tandai semua dibaca"; badge jumlah di menu Beranda sidebar & bottom nav; pembaruan real-time via SSE.
 - **FR-081 (P0)** Email & WA sesuai matriks §6. Template ada di §6.3.
 - **FR-082 (P1)** Preferensi per user per event per kanal, jam tenang, penggabungan (batching), ringkasan harian, dan mute project (`D/08b`, `M/08b`).
 
@@ -415,12 +409,12 @@ Admin mengatur jenis WO dan memilih kategorinya; warna mengikuti kategori, bukan
 Project **tidak punya tahapan**. Proses berjalan paralel sebagai kategori WO.
 ```text
 active (Berjalan) ⇄ on_hold (Ditunda)
-active → done (Selesai)          done → active (buka kembali)
+active/on_hold → done (Selesai)   done → active (buka kembali)
 ```
 - Berjalan ⇄ Ditunda: `project.edit`; alasan wajib saat Ditunda (tampil di kolom "Kategori aktif", mis. "Menunggu konfirmasi klien").
-- Masuk `done`: hanya `project.close` **dan** syarat FR-024 terpenuhi (punch list habis, tanggal serah terima, BAST). `done_at = now()`.
+- Masuk `done`: manual oleh pengguna dengan `project.close`, tanpa prasyarat otomatis. `done_at = now()`.
 - Keluar dari `done` (buka kembali): hanya role dengan `project.close` scope `all`, catatan wajib.
-- Hint otomatis: jika semua WO non-punch-list sudah Selesai/Dibatalkan, tampilkan "Semua pekerjaan selesai — lengkapi serah terima & BAST".
+- Tidak ada panel atau hint syarat penyelesaian otomatis.
 
 ### 4.5 State machine — status WO
 ```text
@@ -538,7 +532,7 @@ Project: {{project_name}}
 | Aspek | Spesifikasi |
 |---|---|
 | Tipe diizinkan | Gambar: jpg, jpeg, png, webp, heic/heif (dikonversi di klien ke JPEG/WebP). Dokumen: pdf, dwg, dxf, step/stp, xlsx, xls, docx, doc, csv, txt, zip. Validasi magic bytes di server, bukan hanya ekstensi |
-| Ukuran maks | **50 MB per file** (setelah kompresi foto); 10 file per entri logbook / form WO. Dicek di klien sebelum upload dan di server |
+| Ukuran maks | **50 MB per file** (dicek sebelum kompresi dan saat unggah); 10 file per entri logbook / form WO. Dicek di klien sebelum upload dan di server |
 | Kompresi gambar (klien) | Resize sisi terpanjang ≤ 1920 px, WebP q=0.75 (fallback JPEG q=0.78 jika WebP tidak didukung), strip EXIF **kecuali** orientasi diterapkan dulu. Target ≤ 400 KB. Dijalankan di Web Worker (`OffscreenCanvas`, fallback `<canvas>`). Gambar ≤ 300 KB dan ≤ 1920 px tidak diproses ulang |
 | Avatar / logo | Dipotong persegi 256×256 WebP. Banner 1600×400 WebP |
 | Turunan | Foto: klien membuat `display` (≤ 1920 px) **dan** `thumb` (320 px WebP, ≤ 30 KB) lalu mengunggah keduanya, sehingga server tidak perlu memproses ulang. Fallback: worker `sharp` membuat thumb jika klien tidak mengirimnya |
@@ -847,7 +841,7 @@ File: https://www.figma.com/design/m6TD7AHjnmgljGiPNT00f7
 | `D/03c Project — Timeline` / `M/03c` | §8.3 | Bar timeline, garis hari ini |
 | `D/03d Project — S-Curve` / `M/03d` | §8.4 portofolio | Chart SVG, KPI, Deviasi per project |
 | `D/04a Buat Project — Info`, `D/04b … — Anggota` / `M/04 Buat Project` | FR-020 | Modal, Input, Dropzone, daftar anggota + peran |
-| `D/05a Detail Project — Worklist Table` / `M/05 Detail Project` | FR-021–024, §8.1 | Banner, Logo Klien, Kategori Bar (bar + legenda berwarna, komponen `Category Dot`), Tabs, WO Row, Panel Detail (Anggota, Lampiran, Syarat Selesai) |
+| `D/05a Detail Project — Worklist Table` / `M/05 Detail Project` | FR-021–024, §8.1 | Banner, Logo Klien, Kategori Bar (bar + legenda berwarna, komponen `Category Dot`), Tabs, WO Row, Panel Detail (Anggota, Lampiran; tanpa Syarat Selesai pada revisi 1.6) |
 | `D/05b … Kanban`, `D/05c … Timeline`, `D/05d … S-Curve` | §8.2–8.4 | Kanban Card, bar WO, tabel bobot |
 | `D/06 Buat WO` / `M/06 Buat WO` | FR-030 | Modal, Input, Select, Toggle Urgent, Editor, Referensi, Attachment Thumb |
 | `D/07a Detail WO + Logbook` / `M/07 Detail WO + Logbook` | FR-033, FR-040–042, FR-061 | Logbook Entry, Composer (unggah + kompresi), Properti, Status Badge |

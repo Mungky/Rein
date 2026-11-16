@@ -68,6 +68,7 @@ export function projectCapabilities(a: AuthContext, acc: ProjectAccess) {
     createWo: canDo(a, 'wo.create', acc.res),
     editAnyWo: canDo(a, 'wo.edit.any', acc.res),
     editWeight: canDo(a, 'wo.weight.edit', acc.res),
+    scurve: canDo(a, 'view.scurve', acc.res),
     deleteWo: canDo(a, 'wo.delete', acc.res),
     upload: canDo(a, 'attachment.upload', acc.res),
     writeLogbook: canDo(a, 'logbook.create', acc.res),
@@ -96,7 +97,13 @@ export async function resolveOwner(
     .select({ projectId: workOrders.projectId, authorId: logbookEntries.authorId })
     .from(logbookEntries)
     .innerJoin(workOrders, eq(workOrders.id, logbookEntries.woId))
-    .where(and(eq(logbookEntries.id, ownerId), isNull(logbookEntries.deletedAt)))
+    .where(
+      and(
+        eq(logbookEntries.id, ownerId),
+        isNull(logbookEntries.deletedAt),
+        isNull(workOrders.deletedAt),
+      ),
+    )
     .limit(1);
   return row ?? null;
 }

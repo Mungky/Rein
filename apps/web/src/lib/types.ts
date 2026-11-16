@@ -55,21 +55,11 @@ export interface ProjectDetail {
   description: string | null;
   status: ProjectStatus;
   onHoldReason: string | null;
-  handoverDate: string | null;
   updatedAt: string;
   progress: number;
   categories: CategorySummary[];
   woCount: number;
   members: Member[];
-  completion: {
-    punchListClear: boolean;
-    handoverDate: boolean;
-    bastUploaded: boolean;
-    openPunch: number;
-    bastCount: number;
-    ready: boolean;
-  };
-  allWorkDone: boolean;
   can: Record<string, boolean>;
 }
 
@@ -168,6 +158,7 @@ export interface HomeData {
     excerpt: string | null;
   }>;
   tasks: WoRow[];
+  nextOffset: number | null;
 }
 
 export interface NotificationItem {

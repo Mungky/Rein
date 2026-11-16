@@ -9,6 +9,7 @@
   import Icon from './Icon.svelte';
   import MobileAppBar from './MobileAppBar.svelte';
   import Sidebar from './Sidebar.svelte';
+  import HeaderClock from './HeaderClock.svelte';
 
   /** Kerangka aplikasi gaya Linear: sidebar 240 px + kolom utama; bottom nav di < 768 px. */
   interface Props {
@@ -47,16 +48,12 @@
 
   const badge = $derived(unread > 0 ? unread : undefined);
   const nav = $derived<NavItem[]>([
-    { href: resolve('/'), label: 'Beranda', icon: 'home' },
-    { href: resolve('/tugas'), label: 'Tugas saya', icon: 'check' },
-    { href: resolve('/notifikasi'), label: 'Notifikasi', icon: 'bell', badge },
+    { href: resolve('/'), label: 'Beranda', icon: 'home', badge },
     { href: resolve('/project'), label: 'Project', icon: 'folder' },
   ]);
   const bottom = $derived<NavItem[]>([
-    { href: resolve('/'), label: 'Beranda', icon: 'home' },
-    { href: resolve('/tugas'), label: 'Tugas', icon: 'check' },
+    { href: resolve('/'), label: 'Beranda', icon: 'home', badge },
     { href: resolve('/project'), label: 'Project', icon: 'folder' },
-    { href: resolve('/notifikasi'), label: 'Notifikasi', icon: 'bell', badge },
     { href: resolve('/profil'), label: 'Profil', icon: 'user' },
   ]);
   const adminItems = $derived<NavItem[]>(
@@ -126,6 +123,7 @@
         <b>{title}</b>
       </div>
       <div class="tb-actions">
+        <HeaderClock />
         {#if actions}{@render actions()}{/if}
         <button
           class="ibtn"
@@ -145,7 +143,11 @@
         </button>
       </div>
     </header>
-    <div class="mbar"><MobileAppBar {title} {back} {actions} /></div>
+    <div class="mbar">
+      <MobileAppBar {title} {back}>
+        {#snippet actions()}<HeaderClock compact />{/snippet}
+      </MobileAppBar>
+    </div>
     <section class="view">{@render children()}</section>
   </main>
   <div class="bnav"><BottomNav items={bottom} /></div>
