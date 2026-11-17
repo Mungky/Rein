@@ -1,5 +1,9 @@
 # REIN — Persiapan Pembangunan
 
+> Pembaruan self-host 17 Nov 2026: ikuti PRD revisi 1.7 dan [panduan Coolify](docs/SELFHOST-COOLIFY.md).
+> Lampiran memakai volume server, database baru, dan Gmail ditunda. Checklist Google Cloud di bawah
+> adalah rencana awal, bukan prasyarat deployment saat ini. Compose produksi ada di root repository.
+
 Dokumen ini berisi dua hal: (A) apa yang perlu Anda siapkan sebelum session build dimulai, dan (B) stack yang dipakai. Session build membaca `CLAUDE.md`, `PRD-REIN.md`, dan `design/rein-prototype.html` di folder ini.
 
 ---

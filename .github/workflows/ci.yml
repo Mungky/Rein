@@ -43,6 +43,14 @@ jobs:
         run: pnpm check:bundle
       - name: Audit dependensi (PRD §9.3)
         run: pnpm audit --prod --audit-level high
+      - name: Validasi Compose produksi di root tanpa Google Cloud
+        env:
+          POSTGRES_PASSWORD: ci-only-postgres
+          OPENWA_DB_PASSWORD: ci-only-openwa-db
+          AUTH_PEPPER: ci-only-pepper-ci-only-pepper-ci-only-pepper
+          OPENWA_API_KEY: ci-only-openwa-key-ci-only-openwa-key
+          OPENWA_WEBHOOK_SECRET: ci-only-webhook-secret-ci-only-webhook-secret
+        run: docker compose config --quiet
       - name: Lighthouse CI (mobile, Slow 4G simulasi)
         env:
           NODE_ENV: test

@@ -6,7 +6,7 @@ name: rein-v2
 services:
   app:
     build:
-      context: ..
+      context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
@@ -29,13 +29,12 @@ services:
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
       GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-https://staff.remula.online/auth/google/callback}
-      MAIL_PROVIDER: ${MAIL_PROVIDER:-gmail}
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-null}
       GMAIL_SENDER: ${GMAIL_SENDER:-}
       GMAIL_SENDER_NAME: ${GMAIL_SENDER_NAME:-REIN}
       GMAIL_REFRESH_TOKEN: ${GMAIL_REFRESH_TOKEN:-}
-      STORAGE_DRIVER: gcs
-      GCS_BUCKET: ${GCS_BUCKET:?isi nama bucket GCS privat}
-      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcs-key.json
+      STORAGE_DRIVER: local
+      LOCAL_STORAGE_DIR: /app/uploads
       WA_PROVIDER: openwa
       OPENWA_URL: http://openwa:2785
       OPENWA_API_KEY: ${OPENWA_API_KEY:?isi OPENWA_API_KEY}
@@ -44,12 +43,7 @@ services:
       OPENWA_WEBHOOK_URL: http://app:3000/webhooks/openwa
       REIN_WA_NUMBER: ${REIN_WA_NUMBER:-}
     volumes:
-      - type: bind
-        source: ${GCS_KEY_FILE:?isi path absolut key GCS di server}
-        target: /run/secrets/gcs-key.json
-        read_only: true
-        bind:
-          create_host_path: false
+      - app-uploads:/app/uploads
     expose:
       - '3000'
     networks: [rein]
@@ -72,7 +66,7 @@ services:
     command: ['postgres', '-c', 'shared_buffers=128MB', '-c', 'max_connections=40']
     volumes:
       - pg-data:/var/lib/postgresql/data
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U rein -d rein']
       interval: 5s
@@ -120,5 +114,6 @@ networks:
   rein:
 
 volumes:
+  app-uploads:
   pg-data:
   openwa-data:

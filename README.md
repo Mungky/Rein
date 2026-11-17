@@ -13,7 +13,8 @@ apps/web            SvelteKit SPA (Svelte 5, adapter-static)
 apps/server         Node 22 + Hono — API, auth, menyajikan hasil build SPA
 packages/shared     Zod schema, enum, kunci & matriks izin, can()
 packages/ui-tokens  CSS variables light/dark + warna kategori
-infra/              docker-compose (dev & produksi)
+docker-compose.yml  deployment produksi Coolify
+infra/              Compose dev, init PostgreSQL, template environment
 ```
 
 ## Menjalankan di lokal
@@ -58,13 +59,15 @@ Template environment: [infra/coolify.env.example](infra/coolify.env.example).
 ```bash
 docker build -t rein .                          # image non-root, API + SPA dalam satu proses
 # Isi environment produksi sebelum menjalankan Compose.
-docker compose --env-file .env -f infra/docker-compose.yml up -d
-docker compose --env-file .env -f infra/docker-compose.yml exec app node dist/seed-cli.js
+docker compose --env-file .env up -d
+docker compose --env-file .env exec app node dist/seed-cli.js
 ```
 
 Migrasi berjalan otomatis saat app start. Health check: `/healthz` (DB ping) dan `/readyz`.
-Isi variabel di Coolify; `GCS_KEY_FILE` menunjuk file key GCS di host server. Domain diarahkan
-ke service `app` port internal `3000`; PostgreSQL dan OpenWA tetap privat.
+Di Coolify: branch `main`, Base Directory `/`, Docker Compose Location `/docker-compose.yml`.
+Lampiran dan foto memakai volume permanen `app-uploads` di server, bukan Google Cloud.
+Email ditunda (`MAIL_PROVIDER=null`); Google/Gmail tidak perlu diisi. Domain diarahkan ke
+service `app` port internal `3000`; PostgreSQL dan OpenWA tetap privat.
 
 ## Role dan akses
 
@@ -81,5 +84,6 @@ ke service `app` port internal `3000`; PostgreSQL dan OpenWA tetap privat.
 
 ## Secret
 
-Secret hanya di `.env` (tidak di-commit). Key JSON service account GCS disimpan di
+Secret hanya di `.env` atau Environment Variables Coolify (tidak di-commit).
+Integrasi GCS bersifat opsional; jika diaktifkan kelak, key JSON disimpan di
 `secrets/gcs-key.json` (di-ignore git). Lihat `.env.example` untuk daftar variabel.

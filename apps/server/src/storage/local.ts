@@ -5,7 +5,7 @@ import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { StorageDriver } from './driver';
 
-/** Penyimpanan di disk lokal untuk dev/test. File disajikan lewat server, bukan Signed URL. */
+/** Penyimpanan disk server; produksi memakai volume permanen. Akses file tetap diperiksa API. */
 export class LocalDriver implements StorageDriver {
   readonly name = 'local' as const;
   private readonly root: string;
