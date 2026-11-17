@@ -257,9 +257,75 @@ describe.skipIf(!hasDb)('Onboarding WhatsApp OTP', () => {
     const f = await fixture();
     Object.defineProperty(f.wa, 'name', { value: 'openwa' });
     vi.spyOn(f.wa, 'session').mockResolvedValue({ id: 'test-session', status: 'disconnected' });
-    expect((await f.a.post('/api/auth/verify-whatsapp/start', { phone: f.phone })).status).toBe(
-      502,
-    );
+    const res = await f.a.post('/api/auth/verify-whatsapp/start', { phone: f.phone });
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatchObject({ code: 'WA_NOT_READY' });
+    expect(f.wa.outbox).toHaveLength(0);
+  });
+
+  it('bot tidak terjangkau memberi pesan aman; gagal kirim tidak menghabiskan kuota harian', async () => {
+    const f = await fixture();
+    Object.defineProperty(f.wa, 'name', { value: 'openwa' });
+    const session = vi.spyOn(f.wa, 'session').mockRejectedValue(new Error('secret internal URL'));
+    for (let i = 0; i < 5; i++) {
+      const res = await f.a.post('/api/auth/verify-whatsapp/start', { phone: f.phone });
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      expect(body.error.code).toBe('WA_UNAVAILABLE');
+      expect(JSON.stringify(body)).not.toContain('secret');
+    }
+    const blocked = await f.a.post('/api/auth/verify-whatsapp/start', { phone: f.phone });
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(Number(blocked.headers.get('retry-after'))).toBeLessThanOrEqual(60);
+    expect(
+      await testDb().query.verificationCodes.findMany({
+        where: eq(verificationCodes.userId, f.user.id),
+      }),
+    ).toHaveLength(0);
+
+    session.mockResolvedValue({ id: 'ready-session', status: 'ready' });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try {
+      expect((await f.a.post('/api/auth/verify-whatsapp/start', { phone: f.phone })).status).toBe(
+        200,
+      );
+    } finally {
+      clock.mockRestore();
+    }
+    expect(f.wa.outbox).toHaveLength(1);
+  });
+
+  it('kegagalan provider berulang bisa dipulihkan tanpa blokir sehari', async () => {
+    const f = await fixture();
+    const send = vi.spyOn(f.wa, 'sendText').mockRejectedValue(new Error('send failed'));
+    for (let i = 0; i < 5; i++) {
+      expect((await f.a.post('/api/auth/verify-whatsapp/start', { phone: f.phone })).status).toBe(
+        502,
+      );
+    }
+    expect(
+      await testDb().query.verificationCodes.findMany({
+        where: eq(verificationCodes.userId, f.user.id),
+      }),
+    ).toHaveLength(0);
+    send.mockRestore();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try {
+      expect((await f.a.post('/api/auth/verify-whatsapp/start', { phone: f.phone })).status).toBe(
+        200,
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('provider null di produksi tidak berpura-pura mengirim kode', async () => {
+    const f = await fixture();
+    f.deps.env.NODE_ENV = 'production';
+    const res = await f.a.post('/api/auth/verify-whatsapp/start', { phone: f.phone });
+    expect(res.status).toBe(503);
+    expect((await res.json()).error.code).toBe('WA_DISABLED');
     expect(f.wa.outbox).toHaveLength(0);
   });
 

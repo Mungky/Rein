@@ -25,7 +25,7 @@ export interface Deps {
     loginIp: FixedWindowLimiter;
     /** Kirim ulang email verifikasi: 5 / jam per user (PRD §5). */
     emailSend: FixedWindowLimiter;
-    /** Kode verifikasi WA: 5 / 24 jam per nomor (PRD §5). */
+    /** Percobaan OTP: 5 / menit; kuota 5 kode terkirim / 24 jam disimpan di database. */
     waStart: FixedWindowLimiter;
     /** Unlock PIN per sesi (cadangan; batas utama 5 salah per perangkat). */
     pinUnlock: FixedWindowLimiter;
