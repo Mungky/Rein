@@ -309,7 +309,6 @@
   width={720}
 >
   {#if selectedUser}
-    <h3>Kanal notifikasi</h3>
     {#key selectedUser.id}<UserNotificationSettings userId={selectedUser.id} />{/key}
     {#if hasGlobal('admin.roles')}
       <h3>Izin khusus pengguna</h3>
