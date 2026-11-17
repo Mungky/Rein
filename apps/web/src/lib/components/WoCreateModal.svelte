@@ -21,23 +21,56 @@
     projectId: string;
     members: Member[];
     canWeight?: boolean;
+    canUpload?: boolean;
     oncreated?: (id: string) => void;
   }
-  let { open = $bindable(false), projectId, members, canWeight = false, oncreated }: Props = $props();
+  let {
+    open = $bindable(false),
+    projectId,
+    members,
+    canWeight = false,
+    canUpload = false,
+    oncreated,
+  }: Props = $props();
 
   let types = $state<WoType[]>([]);
+  let typesLoading = $state(false);
+  let typesError = $state('');
+  let typesRequest = 0;
   let clientId = $state(crypto.randomUUID());
-  let f = $state({ title: '', typeId: '', assigneeId: '', deadline: '', plannedStart: '', urgent: false, weight: '', detail: '' });
+  let f = $state({
+    title: '',
+    typeId: '',
+    assigneeId: '',
+    deadline: '',
+    plannedStart: '',
+    urgent: false,
+    weight: '',
+    detail: '',
+  });
   let files = $state<Staged[]>([]);
   let errors = $state<Record<string, string>>({});
   let busy = $state(false);
 
-  $effect(() => {
-    if (open && !types.length) {
-      void api<{ woTypes: WoType[] }>('/api/directory/wo-types').then((r) => {
-        types = r.woTypes.filter((t) => t.active !== false);
-      });
+  async function loadTypes() {
+    const request = ++typesRequest;
+    typesLoading = true;
+    typesError = '';
+    try {
+      const result = await api<{ woTypes: WoType[] }>('/api/directory/wo-types');
+      if (request !== typesRequest) return;
+      types = result.woTypes.filter((t) => t.active !== false);
+      if (!types.some((t) => t.id === f.typeId)) f.typeId = '';
+      if (!types.length) typesError = 'Belum ada jenis WO aktif. Hubungi Admin.';
+    } catch (err) {
+      if (request === typesRequest)
+        typesError = err instanceof ApiError ? err.message : 'Jenis WO gagal dimuat.';
+    } finally {
+      if (request === typesRequest) typesLoading = false;
     }
+  }
+  $effect(() => {
+    if (open) void loadTypes();
   });
   $effect(() => {
     if (open && !f.assigneeId && session.me) {
@@ -56,7 +89,16 @@
 
   function reset() {
     clientId = crypto.randomUUID();
-    f = { title: '', typeId: '', assigneeId: '', deadline: '', plannedStart: '', urgent: false, weight: '', detail: '' };
+    f = {
+      title: '',
+      typeId: '',
+      assigneeId: '',
+      deadline: '',
+      plannedStart: '',
+      urgent: false,
+      weight: '',
+      detail: '',
+    };
     files = [];
     errors = {};
   }
@@ -72,23 +114,26 @@
     busy = true;
     try {
       const weight = f.weight.trim() === '' ? undefined : Number(f.weight.replace(',', '.'));
-      const r = await api<{ id: string; numberLabel: string; attachments: number; assigneeName: string; whatsappQueued: boolean }>(
-        `/api/projects/${projectId}/work-orders`,
-        {
-          body: {
-            clientId,
-            title: f.title.trim(),
-            typeId: f.typeId,
-            assigneeId: f.assigneeId,
-            deadline: f.deadline,
-            ...(f.plannedStart ? { plannedStart: f.plannedStart } : {}),
-            urgent: f.urgent,
-            ...(canWeight && weight !== undefined ? { weight } : {}),
-            ...(f.detail.trim() ? { detail: f.detail.trim() } : {}),
-            attachmentIds: files.filter((x) => x.id).map((x) => x.id!),
-          },
+      const r = await api<{
+        id: string;
+        numberLabel: string;
+        attachments: number;
+        assigneeName: string;
+        whatsappQueued: boolean;
+      }>(`/api/projects/${projectId}/work-orders`, {
+        body: {
+          clientId,
+          title: f.title.trim(),
+          typeId: f.typeId,
+          assigneeId: f.assigneeId,
+          deadline: f.deadline,
+          ...(f.plannedStart ? { plannedStart: f.plannedStart } : {}),
+          urgent: f.urgent,
+          ...(canWeight && weight !== undefined ? { weight } : {}),
+          ...(f.detail.trim() ? { detail: f.detail.trim() } : {}),
+          attachmentIds: files.filter((x) => x.id).map((x) => x.id!),
         },
-      );
+      });
       const lamp = r.attachments ? ` dengan ${r.attachments} lampiran` : '';
       toast(
         `${r.numberLabel} dibuat${lamp}` +
@@ -109,11 +154,21 @@
 </script>
 
 <Modal bind:open title="Buat Work Order" width={640}>
+  {#if typesError}<p class="type-state" role="alert">
+      {typesError}<Button onclick={loadTypes}>Coba lagi</Button>
+    </p>
+  {:else if typesLoading}<p class="type-state" role="status">Memuat jenis WO…</p>{/if}
   <form id="wo-create" class="g" onsubmit={submit} novalidate>
-    <Input label="Nama WO" bind:value={f.title} error={errors.title} maxlength={160} placeholder="mis. Gambar GA & detail nozzle" />
+    <Input
+      label="Nama WO"
+      bind:value={f.title}
+      error={errors.title}
+      maxlength={160}
+      placeholder="mis. Gambar GA & detail nozzle"
+    />
     <div class="two">
       <Field label="Jenis" id="wc-type" error={errors.typeId}>
-        <select id="wc-type" bind:value={f.typeId}>
+        <select id="wc-type" bind:value={f.typeId} disabled={typesLoading || !!typesError}>
           <option value="" disabled>Pilih jenis…</option>
           {#each grouped as g (g.c)}
             <optgroup label={WO_CATEGORY_META[g.c].label}>
@@ -124,32 +179,59 @@
       </Field>
       <Field label="PIC" id="wc-pic" error={errors.assigneeId}>
         <select id="wc-pic" bind:value={f.assigneeId}>
-          {#each members as m (m.userId)}<option value={m.userId}>{m.fullName} · {m.projectRole}</option>{/each}
+          {#each members as m (m.userId)}<option value={m.userId}
+              >{m.fullName} · {m.projectRole}</option
+            >{/each}
         </select>
       </Field>
     </div>
     <div class="two">
-      <Input label="Mulai (opsional)" type="date" bind:value={f.plannedStart} error={errors.plannedStart} />
+      <Input
+        label="Mulai (opsional)"
+        type="date"
+        bind:value={f.plannedStart}
+        error={errors.plannedStart}
+      />
       <Input label="Deadline" type="date" bind:value={f.deadline} error={errors.deadline} />
     </div>
     <div class="two">
       <Toggle bind:checked={f.urgent} label="Urgent" showLabel />
       {#if canWeight}
-        <Input label="Bobot (%)" inputmode="decimal" bind:value={f.weight} hint="Kosongkan = dibagi otomatis" error={errors.weight} />
+        <Input
+          label="Bobot (%)"
+          inputmode="decimal"
+          bind:value={f.weight}
+          hint="Kosongkan = dibagi otomatis"
+          error={errors.weight}
+        />
       {/if}
     </div>
     <Field label="Detail (opsional)" id="wc-detail" error={errors.detail}>
       <textarea id="wc-detail" bind:value={f.detail} rows="3" maxlength="5000"></textarea>
     </Field>
-    <StagedFiles userId={session.me?.user.id ?? ''} bind:items={files} />
+    {#if canUpload}<StagedFiles userId={session.me?.user.id ?? ''} bind:items={files} />{/if}
   </form>
   {#snippet footer()}
     <Button onclick={() => (open = false)}>Batal</Button>
-    <Button variant="primary" type="submit" form="wo-create" loading={busy} disabled={uploading}>Buat WO</Button>
+    <Button
+      variant="primary"
+      type="submit"
+      form="wo-create"
+      loading={busy}
+      disabled={uploading || typesLoading || !!typesError}>Buat WO</Button
+    >
   {/snippet}
 </Modal>
 
 <style>
+  .type-state {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 0 0 12px;
+    color: var(--color-text-secondary);
+  }
   .g {
     display: flex;
     flex-direction: column;

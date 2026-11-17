@@ -199,6 +199,85 @@ describe.runIf(hasDb)('undangan opsional, role, izin dan kanal per pengguna', ()
     ).toBeDefined();
   });
 
+  it('admin pengguna terbatas tidak dapat memberikan kewenangan role atau mengambil alih administrator', async () => {
+    const f = await fixture();
+    const limited = await createUser({ role: 'manager' });
+    await testDb()
+      .insert(userPermissions)
+      .values({ userId: limited.id, permissionKey: 'admin.users', scope: 'all' });
+    const { a } = await login(f.app, limited.username, limited.password!);
+    const member = await createUser();
+    const adminRoleId = await roleId('admin');
+    const managerRoleId = await roleId('manager');
+    const catalog = (await (await a.get('/api/admin/roles')).json()).roles;
+    expect(catalog.some((role: { id: string }) => role.id === adminRoleId)).toBe(false);
+    expect(catalog.some((role: { id: string }) => role.id === managerRoleId)).toBe(true);
+    const username = `blocked${uniq()}`;
+    expect(
+      (
+        await a.post('/api/admin/users/invite', {
+          fullName: 'Tidak boleh menjadi Admin',
+          username,
+          roleId: adminRoleId,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (await a.post(`/api/admin/users/${member.id}/role`, { roleId: adminRoleId })).status,
+    ).toBe(403);
+    expect(
+      (await a.post(`/api/admin/users/${member.id}/role`, { roleId: managerRoleId })).status,
+    ).toBe(200);
+    const copy = await f.a.post('/api/admin/roles', {
+      name: `Admin salinan ${uniq()}`,
+      divisionLabel: 'Sistem',
+      copyFrom: adminRoleId,
+    });
+    expect(copy.status).toBe(201);
+    expect(
+      (
+        await a.post('/api/admin/users/invite', {
+          fullName: 'Admin salinan ditolak',
+          username,
+          roleId: (await copy.json()).id,
+        })
+      ).status,
+    ).toBe(403);
+    const privileged = await createUser();
+    await testDb()
+      .insert(userPermissions)
+      .values({ userId: privileged.id, permissionKey: 'admin.roles', scope: 'all' });
+    for (const target of [f.admin, privileged]) {
+      for (const action of ['disable', 'enable', 'resend-invite', 'reset-pin', 'verify-whatsapp']) {
+        expect(
+          (await a.post(`/api/admin/users/${target.id}/${action}`, { phone: '+6281234567890' }))
+            .status,
+        ).toBe(403);
+      }
+      expect(
+        (await a.post(`/api/admin/users/${target.id}/role`, { roleId: managerRoleId })).status,
+      ).toBe(403);
+      expect((await a.get(`/api/admin/users/${target.id}/notifications`)).status).toBe(403);
+      expect(
+        (
+          await f.request(a, 'PUT', `/api/admin/users/${target.id}/notifications`, {
+            channels: 'email',
+          })
+        ).status,
+      ).toBe(403);
+    }
+    const directory = (await (await a.get('/api/admin/users')).json()).users;
+    expect(directory.find((user: { id: string }) => user.id === f.admin.id).canManage).toBe(false);
+    expect(directory.find((user: { id: string }) => user.id === privileged.id).canManage).toBe(
+      false,
+    );
+    expect(directory.find((user: { id: string }) => user.id === member.id).canManage).toBe(true);
+    expect((await f.a.get('/api/auth/me')).status).toBe(200);
+    expect(
+      (await f.a.post(`/api/admin/users/${privileged.id}/role`, { roleId: managerRoleId })).status,
+    ).toBe(200);
+  });
+
   it('pengguna dapat memilih kanal sendiri; Admin mengatur per akun; akun biasa tidak boleh mengubah akun lain', async () => {
     const f = await fixture();
     const u = await createUser();
@@ -225,18 +304,21 @@ describe.runIf(hasDb)('undangan opsional, role, izin dan kanal per pengguna', ()
   it('pengiriman mengikuti WA saja, email saja, atau keduanya; notifikasi dalam aplikasi tetap ada', async () => {
     const f = await fixture();
     const recipients = [];
+    const emails = new Set<string>();
+    const phones = new Set<string>();
     for (const [i, channels] of ['whatsapp', 'email', 'both'].entries()) {
       const u = await createUser();
       recipients.push(u.id);
-      await testDb()
-        .insert(userContacts)
-        .values({
-          userId: u.id,
-          kind: 'whatsapp',
-          value: `+62813${Date.now().toString().slice(-7)}${i}`,
-          verifiedAt: new Date(),
-          isPrimary: true,
-        });
+      emails.add(u.email);
+      const phone = `+62813${Date.now().toString().slice(-7)}${i}`;
+      phones.add(phone);
+      await testDb().insert(userContacts).values({
+        userId: u.id,
+        kind: 'whatsapp',
+        value: phone,
+        verifiedAt: new Date(),
+        isPrimary: true,
+      });
       await testDb()
         .insert(userSettings)
         .values({
@@ -265,10 +347,12 @@ describe.runIf(hasDb)('undangan opsional, role, izin dan kanal per pengguna', ()
       },
     };
     const now = new Date(Date.now() + 1000);
-    expect((await deliverWhatsApp(f.deps, now)).sent).toBe(2);
-    expect((await deliverEmail({ ...f.deps, mail }, now)).sent).toBe(2);
-    expect(sent).toHaveLength(2);
-    expect(sent[0]!.text).toContain('http://localhost:5173/tugas');
+    await deliverWhatsApp(f.deps, now);
+    await deliverEmail({ ...f.deps, mail }, now);
+    expect(f.wa.outbox.filter((message) => phones.has(message.to))).toHaveLength(2);
+    const ownMail = sent.filter((message) => emails.has(message.to));
+    expect(ownMail).toHaveLength(2);
+    expect(ownMail[0]!.text).toContain('http://localhost:5173/tugas');
     const rows = await testDb()
       .select()
       .from(notifications)

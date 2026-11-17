@@ -91,6 +91,7 @@ async function storeFile(
     transform(chunk: Buffer, _enc, cb) {
       try {
         size += chunk.length;
+        if (size > deps.uploadMaxBytes) throw tooLarge(deps.uploadMaxBytes);
         hash.update(chunk);
         if (!mime) {
           head = Buffer.concat([head, chunk]);
@@ -161,7 +162,8 @@ export const attachmentRoutes = new Hono<AppEnv>()
       await new Promise<void>((resolve, reject) => {
         const bb = Busboy({
           headers: { 'content-type': ct },
-          limits: { fileSize: deps.uploadMaxBytes, files: 3, fields: 10, fieldSize: 2048 },
+          // Busboy memicu limit saat ukuran tepat sama; +1 membedakan batas sah dan overflow.
+          limits: { fileSize: deps.uploadMaxBytes + 1, files: 3, fields: 10, fieldSize: 2048 },
         });
         const jobs: Array<Promise<void>> = [];
         let failed = false;

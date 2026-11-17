@@ -127,6 +127,22 @@ describe.skipIf(!hasDb)('lampiran: upload, akses, foto profil', () => {
     expect(rows).toHaveLength(0);
   });
 
+  it.each([1023, 1024, 1025])(
+    'batas inklusif: file %i byte dengan batas 1024 byte',
+    async (size) => {
+      const { app } = makeApp({ uploadMaxBytes: 1024 });
+      const { u, cookie } = await session(app);
+      const data = Buffer.alloc(size);
+      data.write('%PDF-1.4\n');
+      const res = await upload(app, cookie, { ownerType: 'user', ownerId: u.id }, [
+        { field: 'file', name: 'batas.pdf', data },
+      ]);
+      expect(res.status).toBe(size <= 1024 ? 201 : 413);
+      if (size <= 1024) expect((await res.json()).sizeBytes).toBe(size);
+      else expect((await res.json()).error.code).toBe('FILE_TOO_LARGE');
+    },
+  );
+
   it('file melebihi batas → 413 (batas dikecilkan untuk test; produksi 50 MB)', async () => {
     const { app } = makeApp({ uploadMaxBytes: 1024 });
     const { u, cookie } = await session(app);

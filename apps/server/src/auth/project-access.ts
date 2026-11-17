@@ -65,7 +65,7 @@ export function projectCapabilities(a: AuthContext, acc: ProjectAccess) {
     manageMembers: canDo(a, 'project.members.manage', acc.res),
     close: canDo(a, 'project.close', acc.res),
     reopen: a.permissions['project.close'] === 'all',
-    createWo: canDo(a, 'wo.create', acc.res),
+    createWo: acc.project.status !== 'done' && canDo(a, 'wo.create', acc.res),
     editAnyWo: canDo(a, 'wo.edit.any', acc.res),
     editWeight: canDo(a, 'wo.weight.edit', acc.res),
     scurve: canDo(a, 'view.scurve', acc.res),

@@ -536,6 +536,7 @@
   projectId={p.id}
   members={p.members}
   canWeight={p.can.editWeight}
+  canUpload={p.can.upload}
   oncreated={(id) => goto(resolve('/(app)/w/[id]', { id }))}
 />
 

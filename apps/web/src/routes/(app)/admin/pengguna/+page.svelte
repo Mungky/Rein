@@ -23,6 +23,7 @@
     email: string | null;
     emailVerified: boolean;
     lastActiveAt: string | null;
+    canManage: boolean;
   }
   interface Role {
     id: string;
@@ -219,24 +220,26 @@
             >{r.lastActiveAt ? fmt.format(new Date(r.lastActiveAt)) : '—'}</span
           >
           <span class="acts" role="cell">
-            <Button
-              variant="ghost"
-              onclick={() => {
-                selectedUser = r;
-                settingsOpen = true;
-              }}>Akses & notifikasi</Button
-            >
-            {#if r.id !== session.me?.user.id}
-              <Button variant="ghost" onclick={() => openRole(r)}>Ubah role</Button>
-            {/if}
-            {#if r.status === 'invited'}
-              <Button variant="ghost" onclick={() => act(r, 'resend-invite')}>Kirim ulang</Button>
-            {/if}
-            {#if r.status === 'disabled'}
-              <Button variant="ghost" onclick={() => act(r, 'enable')}>Aktifkan</Button>
-            {:else}
-              <Button variant="ghost" onclick={() => act(r, 'disable')}>Nonaktifkan</Button>
-            {/if}
+            {#if r.canManage}
+              <Button
+                variant="ghost"
+                onclick={() => {
+                  selectedUser = r;
+                  settingsOpen = true;
+                }}>Akses & notifikasi</Button
+              >
+              {#if r.id !== session.me?.user.id}
+                <Button variant="ghost" onclick={() => openRole(r)}>Ubah role</Button>
+              {/if}
+              {#if r.status === 'invited'}
+                <Button variant="ghost" onclick={() => act(r, 'resend-invite')}>Kirim ulang</Button>
+              {/if}
+              {#if r.id !== session.me?.user.id && r.status === 'disabled'}
+                <Button variant="ghost" onclick={() => act(r, 'enable')}>Aktifkan</Button>
+              {:else if r.id !== session.me?.user.id}
+                <Button variant="ghost" onclick={() => act(r, 'disable')}>Nonaktifkan</Button>
+              {/if}
+            {:else}<span class="faint small">Memerlukan izin Role & izin.</span>{/if}
           </span>
         </div>
       {/each}

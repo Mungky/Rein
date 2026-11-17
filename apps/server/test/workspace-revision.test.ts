@@ -45,7 +45,7 @@ async function fixture() {
 }
 async function file(
   userId: string,
-  ownerType: 'project' | 'wo' | 'logbook',
+  ownerType: 'project' | 'wo' | 'logbook' | 'user',
   ownerId: string,
   deletedAt: Date | null = null,
 ) {
@@ -67,6 +67,44 @@ async function file(
   return id;
 }
 describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
+  it('staging milik sendiri tetap memerlukan izin unggah saat dilampirkan ke WO atau logbook', async () => {
+    const f = await fixture();
+    const stagingId = await file(f.manager.id, 'user', f.manager.id);
+    await testDb()
+      .insert(userPermissions)
+      .values({ userId: f.manager.id, permissionKey: 'attachment.upload', scope: 'none' });
+    const source = await testDb().query.workOrders.findFirst({ where: eq(workOrders.id, f.woId) });
+    const wo = {
+      clientId: randomUUID(),
+      title: 'WO tanpa izin lampiran',
+      typeId: source!.typeId,
+      assigneeId: f.manager.id,
+      plannedStart: '2026-11-01',
+      deadline: '2026-12-01',
+      attachmentIds: [stagingId],
+    };
+    expect((await f.a.post(`/api/projects/${f.id}/work-orders`, wo)).status).toBe(403);
+    expect(
+      await testDb().query.workOrders.findFirst({ where: eq(workOrders.id, wo.clientId) }),
+    ).toBeUndefined();
+    expect(
+      (await f.a.post(`/api/projects/${f.id}/work-orders`, { ...wo, attachmentIds: [] })).status,
+    ).toBe(201);
+    const entry = {
+      clientId: randomUUID(),
+      body: 'Catatan dengan staging',
+      attachmentIds: [stagingId],
+    };
+    expect((await f.a.post(`/api/work-orders/${f.woId}/logbook`, entry)).status).toBe(403);
+    expect(
+      (await f.a.post(`/api/work-orders/${f.woId}/logbook`, { ...entry, attachmentIds: [] }))
+        .status,
+    ).toBe(201);
+    expect(
+      (await testDb().query.attachments.findFirst({ where: eq(attachments.id, stagingId) }))!
+        .ownerType,
+    ).toBe('user');
+  });
   it('project dapat ditandai Selesai manual meski punch list masih terbuka tanpa BAST/tanggal serah terima', async () => {
     const f = await fixture();
     const detail = await (await f.a.get(`/api/projects/${f.id}`)).json();
@@ -83,6 +121,7 @@ describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
     expect((await a.post(`/api/projects/${f.id}/status`, { status: 'done' })).status).toBe(403);
     expect((await f.a.post(`/api/projects/${f.id}/status`, { status: 'done' })).status).toBe(200);
     expect((await (await f.a.get(`/api/projects/${f.id}`)).json()).status).toBe('done');
+    expect((await (await f.a.get(`/api/projects/${f.id}`)).json()).can.createWo).toBe(false);
     expect(
       (await testDb().query.workOrders.findFirst({ where: eq(workOrders.id, f.woId) }))!.status,
     ).toBe('todo');

@@ -4,10 +4,18 @@ import { Hono } from 'hono';
 import { audit } from '../audit';
 import { authOf, requirePermission, requireVerified } from '../auth/middleware';
 import { revokeAllSessions } from '../auth/session';
+import { assertAssignableRole, assertManageableUser, managesRoles } from '../auth/permissions';
 import { issueActivation, primaryEmailContact } from '../auth/verification';
 import { markWhatsAppVerified } from '../auth/wa-verification';
 import type { AppEnv } from '../context';
-import { devices, roles, userContacts, users } from '../db/schema';
+import {
+  devices,
+  rolePermissions,
+  roles,
+  userContacts,
+  userPermissions,
+  users,
+} from '../db/schema';
 import { userAgent } from '../lib/ip';
 import { HttpError, notFound, readJson } from '../lib/http';
 
@@ -33,11 +41,13 @@ export const adminUserRoutes = new Hono<AppEnv>()
     }
     const user = await db.query.users.findFirst({ where: eq(users.id, id) });
     if (!user) throw notFound('Pengguna tidak ditemukan');
+    await assertManageableUser(db, a, user);
     const role = await db.query.roles.findFirst({ where: eq(roles.id, roleId) });
     if (!role)
       throw new HttpError(422, 'VALIDATION', 'Role tidak ditemukan', {
         roleId: 'Role tidak ditemukan',
       });
+    await assertAssignableRole(db, a, role.id);
     await db.transaction(async (tx) => {
       await tx.update(users).set({ roleId }).where(eq(users.id, id));
       await audit(tx, {
@@ -58,7 +68,14 @@ export const adminUserRoutes = new Hono<AppEnv>()
       .select({ id: roles.id, name: roles.name, divisionLabel: roles.divisionLabel })
       .from(roles)
       .orderBy(asc(roles.name));
-    return c.json({ roles: rows });
+    if (managesRoles(authOf(c))) return c.json({ roles: rows });
+    const privileged = await c.var.deps.db
+      .select()
+      .from(rolePermissions)
+      .where(eq(rolePermissions.permissionKey, 'admin.roles'));
+    return c.json({
+      roles: rows.filter((r) => !privileged.some((p) => p.roleId === r.id && p.scope === 'all')),
+    });
   })
 
   .get('/users', requirePermission('admin.users'), async (c) => {
@@ -93,8 +110,27 @@ export const adminUserRoutes = new Hono<AppEnv>()
         ),
       )
       .orderBy(asc(users.fullName));
+    const fullAdmin = managesRoles(authOf(c));
+    const [grants, overrides] = fullAdmin
+      ? [[], []]
+      : await Promise.all([
+          c.var.deps.db
+            .select()
+            .from(rolePermissions)
+            .where(eq(rolePermissions.permissionKey, 'admin.roles')),
+          c.var.deps.db
+            .select()
+            .from(userPermissions)
+            .where(eq(userPermissions.permissionKey, 'admin.roles')),
+        ]);
+    const protectedRoles = new Set(grants.filter((p) => p.scope === 'all').map((p) => p.roleId));
+    const personal = new Map(overrides.map((p) => [p.userId, p.scope === 'all']));
     return c.json({
-      users: rows.map((r) => ({ ...r, emailVerified: r.emailVerifiedAt != null })),
+      users: rows.map((r) => ({
+        ...r,
+        emailVerified: r.emailVerifiedAt != null,
+        canManage: fullAdmin || !(personal.get(r.id) ?? protectedRoles.has(r.roleId)),
+      })),
     });
   })
 
@@ -108,6 +144,7 @@ export const adminUserRoutes = new Hono<AppEnv>()
       throw new HttpError(422, 'VALIDATION', 'Role tidak ditemukan', {
         roleId: 'Role tidak ditemukan',
       });
+    await assertAssignableRole(db, a, role.id);
     const byUsername = await db.query.users.findFirst({ where: eq(users.username, body.username) });
     if (byUsername) {
       throw new HttpError(409, 'USERNAME_TAKEN', 'Username sudah dipakai', {
@@ -178,6 +215,7 @@ export const adminUserRoutes = new Hono<AppEnv>()
     const { db, env, mail } = c.var.deps;
     const user = await db.query.users.findFirst({ where: eq(users.id, c.req.param('id')) });
     if (!user) throw notFound('Pengguna tidak ditemukan');
+    await assertManageableUser(db, a, user);
     if (user.status !== 'invited') {
       throw new HttpError(409, 'NOT_INVITED', 'Pengguna ini sudah aktif atau nonaktif');
     }
@@ -211,6 +249,9 @@ export const adminUserRoutes = new Hono<AppEnv>()
     const id = c.req.param('id');
     if (id === a.user.id)
       throw new HttpError(409, 'SELF', 'Anda tidak bisa menonaktifkan akun sendiri');
+    const target = await db.query.users.findFirst({ where: eq(users.id, id) });
+    if (!target) throw notFound('Pengguna tidak ditemukan');
+    await assertManageableUser(db, a, target);
     const [u] = await db
       .update(users)
       .set({ status: 'disabled' })
@@ -236,6 +277,7 @@ export const adminUserRoutes = new Hono<AppEnv>()
     const id = c.req.param('id');
     const user = await db.query.users.findFirst({ where: eq(users.id, id) });
     if (!user) throw notFound('Pengguna tidak ditemukan');
+    await assertManageableUser(db, a, user);
     const res = await db
       .update(devices)
       .set({ pinHash: null, pinFailedCount: 0, pinDisabledAt: null, updatedAt: new Date() })
@@ -259,6 +301,7 @@ export const adminUserRoutes = new Hono<AppEnv>()
     const id = c.req.param('id');
     const user = await db.query.users.findFirst({ where: eq(users.id, id) });
     if (!user) throw notFound('Pengguna tidak ditemukan');
+    await assertManageableUser(db, a, user);
     const { phone } = await readJson(c, adminVerifyWhatsAppSchema);
     let contact = phone
       ? await db.query.userContacts.findFirst({
@@ -300,6 +343,9 @@ export const adminUserRoutes = new Hono<AppEnv>()
     const a = authOf(c);
     const { db } = c.var.deps;
     const id = c.req.param('id');
+    const target = await db.query.users.findFirst({ where: eq(users.id, id) });
+    if (!target) throw notFound('Pengguna nonaktif tidak ditemukan');
+    await assertManageableUser(db, a, target);
     const [u] = await db
       .update(users)
       .set({

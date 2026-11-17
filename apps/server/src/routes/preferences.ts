@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { audit } from '../audit';
 import { authOf, requireAuth, requirePermission, requireVerified } from '../auth/middleware';
+import { assertManageableUser } from '../auth/permissions';
 import type { AppEnv, Deps } from '../context';
 import { userContacts, userSettings, users, verificationCodes } from '../db/schema';
 import { HttpError, notFound, readJson } from '../lib/http';
@@ -49,8 +50,11 @@ export const preferenceRoutes = new Hono<AppEnv>()
     requireVerified,
     requirePermission('admin.users'),
     async (c) => {
-      if (!(await c.var.deps.db.query.users.findFirst({ where: eq(users.id, c.req.param('id')) })))
-        throw notFound('Pengguna tidak ditemukan');
+      const user = await c.var.deps.db.query.users.findFirst({
+        where: eq(users.id, c.req.param('id')),
+      });
+      if (!user) throw notFound('Pengguna tidak ditemukan');
+      await assertManageableUser(c.var.deps.db, authOf(c), user);
       return c.json(await settings(c.var.deps, c.req.param('id')));
     },
   )
@@ -133,8 +137,9 @@ async function saveChannels(c: Context<AppEnv>) {
   const a = authOf(c);
   const userId = c.req.param('id') ?? a.user.id;
   const { db } = c.var.deps;
-  if (!(await db.query.users.findFirst({ where: eq(users.id, userId) })))
-    throw notFound('Pengguna tidak ditemukan');
+  const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (!user) throw notFound('Pengguna tidak ditemukan');
+  if (c.req.param('id')) await assertManageableUser(db, a, user);
   const { channels } = await readJson(c, notificationChannelsSchema);
   const flags = { notifyEmail: channels !== 'whatsapp', notifyWhatsapp: channels !== 'email' };
   await db.transaction(async (tx) => {

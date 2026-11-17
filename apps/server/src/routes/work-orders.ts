@@ -232,6 +232,7 @@ export const projectWoRoutes = new Hono<AppEnv>()
     const acc = await loadProjectAccess(db, a, c.req.param('projectId'));
     assertCan(a, 'wo.create', acc.res);
     const body = await readJson(c, woCreateSchema);
+    if (body.attachmentIds.length) assertCan(a, 'attachment.upload', acc.res);
     const p = acc.project;
     const digest = hashOf({ ...body, projectId: p.id });
 
@@ -738,6 +739,7 @@ export const woRoutes = new Hono<AppEnv>()
     const { wo, acc } = await loadWo(db, a, c.req.param('id'));
     assertCan(a, 'logbook.create', acc.res, 'Anda bukan anggota project ini');
     const body = await readJson(c, logbookCreateSchema);
+    if (body.attachmentIds.length) assertCan(a, 'attachment.upload', acc.res);
     const digest = hashOf(body);
     const dup = await db.query.logbookEntries.findFirst({
       where: and(

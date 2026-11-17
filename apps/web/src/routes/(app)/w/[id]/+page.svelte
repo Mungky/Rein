@@ -304,10 +304,13 @@
           {onkeydown}
           rows="3"></textarea>
         <div class="row">
-          <StagedFiles {userId} bind:items={files} compact camera />
+          {#if wo.can.upload}<StagedFiles {userId} bind:items={files} compact camera />{/if}
           <span class="sp"></span>
-          <Button variant="primary" onclick={post} loading={posting} disabled={uploading}
-            >Kirim</Button
+          <Button
+            variant="primary"
+            onclick={post}
+            loading={posting}
+            disabled={uploading || (!body.trim() && !files.some((f) => f.id))}>Kirim</Button
           >
         </div>
       </div>
