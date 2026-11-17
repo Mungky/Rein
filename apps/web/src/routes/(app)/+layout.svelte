@@ -34,7 +34,10 @@
 
   const adminLinks = $derived<NavItem[]>([
     ...(hasGlobal('admin.users')
-      ? [{ href: resolve('/admin/pengguna'), label: 'Pengguna', icon: 'users' as const }]
+      ? [
+          { href: resolve('/admin/pengguna'), label: 'Pengguna', icon: 'users' as const },
+          { href: resolve('/admin/whatsapp'), label: 'WhatsApp', icon: 'bell' as const },
+        ]
       : []),
     ...(hasGlobal('admin.roles')
       ? [{ href: resolve('/admin/role'), label: 'Role & izin', icon: 'shield' as const }]
