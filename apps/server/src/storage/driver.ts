@@ -1,8 +1,8 @@
 import type { Readable } from 'node:stream';
 
 /**
- * Abstraksi penyimpanan lampiran (PRD §7). `GcsDriver` default di produksi, `LocalDriver`
- * untuk dev/test. Objek tidak pernah publik.
+ * Abstraksi penyimpanan lampiran (PRD §7). Self-host memakai volume server lewat LocalDriver;
+ * GcsDriver tetap tersedia untuk konfigurasi Google Cloud. Objek tidak pernah publik.
  */
 export interface StorageDriver {
   readonly name: 'gcs' | 'local';

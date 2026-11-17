@@ -1,9 +1,9 @@
 # REIN v2 — self-host di Coolify
 
 Target: `https://staff.remula.online`, repository `https://github.com/Mungky/Rein`, branch
-`codex/rein-v2-coolify`. Keputusan deployment: **database baru**, tanpa impor data REIN lama
-atau data simulasi lokal. App, PostgreSQL 16, dan OpenWA berjalan di server; lampiran di GCS,
-email melalui Gmail API.
+`main`. Keputusan deployment: **database baru**, tanpa impor data REIN lama
+atau data simulasi lokal. App, PostgreSQL 16, OpenWA, foto, dan lampiran berjalan/disimpan di
+server sendiri. **Gmail/email ditunda**; Google Cloud bukan syarat deployment saat ini.
 
 ## 1. Yang perlu disiapkan
 
@@ -11,8 +11,6 @@ email melalui Gmail API.
 - Kapasitas praktis yang disarankan: 2 vCPU, RAM 4 GB, ruang kosong 30 GB; RAM 8 GB lebih
   nyaman bila build dan aplikasi lain berjalan di server yang sama. Ini perkiraan kapasitas,
   bukan hasil load test server Anda. Pastikan port publik 80/443 menuju proxy Coolify.
-- Google Cloud project, bucket GCS **privat** khusus v2, service account, dan key JSON.
-- Akun Gmail/Google Workspace pengirim, Gmail API aktif, OAuth web client dan refresh token.
 - Nomor WhatsApp bot beserta HP untuk scan QR. OpenWA v2 memakai database dan sesi sendiri.
   Jika nomor sedang dipakai instance lama, hentikan instance lama saat memindahkan koneksi.
 - Lima secret acak **berbeda**: `POSTGRES_PASSWORD`, `OPENWA_DB_PASSWORD`, `AUTH_PEPPER`,
@@ -23,30 +21,19 @@ Simpan `AUTH_PEPPER` permanen bersama backup secret. Mengganti/menghilangkannya 
 password dan PIN yang sudah tersimpan gagal diverifikasi. Jangan kirim secret melalui chat
 atau memasukkannya ke Git.
 
-## 2. Google Cloud dan email
+## 2. Penyimpanan dan kanal aktif
 
-1. Buat bucket privat dengan Public Access Prevention. Beri service account akses
-   `Storage Object Admin` hanya pada bucket tersebut. Key JSON dipakai server untuk akses
-   objek dan menandatangani URL unduhan; jangan membuat bucket publik.
-2. Upload key melalui SSH/SCP ke **host deployment** (server tempat container berjalan):
-   `/data/rein-v2/secrets/gcs-key.json`. File harus sudah ada sebelum deploy.
-   Lindungi direktori dengan mode `700`; file dimiliki UID `1000` (user container app), mode
-   `400`. Simpan salinan terenkripsi terpisah untuk pemulihan. Bind mount bersifat read-only.
-3. Aktifkan Gmail API. Buat OAuth client tipe **Web application**, daftarkan redirect URI
-   persis `https://staff.remula.online/auth/google/callback`. Isi client ID dan secret di
-   Coolify; konfigurasi ini sekaligus mengaktifkan tombol Login dengan Google, hanya untuk
-   pengguna terdaftar.
-4. Ambil refresh token untuk akun pengirim melalui skrip yang sudah tersedia:
-   `pnpm gmail:token`. Skrip lokal menggunakan callback
-   `http://localhost:3000/auth/google/callback`, jadi daftarkan URI lokal itu juga dan pastikan
-   port lokal 3000 bebas saat menjalankan skrip. Isi konfigurasi OAuth lokal dari `.env`.
-   Persetujuan akun Google dilakukan pemilik akun; token hasil skrip disimpan sebagai secret.
-5. `GMAIL_SENDER` harus cocok dengan akun pemberi refresh token. Atur consent screen untuk
-   penggunaan produksi sesuai jenis akun; token aplikasi OAuth berstatus Testing dapat
-   kedaluwarsa. Uji pengiriman email nyata sebelum go-live.
+Compose memasang volume permanen `app-uploads` pada `/app/uploads` di service `app`.
+Foto dan lampiran tersimpan di disk server; container app berjalan sebagai UID 1000 dan
+direktori ini disiapkan writable oleh image. File dibaca melalui API yang memeriksa izin.
+Jangan menghapus volume saat redeploy. Volume `pg-data` dan `openwa-data` juga dipertahankan.
 
-`MAIL_PROVIDER=null` boleh digunakan sementara untuk pemeriksaan awal, tetapi email hanya
-masuk log, **tidak terkirim**. Gunakan `gmail` saat go-live agar kanal cadangan tersedia.
+Isi **`MAIL_PROVIDER=null`** di Coolify. Jika pernah terisi `gmail`, ubah secara eksplisit
+karena Coolify dapat mempertahankan nilai environment lama setelah konfigurasi dimuat ulang.
+Kosongkan variabel Google/Gmail untuk tahap ini; tidak perlu bucket, key JSON, atau OAuth.
+Email tidak terkirim. Gunakan WhatsApp dan salin tautan undangan dari Admin. Pengiriman
+email, verifikasi kontak email dan pemulihan melalui email menunggu Gmail diaktifkan.
+Provider null dapat mencatat pesan/tautan verifikasi ke log; batasi akses log kepada Admin.
 
 ## 3. Buat resource baru di Coolify
 
@@ -55,17 +42,17 @@ Gunakan resource baru, misalnya **REIN v2**, agar volume/database aplikasi lama 
 | Pengaturan | Nilai |
 | --- | --- |
 | Repository | `Mungky/Rein` |
-| Branch | `codex/rein-v2-coolify` |
+| Branch | `main` |
 | Build pack | Docker Compose |
-| Base Directory | `/infra` |
+| Base Directory | `/` |
 | Docker Compose Location | `/docker-compose.yml` |
 | Preserve repository during deployment | **Aktif** (bind mount skrip init PostgreSQL) |
 | Raw Compose Deployment | Nonaktif |
 | Connect to predefined network | Tidak diperlukan |
 | Service publik | `app`, port internal `3000` |
 
-Direktori `/infra` penting: build context `..` menunjuk root repository dan bind
-`./postgres/init` menunjuk skrip init yang benar. Coolify mengelola jaringan dan proxy.
+Compose produksi berada di root repository: build context `.` dan bind
+`./infra/postgres/init` menunjuk skrip init yang benar. Coolify mengelola jaringan dan proxy.
 Jangan tambahkan port publik untuk PostgreSQL atau OpenWA. Volume `pg-data` dan `openwa-data`
 harus milik resource v2 yang baru; jangan sambungkan volume lama atau memakai external volume.
 
@@ -74,16 +61,16 @@ Variables di Coolify dan isi semuanya yang dibutuhkan. Template kosong belum sia
 Variabel ini dipakai saat runtime/Compose interpolation, bukan ditempel ke Dockerfile.
 
 - `APP_URL=https://staff.remula.online` tanpa port/trailing path.
-- `GCS_BUCKET` nama bucket baru; `GCS_KEY_FILE` path absolut key di host di atas.
-- Seluruh secret, Gmail/OAuth, dan nomor bot format internasional, misalnya `628…`.
+- Seluruh lima secret dan nomor bot format internasional, misalnya `628…`.
+- `MAIL_PROVIDER=null`; Google/Gmail boleh kosong. Penyimpanan server sudah diatur Compose.
 - `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` yang kuat, nama dan username untuk bootstrap.
   Email ini kontak Admin awal; email karyawan tetap opsional saat diundang.
 - `OPENWA_IMAGE`: default tersedia di template. Setelah uji berhasil, pin image digest
   yang diuji agar upgrade berikutnya terkontrol. Jangan ganti tag secara otomatis saat cutover.
 
 Untuk uji sebelum cutover, gunakan hostname sementara dengan HTTPS yang Anda miliki.
-Atur `APP_URL`, redirect URI Google, dan domain service sesuai hostname sementara tersebut;
-daftarkan juga callback itu pada OAuth client. Domain produksi tetap di aplikasi lama sampai
+Atur `APP_URL` dan domain service sesuai hostname sementara tersebut.
+Domain produksi tetap di aplikasi lama sampai
 pengujian selesai. Di kolom domain service Coolify, akhiran `:3000` memilih port container,
 misalnya `https://hostname-sementara:3000`; URL pengguna tetap HTTPS port 443.
 
@@ -116,11 +103,11 @@ bersama-sama; jangan menghapus volume sebagai cara memperbaikinya.
 ## 5. Pemeriksaan sebelum pindah domain
 
 - `/healthz` dan `/readyz` sehat; login dan navigasi SPA bekerja setelah refresh halaman.
-- Undang akun, aktivasi, verifikasi WA (bot mengirim OTP → masukkan di app), lewati/buat PIN,
-  isi nickname/foto, lalu hubungkan email lewat profil dan verifikasi email.
-- Pastikan email nyata terkirim dan WhatsApp tetap tersambung setelah redeploy.
+- Undang akun lewat tautan aktivasi, verifikasi WA (bot mengirim OTP → masukkan di app),
+  lewati/buat PIN, lalu isi nickname/foto. Email menunggu layanan Gmail diaktifkan.
+- Pastikan WhatsApp tetap tersambung setelah redeploy.
 - Uji pengguna dengan cakupan akses berbeda; buat project → WO → logbook → lampiran.
-- Uji unggah/unduh GCS, batas 50 MB per file, gabungan lampiran project, dan tandai project
+- Uji unggah/unduh file, batas 50 MB per file, gabungan lampiran project, dan tandai project
   selesai secara manual. Pastikan live update berfungsi pada dua sesi browser.
 - Pastikan app/database v2 tidak berisi 30 pengguna atau project dummy dari simulasi lokal.
 
@@ -130,10 +117,10 @@ bersama-sama; jangan menghapus volume sebagai cara memperbaikinya.
    Hentikan perubahan data di aplikasi lama selama pergantian.
 2. Lepaskan domain `staff.remula.online` dari resource lama, lalu pasang ke service `app`
    resource v2 (port internal `3000`). Hindari dua resource melayani hostname yang sama.
-3. Ubah `APP_URL` dan `GOOGLE_OAUTH_REDIRECT_URI` ke domain produksi, lalu redeploy.
+3. Ubah `APP_URL` ke domain produksi, lalu redeploy.
    Jika IP server sama, DNS yang sudah benar tidak perlu berubah. Jika server berbeda,
    ubah A/AAAA sesuai IP baru; pastikan tidak ada AAAA lama yang menuju server lain.
-4. Pastikan TLS valid, lalu ulangi uji login, OTP, email, unggah/unduh, dan pembuatan project.
+4. Pastikan TLS valid, lalu ulangi uji login, OTP, unggah/unduh, dan pembuatan project.
    Pertahankan backup dan volume lama sampai masa retensi yang disepakati berakhir.
 
 Rollback: hentikan penulisan v2, lepaskan domain dari v2, kembalikan route/domain ke aplikasi
@@ -145,18 +132,21 @@ otomatis masuk ke database lama; simpan/export untuk rekonsiliasi sebelum rollba
 Backup **belum otomatis** hanya dengan deploy Compose. `GCS_BACKUP_BUCKET` pada template
 pengembangan lama bukan pekerjaan backup yang sudah terimplementasi.
 
-Contoh backup melalui SSH host (isi nama container PostgreSQL **v2** dari Coolify):
+Contoh backup melalui SSH host (isi nama container PostgreSQL dan app **v2** dari Coolify;
+hentikan sementara perubahan data/unggahan agar pasangan backup konsisten):
 
 ```sh
 DB_CONTAINER='ganti-nama-container-postgres-v2-dari-Coolify'
+APP_CONTAINER='ganti-nama-container-app-v2-dari-Coolify'
 mkdir -p /data/rein-v2/backups
 umask 077
 docker exec "$DB_CONTAINER" sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "/data/rein-v2/backups/rein-$(date +%Y%m%d-%H%M%S).dump"
+docker exec "$APP_CONTAINER" tar -C /app/uploads -czf - . > "/data/rein-v2/backups/uploads-$(date +%Y%m%d-%H%M%S).tar.gz"
 ```
 
-Jadwalkan backup database, salinan off-site, serta uji restore ke database terpisah. Cadangkan
-juga sesi/config OpenWA, `AUTH_PEPPER`, env rahasia dan key GCS secara terenkripsi. Atur
-perlindungan pemulihan/versioning objek GCS sesuai kebutuhan retensi. Backup yang hanya
+Jadwalkan backup database **dan lampiran**, salinan off-site, serta uji restore ke resource
+terpisah. Cadangkan juga sesi/config OpenWA, `AUTH_PEPPER`, dan env rahasia secara terenkripsi.
+Backup yang hanya
 berada di server yang sama belum melindungi dari kerusakan server.
 
 ## Verifikasi paket sebelum push — 17 November 2026
@@ -166,10 +156,13 @@ berada di server yang sama belum melindungi dari kerusakan server.
   baru yang terisolasi: migrasi, 19 role, satu Admin, seed berulang, login, cookie Secure,
   SPA beserta asset/CSP, `/healthz` dan `/readyz` lulus. Tidak ada project dummy.
 - Init database OpenWA diuji dengan password mengandung apostrof. Compose diperiksa untuk
-  path build, mount key read-only, dan tidak adanya port publik.
+  path build dan tidak adanya port publik.
+- Perbaikan Compose root diuji tanpa kredensial Google: unggah/unduh melalui API sebagai
+  user non-root, hapus dan buat ulang container dengan volume yang sama, lalu unduh ulang
+  file dengan sesi yang sama. File tetap utuh dan akses tanpa login ditolak.
 - Budget frontend lulus: JS awal 61,5 KB gzip dan CSS 8,0 KB gzip. Audit dependensi produksi
   tidak menemukan kerentanan yang diketahui.
-- Belum menguji server Coolify Anda, DNS/TLS produksi, GCS, Gmail, atau WhatsApp nyata dalam
+- Belum menguji server Coolify Anda, DNS/TLS produksi, atau WhatsApp nyata dalam
   paket deployment ini. Uji container memakai provider lokal/null; checklist go-live di atas
   tetap perlu dijalankan dengan kredensial dan nomor sebenarnya.
 
@@ -178,6 +171,3 @@ berada di server yang sama belum melindungi dari kerusakan server.
 - [Coolify Docker Compose](https://coolify.io/docs/applications/builds/docker-compose)
 - [Coolify domain dan port container](https://coolify.io/docs/core/networking/domains)
 - [Coolify persistent storage](https://coolify.io/docs/applications/configuration/persistent-storage)
-- [GCS Signed URLs](https://cloud.google.com/storage/docs/access-control/signing-urls-with-helpers)
-- [Google OAuth web server](https://developers.google.com/identity/protocols/oauth2/web-server)
-- [Gmail API pengiriman](https://developers.google.com/workspace/gmail/api/guides/sending)

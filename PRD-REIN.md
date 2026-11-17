@@ -24,7 +24,9 @@ Hierarki konten: **Project → Work Order (WO) → Logbook entry → Attachment*
 
 > **Revisi 1.1 (15 Nov 2026):** project **tidak punya tahapan baku**. Proses berjalan **paralel** dan menjadi **kategori Jenis WO**. Project hanya punya status **Berjalan / Ditunda / Selesai** (§4.4). Progres dirangkum **per kategori** (§8.4).
 >
-> **Revisi 1.4:** batas lampiran **50 MB per file**. Lampiran dan foto profil disimpan di **Google Cloud Storage** (bucket privat, region Jakarta). Email dikirim lewat **Gmail API**. Ditambah **Login dengan Google** (FR-006). Backup database ke GCS (§7, §11.4).
+> **Revisi 1.7 (17 Nov 2026, permintaan pengguna):** self-host di `staff.remula.online` memakai **database baru** dan **penyimpanan server** (`LocalDriver`, volume permanen `app-uploads`, path `/app/uploads`). Akses file tetap diperiksa server. **Gmail API/email ditunda** (`MAIL_PROVIDER=null`); WhatsApp menjadi kanal aktif. Google Cloud, Gmail, dan Login Google bukan syarat deployment tahap ini. Compose produksi berada di root repository (`docker-compose.yml`, Coolify Base Directory `/`, branch `main`). Backup harus mencakup PostgreSQL dan volume lampiran serta salinan di luar server. Revisi ini menggantikan kewajiban GCS/Gmail dan lokasi Compose pada §7/§11; lihat `docs/SELFHOST-COOLIFY.md`.
+>
+> **Revisi 1.4:** batas lampiran **50 MB per file**. Lampiran dan foto profil disimpan di **Google Cloud Storage** (bucket privat, region Jakarta). Email dikirim lewat **Gmail API**. Ditambah **Login dengan Google** (FR-006). Backup database ke GCS (§7, §11.4). Pilihan deployment saat ini mengikuti revisi 1.7.
 >
 > **Revisi 1.6 (16 Nov 2026, permintaan pengguna):** project ditutup manual; logbook hanya catatan/lampiran; lampiran project merangkum WO dan logbook; tugas dan notifikasi disatukan di Beranda; daftar project hanya Card. Role & Izin, Timeline dan S-Curve mengikuti frame Figma. Sidebar memakai dropdown akun, tema tetap di topbar, kalender dan jam WIB ditambahkan. Lihat `docs/WORKSPACE-REVISION.md`.
 >
