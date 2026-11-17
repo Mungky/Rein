@@ -1,0 +1,100 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { serve } from '@hono/node-server';
+import pino from 'pino';
+import { createApp } from './app';
+import { createGoogleOidc } from './auth/google';
+import type { Deps } from './context';
+import { closeDb, getDb } from './db/client';
+import { runMigrations } from './db/migrate';
+import { seedRoles, seedWoTypes } from './db/seed';
+import { env, googleLoginEnabled } from './env';
+import { FixedWindowLimiter } from './lib/rate-limit';
+import { createMailProvider } from './mail/provider';
+import { MAX_ATTACHMENT_BYTES } from '@rein/shared';
+import { startJobs } from './jobs';
+import { createStorage } from './storage';
+import { createWhatsApp } from './wa/provider';
+
+const MINUTE = 60_000;
+const e = env();
+const logger = pino({ level: e.LOG_LEVEL, base: { app: 'rein' } });
+
+// PRD §11.2: migrasi otomatis saat start di produksi.
+if (e.NODE_ENV === 'production' || process.env.MIGRATE_ON_START === 'true') {
+  await runMigrations(e.DATABASE_URL);
+  logger.info('migrasi database selesai');
+}
+// Data bawaan idempoten (role + izin default, jenis WO) — tidak menimpa perubahan Admin.
+await seedRoles(getDb());
+await seedWoTypes(getDb());
+
+function resolveWebDist(): string | null {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    e.WEB_DIST_DIR,
+    path.resolve(here, '../../web/build'),
+    path.resolve(here, '../web'),
+  ].filter((p): p is string => Boolean(p));
+  return candidates.find((p) => existsSync(path.join(p, 'index.html'))) ?? null;
+}
+
+const deps: Deps = {
+  db: getDb(),
+  env: e,
+  logger,
+  mail: createMailProvider(e, logger),
+  storage: await createStorage(e),
+  wa: createWhatsApp(e, logger),
+  uploadMaxBytes: MAX_ATTACHMENT_BYTES,
+  google: googleLoginEnabled(e)
+    ? createGoogleOidc({
+        clientId: e.GOOGLE_OAUTH_CLIENT_ID!,
+        clientSecret: e.GOOGLE_OAUTH_CLIENT_SECRET!,
+        redirectUri: e.GOOGLE_OAUTH_REDIRECT_URI,
+      })
+    : null,
+  limits: {
+    loginIp: new FixedWindowLimiter(30, 15 * MINUTE, 15 * MINUTE),
+    emailSend: new FixedWindowLimiter(5, 60 * MINUTE),
+    waStart: new FixedWindowLimiter(5, 24 * 60 * MINUTE),
+    pinUnlock: new FixedWindowLimiter(20, 15 * MINUTE),
+  },
+  webDist: e.NODE_ENV === 'development' && !e.WEB_DIST_DIR ? null : resolveWebDist(),
+};
+
+const app = createApp(deps);
+const jobs = await startJobs(deps);
+
+// Sesi & webhook OpenWA dibuat otomatis (idempoten); bila gagal, Admin bisa mengulang dari
+// halaman Admin → WhatsApp.
+if (deps.wa.name === 'openwa') {
+  deps.wa
+    .ensureSetup(e.OPENWA_WEBHOOK_URL, e.OPENWA_WEBHOOK_SECRET!)
+    .then((s) => logger.info({ status: s.status }, 'sesi OpenWA'))
+    .catch((err: unknown) => logger.warn({ err: String(err) }, 'setup OpenWA gagal'));
+}
+const server = serve({ fetch: app.fetch, port: e.PORT }, (info) => {
+  logger.info(
+    {
+      port: info.port,
+      mail: deps.mail.name,
+      storage: deps.storage.name,
+      wa: deps.wa.name,
+      google: Boolean(deps.google),
+      spa: deps.webDist,
+    },
+    'REIN server berjalan',
+  );
+});
+
+async function shutdown(signal: string) {
+  logger.info({ signal }, 'mematikan server');
+  server.close();
+  await jobs.stop().catch(() => {});
+  await closeDb();
+  process.exit(0);
+}
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
