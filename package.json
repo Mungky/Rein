@@ -1,19 +1,39 @@
 {
-  "name": "rein-monorepo",
+  "name": "rein",
   "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
-    "dev": "concurrently -n frontend,backend -c blue,green \"bun run dev:frontend\" \"bun run dev:backend\"",
-    "dev:frontend": "cd frontend && bun run dev",
-    "dev:backend": "cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
-    "migrate": "cd db && alembic revision --autogenerate",
-    "migrate:up": "cd db && alembic upgrade head",
-    "migrate:down": "cd db && alembic downgrade -1",
-    "seed": "cd db && python seed.py",
-    "build": "cd frontend && bun run build",
-    "lint": "cd frontend && bun run lint",
-    "typecheck": "cd frontend && bun run typecheck"
+    "infra:up": "docker compose -f infra/docker-compose.dev.yml --env-file .env up -d",
+    "infra:down": "docker compose -f infra/docker-compose.dev.yml --env-file .env down",
+    "dev": "pnpm --parallel --filter @rein/web --filter @rein/server dev",
+    "build": "pnpm --filter @rein/web build && pnpm --filter @rein/server build",
+    "start": "pnpm --filter @rein/server start",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "db:generate": "pnpm --filter @rein/server db:generate",
+    "db:migrate": "pnpm --filter @rein/server db:migrate",
+    "db:seed": "pnpm --filter @rein/server db:seed",
+    "gmail:token": "pnpm --filter @rein/server gmail:token"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "eslint": "^10.15.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-svelte": "^3.24.1",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1",
+    "prettier-plugin-svelte": "^4.1.1",
+    "svelte": "^5.57.3",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
   }
 }

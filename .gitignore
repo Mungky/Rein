@@ -1,70 +1,30 @@
-# Dependencies
+# dependencies
 node_modules/
-.research/
-# Full local REA evidence is reproducible and can be several MB.
-docs/research/odoo-project/rea-evidence.json
-__pycache__/
-*.pyc
-.venv/
-venv/
 
-# Build outputs
-.next/
-.next-preview/
-out/
+# build output
 dist/
 build/
+.svelte-kit/
+coverage/
+.lighthouseci/
+*.tsbuildinfo
 
-# R-Net bridge local store-and-forward buffer (runtime, per-PC — never commit)
-bridge_buffer.db
-bridge_buffer.db-wal
-bridge_buffer.db-shm
-
-# Environment
+# secrets — never commit
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
+secrets/
+*-key.json
+*.key.json
+*.pem
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# local data (LocalDriver storage, logs)
+.data/
+*.log
 
-# OS
+# OS / editor
 .DS_Store
 Thumbs.db
-
-# Python
-*.egg-info/
-.pytest_cache/
-
-# Generated artifacts
-backend/openapi.json
-frontend/src/types/api.d.ts
-
-# Alembic
-db/alembic/versions/__pycache__/
-
-# Google credentials & tokens (NEVER commit these)
-backend/credentials/*
-!backend/credentials/.gitkeep
-credentials/
-token*.json
-*.backup
-# Misc
-design_archive.tar.gz
-rein/
-# Kredensial deploy PC lokal (satu file: config.env) - jangan pernah commit
-config.env
-deploy/config.env
-
-# Archives / backups
-*.rar
-
-# Arsip Mosquitto lokal - berisi file passwd (hash akun broker) + log runtime
-deploy/_arsip/mosquitto-lokal/
-
-# Cuplikan data sensor (db/snapshots/) — bahan uji lokal, bisa besar dan berisi
-# data operasional plant. Simpan di PC/backup, jangan di Git.
-db/snapshots/
+.vscode/*
+!.vscode/extensions.json
+.idea/

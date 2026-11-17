@@ -1,0 +1,14 @@
+{
+  "extends": "./.svelte-kit/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "checkJs": true,
+    "moduleResolution": "bundler",
+    "types": ["vite/client"]
+  }
+}

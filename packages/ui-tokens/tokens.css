@@ -1,0 +1,154 @@
+/*
+ * REIN design tokens — nama mengikuti code syntax variabel Figma "REIN — UI/UX"
+ * (collection Color, mode Light/Dark). Nilai mengikuti design/rein-prototype.html.
+ * Warna kategori (--c-*) hanya untuk titik / garis / bar (PRD §9.9).
+ */
+:root {
+  --color-bg-app: #fbfbfc;
+  --color-bg-surface: #ffffff;
+  --color-bg-subtle: #f6f6f8;
+  --color-bg-hover: #efeff2;
+  --color-bg-selected: #eef1fe;
+  --color-bg-overlay: #161619;
+  --color-border-default: #e6e6ea;
+  --color-border-strong: #dadadf;
+  --color-text-primary: #161619;
+  --color-text-secondary: #5a5a63;
+  --color-text-tertiary: #8e8e97;
+  --color-text-on-accent: #ffffff;
+  --color-icon-default: #73737c;
+  --color-accent-default: #4f6bed;
+  --color-accent-hover: #3d57d4;
+  --color-accent-subtle: #eef1fe;
+  --color-danger-default: #e5484d;
+  --color-danger-subtle: #fdeeee;
+  --color-success-default: #4e9a5e;
+  --color-success-subtle: #ecf5ee;
+  --color-focus-ring: #4f6bed;
+  /* tambahan prototype (belum ada di Figma) */
+  --color-scrim: rgba(22, 22, 25, 0.32);
+  --color-toast-fg: #f6f6f8;
+  --color-toast-link: #8a9dfa;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.14);
+
+  /* kategori jenis WO */
+  --c-eng: #5e6ad2;
+  --c-pro: #c9971c;
+  --c-prd: #d9733a;
+  --c-qct: #22a39a;
+  --c-ship: #9b5dd6;
+  --c-umum: #8a8f98;
+
+  /* typography */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --text-display: 600 24px/32px var(--font-sans);
+  --text-title: 600 20px/28px var(--font-sans);
+  --text-heading-16: 600 16px/24px var(--font-sans);
+  --text-heading-14: 600 14px/20px var(--font-sans);
+  --text-body-14: 400 14px/20px var(--font-sans);
+  --text-body-13: 400 13px/20px var(--font-sans);
+  --text-label: 500 12px/16px var(--font-sans);
+  --text-caption: 400 12px/16px var(--font-sans);
+  --text-micro: 500 11px/14px var(--font-sans);
+
+  /* spacing (space/*) */
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-40: 40px;
+  --space-48: 48px;
+
+  /* radius (radius/*) */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* motion */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 80ms;
+  --dur: 160ms;
+}
+
+/* Dark: ikut sistem kecuali user memaksa terang */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-bg-app: #0f0f11;
+    --color-bg-surface: #161619;
+    --color-bg-subtle: #1d1d21;
+    --color-bg-hover: #27272c;
+    --color-bg-selected: #1d2444;
+    --color-bg-overlay: #27272c;
+    --color-border-default: #27272c;
+    --color-border-strong: #3d3d44;
+    --color-text-primary: #f6f6f8;
+    --color-text-secondary: #a3a3ac;
+    --color-text-tertiary: #7c7c86;
+    --color-icon-default: #9a9aa3;
+    --color-accent-default: #7088f5;
+    --color-accent-hover: #8a9df7;
+    --color-accent-subtle: #1d2444;
+    --color-danger-default: #f0666a;
+    --color-danger-subtle: #3a1719;
+    --color-success-default: #5faf6f;
+    --color-success-subtle: #16291b;
+    --color-focus-ring: #7088f5;
+    --color-scrim: rgba(0, 0, 0, 0.55);
+    --color-toast-link: #8a9df7;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.55);
+    --c-eng: #8b95f0;
+    --c-pro: #e3b341;
+    --c-prd: #f0945a;
+    --c-qct: #3cc3b8;
+    --c-ship: #b98aee;
+    --c-umum: #9ea3ab;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --color-bg-app: #0f0f11;
+  --color-bg-surface: #161619;
+  --color-bg-subtle: #1d1d21;
+  --color-bg-hover: #27272c;
+  --color-bg-selected: #1d2444;
+  --color-bg-overlay: #27272c;
+  --color-border-default: #27272c;
+  --color-border-strong: #3d3d44;
+  --color-text-primary: #f6f6f8;
+  --color-text-secondary: #a3a3ac;
+  --color-text-tertiary: #7c7c86;
+  --color-icon-default: #9a9aa3;
+  --color-accent-default: #7088f5;
+  --color-accent-hover: #8a9df7;
+  --color-accent-subtle: #1d2444;
+  --color-danger-default: #f0666a;
+  --color-danger-subtle: #3a1719;
+  --color-success-default: #5faf6f;
+  --color-success-subtle: #16291b;
+  --color-focus-ring: #7088f5;
+  --color-scrim: rgba(0, 0, 0, 0.55);
+  --color-toast-link: #8a9df7;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --c-eng: #8b95f0;
+  --c-pro: #e3b341;
+  --c-prd: #f0945a;
+  --c-qct: #3cc3b8;
+  --c-ship: #b98aee;
+  --c-umum: #9ea3ab;
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
