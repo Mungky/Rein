@@ -83,111 +83,113 @@
   }
 </script>
 
-<div class="settings">
+<div class="settings" class:profile={!userId}>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if !settings}
     {#if error}<Button onclick={load}>Coba lagi</Button>{:else}<p class="hint" role="status">
         Memuat pengaturan kontak…
       </p>{/if}
   {:else}
-    <div class="section-heading">
-      <h2>Kontak</h2>
-    </div>
-    <div class="group">
-      <div class="contact-row">
-        <Icon name="whatsapp" size={18} />
-        <div class="contact-copy">
-          <h3>WhatsApp</h3>
-          <p>{settings.whatsapp ?? 'Belum dihubungkan'}</p>
-        </div>
-        <span class="status" class:verified={settings.whatsappVerified}
-          >{#if settings.whatsappVerified}<Icon
-              name="check"
-              size={12}
-            />{/if}{settings.whatsappVerified ? 'Terverifikasi' : 'Belum terverifikasi'}</span
-        >
-        {#if !userId && !verification}<Button href={resolve('/verifikasi') + '?manage=1'}
-            >{settings.whatsappVerified
-              ? 'Ubah'
-              : settings.whatsapp
-                ? 'Verifikasi'
-                : 'Hubungkan'}</Button
-          >{/if}
+    <div class="contacts">
+      <div class="section-heading">
+        <h2>Kontak</h2>
       </div>
-      <div class="contact-row">
-        <Icon name="mail" size={18} />
-        <div class="contact-copy">
-          <h3>Email <span class="optional">Opsional</span></h3>
-          <p>{settings.email ?? 'Belum dihubungkan'}</p>
-        </div>
-        {#if settings.email}<span class="status" class:verified={settings.emailVerified}
-            >{#if settings.emailVerified}<Icon name="check" size={12} />{/if}{settings.emailVerified
-              ? 'Terverifikasi'
-              : 'Menunggu verifikasi'}</span
-          >{/if}
-        {#if !userId}<Button
-            aria-expanded={editingEmail}
-            aria-controls="email-editor"
-            disabled={busy}
-            onclick={() => {
-              editingEmail = !editingEmail;
-              email = settings?.email ?? '';
-            }}>{editingEmail ? 'Tutup' : settings.email ? 'Ubah' : 'Hubungkan'}</Button
-          >{/if}
-      </div>
-      {#if !userId && editingEmail}
-        <form class="editor" id="email-editor" onsubmit={saveEmail}>
-          <Input
-            label="Alamat email"
-            type="email"
-            bind:value={email}
-            autocomplete="email"
-            required
-            disabled={busy}
-          />
-          <p class="hint">Email baru perlu diverifikasi sebelum digunakan.</p>
-          <div class="actions">
-            <Button type="submit" variant="primary" loading={busy}
-              >Simpan email{settings.mailEnabled ? ' & kirim kode' : ''}</Button
-            >
+      <div class="group">
+        <div class="contact-row">
+          <Icon name="whatsapp" size={18} />
+          <div class="contact-copy">
+            <h3>WhatsApp</h3>
+            <p>{settings.whatsapp ?? 'Belum dihubungkan'}</p>
           </div>
-        </form>
-      {/if}
-      {#if !userId && settings.email && !settings.emailVerified && settings.mailEnabled}
-        <form class="editor" onsubmit={verify}>
-          <p class="hint">Masukkan kode yang dikirim ke {settings.email}.</p>
-          <Input
-            label="Kode verifikasi email"
-            bind:value={code}
-            inputmode="numeric"
-            maxlength={6}
-            minlength={6}
-            pattern={'[0-9]{6}'}
-            autocomplete="one-time-code"
-            required
-            disabled={busy}
-          />
-          <div class="actions">
-            <Button type="submit" variant="primary" loading={busy}>Verifikasi email</Button>
-            <Button
-              variant="ghost"
+          <span class="status" class:verified={settings.whatsappVerified}
+            >{#if settings.whatsappVerified}<Icon
+                name="check"
+                size={12}
+              />{/if}{settings.whatsappVerified ? 'Terverifikasi' : 'Belum terverifikasi'}</span
+          >
+          {#if !userId && !verification}<Button href={resolve('/verifikasi') + '?manage=1'}
+              >{settings.whatsappVerified
+                ? 'Ubah'
+                : settings.whatsapp
+                  ? 'Verifikasi'
+                  : 'Hubungkan'}</Button
+            >{/if}
+        </div>
+        <div class="contact-row">
+          <Icon name="mail" size={18} />
+          <div class="contact-copy">
+            <h3>Email <span class="optional">Opsional</span></h3>
+            <p>{settings.email ?? 'Belum dihubungkan'}</p>
+          </div>
+          {#if settings.email}<span class="status" class:verified={settings.emailVerified}
+              >{#if settings.emailVerified}<Icon
+                  name="check"
+                  size={12}
+                />{/if}{settings.emailVerified ? 'Terverifikasi' : 'Menunggu verifikasi'}</span
+            >{/if}
+          {#if !userId}<Button
+              aria-expanded={editingEmail}
+              aria-controls="email-editor"
               disabled={busy}
-              onclick={() =>
-                action(async () => {
-                  await api('/api/auth/verify-email/resend', { body: {} });
-                  toast('Kode verifikasi dikirim ulang');
-                })}>Kirim ulang kode</Button
-            >
-          </div>
-        </form>
-      {/if}
-      {#if !userId && settings.googleEnabled && settings.email && !settings.emailVerified}
-        <div class="editor">
-          <Button href={`${base}/auth/google/start`}>Verifikasi dengan Google</Button>
+              onclick={() => {
+                editingEmail = !editingEmail;
+                email = settings?.email ?? '';
+              }}>{editingEmail ? 'Tutup' : settings.email ? 'Ubah' : 'Hubungkan'}</Button
+            >{/if}
         </div>
-      {/if}
+        {#if !userId && editingEmail}
+          <form class="editor" id="email-editor" onsubmit={saveEmail}>
+            <Input
+              label="Alamat email"
+              type="email"
+              bind:value={email}
+              autocomplete="email"
+              required
+              disabled={busy}
+            />
+            <p class="hint">Email baru perlu diverifikasi sebelum digunakan.</p>
+            <div class="actions">
+              <Button type="submit" variant="primary" loading={busy}
+                >Simpan email{settings.mailEnabled ? ' & kirim kode' : ''}</Button
+              >
+            </div>
+          </form>
+        {/if}
+        {#if !userId && settings.email && !settings.emailVerified && settings.mailEnabled}
+          <form class="editor" onsubmit={verify}>
+            <p class="hint">Masukkan kode yang dikirim ke {settings.email}.</p>
+            <Input
+              label="Kode verifikasi email"
+              bind:value={code}
+              inputmode="numeric"
+              maxlength={6}
+              minlength={6}
+              pattern={'[0-9]{6}'}
+              autocomplete="one-time-code"
+              required
+              disabled={busy}
+            />
+            <div class="actions">
+              <Button type="submit" variant="primary" loading={busy}>Verifikasi email</Button>
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onclick={() =>
+                  action(async () => {
+                    await api('/api/auth/verify-email/resend', { body: {} });
+                    toast('Kode verifikasi dikirim ulang');
+                  })}>Kirim ulang kode</Button
+              >
+            </div>
+          </form>
+        {/if}
+        {#if !userId && settings.googleEnabled && settings.email && !settings.emailVerified}
+          <div class="editor">
+            <Button href={`${base}/auth/google/start`}>Verifikasi dengan Google</Button>
+          </div>
+        {/if}
+      </div>
     </div>
-
     <div class="notifications">
       <div class="section-heading">
         <h2>Notifikasi</h2>
@@ -340,6 +342,27 @@
   .error {
     color: var(--color-danger-default);
     margin-bottom: 12px;
+  }
+  @media (min-width: 1101px) {
+    .settings.profile {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 20px;
+      align-items: start;
+    }
+    .profile .notifications {
+      margin-top: 0;
+    }
+    .profile .error {
+      grid-column: 1 / -1;
+    }
+    .profile .contact-row {
+      padding: 12px;
+      gap: 8px;
+    }
+    .profile .channel-settings {
+      padding: 12px;
+    }
   }
   @media (max-width: 767px) {
     select {

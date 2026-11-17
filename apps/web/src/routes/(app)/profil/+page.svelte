@@ -396,6 +396,73 @@
     max-width: 360px;
     color: var(--color-text-secondary);
   }
+  @media (min-width: 1101px) {
+    .settings-layout {
+      flex-direction: column;
+    }
+    .settings-nav {
+      flex: none;
+      height: auto;
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 24px;
+      border-right: 0;
+      border-bottom: 1px solid var(--color-border-default);
+      background: var(--color-bg-surface);
+      z-index: 5;
+    }
+    .nav-label {
+      margin: 0;
+    }
+    .nav-items {
+      flex-direction: row;
+      gap: 4px;
+    }
+    .content {
+      width: 100%;
+      max-width: 1280px;
+      padding: 20px 24px 32px;
+      gap: 20px;
+    }
+    section {
+      scroll-margin-top: 72px;
+    }
+    #profil {
+      display: grid;
+      grid-template-columns: 1fr minmax(280px, 420px);
+      gap: 20px;
+      align-items: center;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--color-border-default);
+    }
+    .nickname {
+      grid-column: 2;
+      grid-row: 1;
+      padding: 0;
+      margin: 0;
+      border: 0;
+    }
+    .name-field {
+      max-width: none;
+    }
+    .up {
+      grid-column: 1 / -1;
+      margin-top: 0;
+    }
+    #keamanan .group {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .setting-row {
+      padding: 12px;
+    }
+    .setting-row + .setting-row {
+      border-top: 0;
+      border-left: 1px solid var(--color-border-default);
+    }
+  }
   @media (max-width: 1100px) {
     .settings-layout {
       flex-direction: column;
