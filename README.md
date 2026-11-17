@@ -1,10 +1,10 @@
 # REIN
 
 Aplikasi web internal PT Remula Inti Rekayasa untuk melacak project dari PO diterima sampai Selesai
-(punch list habis, serah terima, BAST). Hierarki: Project → Work Order → Logbook → Lampiran.
+(ditentukan manual oleh pengguna berizin). Hierarki: Project → Work Order → Logbook → Lampiran.
 
 Sumber kebenaran: [`PRD-REIN.md`](PRD-REIN.md), [`BUILD-KICKOFF.md`](BUILD-KICKOFF.md),
-[`design/rein-prototype.html`](design/rein-prototype.html), dan [`CLAUDE.md`](CLAUDE.md).
+[`design/rein-prototype.html`](design/rein-prototype.html), dan [`AGENTS.md`](AGENTS.md).
 
 ## Struktur
 
@@ -51,13 +51,20 @@ tautan aktivasi/verifikasi) dan `STORAGE_DRIVER=local` (`.data/storage`).
 
 ## Produksi (Coolify)
 
+Panduan lengkap: **[Self-host staff.remula.online](docs/SELFHOST-COOLIFY.md)**.
+Deployment ini memakai database baru. Aplikasi lama disimpan untuk rollback.
+Template environment: [infra/coolify.env.example](infra/coolify.env.example).
+
 ```bash
 docker build -t rein .                          # image non-root, API + SPA dalam satu proses
-docker compose -f infra/docker-compose.yml up -d # app + postgres 16 + OpenWA (tanpa port publik)
+# Isi environment produksi sebelum menjalankan Compose.
+docker compose --env-file .env -f infra/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker-compose.yml exec app node dist/seed-cli.js
 ```
 
 Migrasi berjalan otomatis saat app start. Health check: `/healthz` (DB ping) dan `/readyz`.
-Isi semua variabel `${…}` di Coolify; letakkan key GCS di `secrets/gcs-key.json` di server.
+Isi variabel di Coolify; `GCS_KEY_FILE` menunjuk file key GCS di host server. Domain diarahkan
+ke service `app` port internal `3000`; PostgreSQL dan OpenWA tetap privat.
 
 ## Role dan akses
 

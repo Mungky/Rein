@@ -1,8 +1,8 @@
 import { defineConfig } from 'tsup';
 
-/** Bundle server ke dist/index.js; paket workspace (@rein/*) ikut di-bundle, dependensi npm tidak. */
+/** Bundle server dan CLI seed; paket workspace (@rein/*) ikut di-bundle, dependensi npm tidak. */
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: { index: 'src/index.ts', 'seed-cli': 'src/db/seed-cli.ts' },
   format: ['esm'],
   platform: 'node',
   target: 'node22',

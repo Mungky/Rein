@@ -1,5 +1,9 @@
 # M1 — MVP Inti: rencana & keputusan
 
+> Catatan historis pembangunan. Perubahan produk terbaru mengikuti PRD revisi 1.5/1.6.
+> Hasil pengujian terkini ada di [QA perusahaan simulasi](QA-COMPANY-30.md);
+> persiapan produksi ada di [panduan Coolify](SELFHOST-COOLIFY.md).
+
 Acuan: PRD §12 (M1), dengan perubahan dari user per 16 Nov 2026.
 
 ## Keputusan
@@ -16,11 +20,11 @@ Acuan: PRD §12 (M1), dengan perubahan dari user per 16 Nov 2026.
 
 ## Langkah (commit per langkah)
 
-1. [ ] Shared: state machine WO & project, perhitungan progres (Actual & per kategori, PRD §8.4), schema Zod project/WO/logbook/bantuan.
-2. [ ] DB: `clients`, `projects`, `project_members`, `project_status_history`, `wo_types` (+seed), `work_orders`, `wo_references`, `wo_watchers`, `logbook_entries`, `progress_events`, `help_requests`, `notifications`, `notification_deliveries`, `user_settings`.
-3. [ ] API project: CRUD, anggota, status (Berjalan/Ditunda/Selesai), progres per kategori, syarat Selesai, lampiran project.
-4. [ ] API WO + logbook + Butuh bantuan + lampiran WO/logbook, pengikut, entri `system`.
-5. [ ] Notifikasi: outbox in-app + SSE, `WhatsAppProvider` (`OpenWAProvider`, `NullProvider`), worker pg-boss, webhook OpenWA, job 07:00.
+1. [x] Shared: state machine WO & project, perhitungan progres (Actual & per kategori, PRD §8.4), schema Zod project/WO/logbook/bantuan. — commit `208dcb8`
+2. [x] DB — commit `c79631b` (migrasi `0003`–`0005`; **belum diuji ke Postgres**: Docker Desktop macet saat sesi, WSL `docker-desktop` Stopped): `clients`, `projects`, `project_members`, `project_status_history`, `wo_types` (+seed), `work_orders`, `wo_references`, `wo_watchers`, `logbook_entries`, `progress_events`, `help_requests`, `notifications`, `notification_deliveries`, `user_settings`.
+3. [x] API project — commit `9523512` (`routes/projects.ts`, `auth/project-access.ts`, `notify/{outbox,bus}.ts`, lampiran per pemilik). **Belum ada test integrasi** (Docker mati) — tulis `test/projects.test.ts` saat DB tersedia.
+4. [x] API WO + logbook + Butuh bantuan + Beranda — commit `1f43a7e` (`routes/work-orders.ts`: `projectWoRoutes`, `woRoutes`, `homeRoutes`). Lampiran form Buat WO/logbook: unggah dulu sebagai milik user (staging) lalu `attachmentIds` dipindah saat create. **Belum ada test integrasi** (Docker mati).
+5. [ ] (sedang) pg-boss 12.38 terpasang — API: `new PgBoss(url)`, `start()`, `createQueue(n)`, `schedule(n, cron, data, {tz})`, `work(n, async (jobs[]) => …)`. Rencana file: `src/wa/provider.ts` (OpenWAProvider: cari sesi per nama via `GET /api/sessions`, kirim `POST /api/sessions/:id/messages/send-text {chatId:'62…@c.us', text, linkPreview:false}` + header `X-API-Key`, `Idempotency-Key`; QR `GET /api/sessions/:id/qr`; webhook `POST /api/sessions/:id/webhooks {url, events, secret}`), `src/notify/deliver.ts` (kirim delivery `queued` WA: cek kontak WA terverifikasi, jam tenang 21–07 WIB kecuali help.requested, batas 20/hari, retry 1/5/30 mnt), `src/notify/daily.ts` (07:00 WIB: wo.deadline_h1 & wo.overdue maks 3 hari), `src/jobs.ts`, `routes/notifications.ts` (inbox + SSE `/api/stream`), `routes/webhooks.ts` (`X-OpenWA-Signature` HMAC raw body). Outbox in-app + SSE, `WhatsAppProvider` (`OpenWAProvider`, `NullProvider`), worker pg-boss, webhook OpenWA, job 07:00.
 6. [ ] Verifikasi WA (dibalik), PIN + fast login, Admin: role & izin, jenis WO, sesi WhatsApp, salin tautan aktivasi.
 7. [ ] Web: daftar project (Table/Kanban), buat project, detail project (worklist Table/Kanban, bar kategori, panel), buat WO (+lampiran), detail WO + logbook (kompresi foto, thumbnail), Butuh bantuan, Beranda, Notifikasi.
 8. [ ] PWA app shell, E2E Playwright alur P1–P5, verifikasi budget & laporan.

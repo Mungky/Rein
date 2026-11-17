@@ -1,7 +1,7 @@
 # Produksi (Coolify): app REIN + postgres 16 + OpenWA (baileys). PRD §11, BUILD-KICKOFF §B.
 # Semua nilai ${...} diisi lewat environment/secret Coolify — tidak ada secret di file ini.
-# Domain & TLS (Let's Encrypt DNS-01) serta ipAllowList LAN/VPN diatur di Coolify/Traefik untuk `app`.
-name: rein
+# Domain, TLS, dan pembatasan akses kantor/VPN diatur di Coolify untuk service `app`.
+name: rein-v2
 
 services:
   app:
@@ -16,22 +16,25 @@ services:
       NODE_ENV: production
       PORT: '3000'
       TZ: Asia/Jakarta
-      APP_URL: ${APP_URL:-https://rein.remula.co.id}
+      APP_URL: ${APP_URL:-https://staff.remula.online}
       TRUST_PROXY: 'true'
       LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_URL: postgres://rein:${POSTGRES_PASSWORD}@postgres:5432/rein
       AUTH_PEPPER: ${AUTH_PEPPER:?isi AUTH_PEPPER}
+      # Jalankan sekali di terminal app: node dist/seed-cli.js, lalu kosongkan password seed.
+      SEED_ADMIN_NAME: ${SEED_ADMIN_NAME:-Admin REIN}
+      SEED_ADMIN_USERNAME: ${SEED_ADMIN_USERNAME:-admin}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
-      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-https://rein.remula.co.id/auth/google/callback}
-      # Email ditunda (docs/M1-RENCANA.md D1) — isi `gmail` setelah Gmail API siap.
-      MAIL_PROVIDER: ${MAIL_PROVIDER:-null}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-https://staff.remula.online/auth/google/callback}
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-gmail}
       GMAIL_SENDER: ${GMAIL_SENDER:-}
       GMAIL_SENDER_NAME: ${GMAIL_SENDER_NAME:-REIN}
       GMAIL_REFRESH_TOKEN: ${GMAIL_REFRESH_TOKEN:-}
       STORAGE_DRIVER: gcs
-      GCS_BUCKET: ${GCS_BUCKET:-rein-attachments}
-      GCS_BACKUP_BUCKET: ${GCS_BACKUP_BUCKET:-rein-backup}
+      GCS_BUCKET: ${GCS_BUCKET:?isi nama bucket GCS privat}
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcs-key.json
       WA_PROVIDER: openwa
       OPENWA_URL: http://openwa:2785
@@ -41,7 +44,12 @@ services:
       OPENWA_WEBHOOK_URL: http://app:3000/webhooks/openwa
       REIN_WA_NUMBER: ${REIN_WA_NUMBER:-}
     volumes:
-      - ../secrets/gcs-key.json:/run/secrets/gcs-key.json:ro
+      - type: bind
+        source: ${GCS_KEY_FILE:?isi path absolut key GCS di server}
+        target: /run/secrets/gcs-key.json
+        read_only: true
+        bind:
+          create_host_path: false
     expose:
       - '3000'
     networks: [rein]

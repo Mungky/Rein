@@ -3,8 +3,8 @@
 # Membuat database + role `openwa`, dan `rein_test` hanya jika CREATE_TEST_DB=true (dev).
 set -eu
 
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-SQL
-  CREATE ROLE openwa LOGIN PASSWORD '${OPENWA_DB_PASSWORD}';
+psql -v ON_ERROR_STOP=1 --set=openwa_password="$OPENWA_DB_PASSWORD" --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-'SQL'
+  CREATE ROLE openwa LOGIN PASSWORD :'openwa_password';
   CREATE DATABASE openwa OWNER openwa;
 SQL
 
