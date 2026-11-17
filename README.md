@@ -71,6 +71,10 @@ service `app` port internal `3000`; PostgreSQL dan OpenWA tetap privat.
 
 ## Role dan akses
 
+- **Admin → WhatsApp**: periksa koneksi, siapkan sesi, dan scan QR dari HP bot. Nomor pada
+  environment bukan pengganti pairing. Bot harus berstatus **Terhubung** sebelum pengguna
+  meminta OTP. Pengiriman gagal tidak menghabiskan kuota OTP harian.
+
 - **Admin → Pengguna → Akses & notifikasi**: atur kanal dan pengecualian izin khusus satu pengguna. Pilihan **Ikuti role** mewarisi izin role; **Tidak diizinkan** menolak izin untuk pengguna tersebut. Mengganti role tetap mempertahankan pengecualian pribadi sampai direset.
 - Email dan WhatsApp pada undangan opsional. Salin tautan aktivasi untuk dibagikan langsung; pengguna menghubungkan kontak dan memilih kanal melalui **Profil → Kontak & notifikasi** atau halaman verifikasi. Pengiriman hanya ke kontak terverifikasi; email tetap menunggu layanan Gmail aktif.
 - Role bawaan selain Admin dapat dihapus bila tidak dipakai pengguna, dan tidak dipulihkan otomatis saat startup/seed.

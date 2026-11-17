@@ -212,6 +212,9 @@
             {#if hasGlobal('admin.users')}<Button href={resolve('/admin/pengguna')} icon="users"
                 >Pengguna</Button
               >{/if}
+            {#if hasGlobal('admin.users')}<Button href={resolve('/admin/whatsapp')} icon="bell"
+                >WhatsApp</Button
+              >{/if}
             {#if hasGlobal('admin.roles')}<Button href={resolve('/admin/role')} icon="shield"
                 >Role & izin</Button
               >{/if}

@@ -37,6 +37,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      - name: Validasi init PostgreSQL dapat dijalankan ulang
+        run: |
+          docker cp infra/postgres/init/01-databases.sh ${{ job.services.postgres.id }}:/tmp/rein-init.sh
+          docker exec -e OPENWA_DB_PASSWORD=ci-only-openwa-db -e CREATE_TEST_DB=true ${{ job.services.postgres.id }} sh /tmp/rein-init.sh
+          docker exec -e OPENWA_DB_PASSWORD=ci-only-openwa-db -e CREATE_TEST_DB=true ${{ job.services.postgres.id }} sh /tmp/rein-init.sh
       - run: pnpm test
       - run: pnpm build
       - name: Performance budget (JS ≤ 100 KB gzip, CSS ≤ 20 KB)

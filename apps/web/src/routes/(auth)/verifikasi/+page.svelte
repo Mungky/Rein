@@ -21,8 +21,19 @@
   let error = $state<string | null>(null);
   let busy = $state(false);
   let now = $state(Date.now());
+  let retryAt = $state(0);
   const left = $derived(
-    issued ? Math.max(0, Math.ceil((Date.parse(issued.resendAt) - now) / 1000)) : 0,
+    Math.max(
+      0,
+      Math.ceil((Math.max(issued ? Date.parse(issued.resendAt) : 0, retryAt) - now) / 1000),
+    ),
+  );
+  const waitLabel = $derived(
+    left >= 3600
+      ? `${Math.ceil(left / 3600)} jam`
+      : left >= 60
+        ? `${Math.ceil(left / 60)} menit`
+        : `${left} dtk`,
   );
 
   onMount(() => {
@@ -42,6 +53,7 @@
 
   async function start(e?: SubmitEvent) {
     e?.preventDefault();
+    if (busy || left > 0) return;
     busy = true;
     error = null;
     try {
@@ -50,7 +62,14 @@
       code = '';
       now = Date.now();
     } catch (err) {
-      error = err instanceof ApiError ? err.message : 'Kode belum terkirim. Coba lagi.';
+      error =
+        err instanceof ApiError && err.code !== 'INTERNAL' && !err.code.startsWith('HTTP_')
+          ? err.message
+          : 'Kode belum terkirim. Hubungi Admin untuk memeriksa layanan WhatsApp.';
+      if (err instanceof ApiError && err.status === 429 && err.retryAfter > 0) {
+        now = Date.now();
+        retryAt = now + err.retryAfter * 1000;
+      }
     } finally {
       busy = false;
     }
@@ -112,7 +131,7 @@
   </form>
   <div class="secondary">
     <Button variant="ghost" disabled={busy || left > 0} onclick={() => start()}
-      >{left > 0 ? `Kirim ulang dalam ${left} dtk` : 'Kirim ulang kode'}</Button
+      >{left > 0 ? `Kirim ulang dalam ${waitLabel}` : 'Kirim ulang kode'}</Button
     >
     <Button
       variant="ghost"
@@ -137,7 +156,9 @@
       {error}
       disabled={busy}
     />
-    <Button type="submit" variant="primary" size="md" block loading={busy}>Kirim kode</Button>
+    <Button type="submit" variant="primary" size="md" block loading={busy} disabled={left > 0}
+      >{left > 0 ? `Kirim kode dalam ${waitLabel}` : 'Kirim kode'}</Button
+    >
   </form>
 {/if}
 

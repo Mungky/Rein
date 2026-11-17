@@ -24,6 +24,28 @@ export async function issueWhatsAppVerification(
 ) {
   const phone = normalizePhoneId(rawPhone);
   if (!phone) throw new HttpError(422, 'VALIDATION', 'Nomor WhatsApp tidak valid');
+  if (wa.name === 'null' && env.NODE_ENV === 'production') {
+    throw new HttpError(503, 'WA_DISABLED', 'Layanan WhatsApp belum diaktifkan. Hubungi Admin.');
+  }
+  if (wa.name === 'openwa') {
+    let status: string;
+    try {
+      status = (await wa.session()).status;
+    } catch {
+      throw new HttpError(
+        503,
+        'WA_UNAVAILABLE',
+        'Layanan WhatsApp belum dapat dihubungi. Hubungi Admin, lalu coba lagi.',
+      );
+    }
+    if (status !== 'ready') {
+      throw new HttpError(
+        503,
+        'WA_NOT_READY',
+        'Bot WhatsApp belum terhubung. Hubungi Admin untuk menghubungkan bot, lalu coba lagi.',
+      );
+    }
+  }
   return db.transaction(async (tx) => {
     // Serialisasi permintaan paralel, termasuk bila server berjalan di beberapa proses.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`wa-user:${userId}`}))`);
@@ -41,10 +63,33 @@ export async function issueWhatsAppVerification(
       )
       .orderBy(desc(verificationCodes.createdAt));
     if (recent[0] && Date.now() - recent[0].createdAt.getTime() < WA_RESEND_MS) {
-      throw new HttpError(429, 'RATE_LIMITED', 'Tunggu satu menit sebelum meminta kode baru.');
+      throw new HttpError(
+        429,
+        'RATE_LIMITED',
+        'Tunggu satu menit sebelum meminta kode baru.',
+        undefined,
+        {
+          'Retry-After': String(
+            Math.ceil((recent[0].createdAt.getTime() + WA_RESEND_MS - Date.now()) / 1000),
+          ),
+        },
+      );
     }
     if (recent.length >= 5)
-      throw new HttpError(429, 'RATE_LIMITED', 'Batas 5 kode per hari tercapai. Coba lagi besok.');
+      throw new HttpError(
+        429,
+        'RATE_LIMITED',
+        'Batas 5 kode per hari tercapai. Coba lagi besok.',
+        undefined,
+        {
+          'Retry-After': String(
+            Math.max(
+              1,
+              Math.ceil((recent[4]!.createdAt.getTime() + 24 * 60 * 60_000 - Date.now()) / 1000),
+            ),
+          ),
+        },
+      );
     const contacts = await tx
       .select()
       .from(userContacts)
@@ -84,8 +129,6 @@ export async function issueWhatsAppVerification(
       })
       .returning({ id: verificationCodes.id });
     try {
-      if (wa.name === 'openwa' && (await wa.session()).status !== 'ready')
-        throw new Error('not ready');
       await wa.sendText(
         phone,
         `Kode verifikasi REIN: ${code}\nBerlaku 10 menit. Jangan bagikan kode ini kepada siapa pun.`,

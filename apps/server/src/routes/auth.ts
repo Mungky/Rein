@@ -477,24 +477,26 @@ export const authRoutes = new Hono<AppEnv>()
     const { phone } = await readJson(c, whatsappStartSchema);
     const phoneKey = `phone:${phone}`;
     const userKey = `user:${a.user.id}`;
-    if (limits.waStart.blockedFor(phoneKey) || limits.waStart.blockedFor(userKey)) {
+    if (!limits.waStart.take(userKey) || !limits.waStart.take(phoneKey)) {
       throw new HttpError(
         429,
         'RATE_LIMITED',
-        'Batas permintaan kode untuk nomor ini tercapai (5 per 24 jam). Hubungi Admin.',
+        'Terlalu banyak percobaan. Tunggu satu menit, lalu coba lagi.',
+        undefined,
+        {
+          'Retry-After': String(
+            Math.max(
+              1,
+              Math.ceil(
+                Math.max(limits.waStart.blockedFor(userKey), limits.waStart.blockedFor(phoneKey)) /
+                  1000,
+              ),
+            ),
+          ),
+        },
       );
     }
-    const r = await issueWhatsAppVerification(db, env, wa, a.user.id, phone).catch(
-      (err: unknown) => {
-        if (err instanceof HttpError && err.code === 'WA_SEND_FAILED') {
-          limits.waStart.record(phoneKey);
-          limits.waStart.record(userKey);
-        }
-        throw err;
-      },
-    );
-    limits.waStart.record(phoneKey);
-    limits.waStart.record(userKey);
+    const r = await issueWhatsAppVerification(db, env, wa, a.user.id, phone);
     await audit(db, {
       actorId: a.user.id,
       action: 'contact.whatsapp_code_issued',

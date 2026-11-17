@@ -5,6 +5,7 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly fields: Record<string, string> = {},
+    public readonly retryAfter = 0,
   ) {
     super(message);
   }
@@ -40,11 +41,13 @@ export async function api<T>(
       window.dispatchEvent(new CustomEvent('rein:locked'));
     }
     const e = data?.error;
+    const retryAfter = Number(res.headers.get('retry-after'));
     throw new ApiError(
       res.status,
       e?.code ?? 'HTTP_' + res.status,
       e?.message ?? 'Terjadi kesalahan',
       e?.fields,
+      Number.isSafeInteger(retryAfter) && retryAfter > 0 ? retryAfter : 0,
     );
   }
   return data as T;
