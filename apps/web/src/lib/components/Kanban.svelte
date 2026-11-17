@@ -25,11 +25,18 @@
   let { rows, canDrag = () => true, onmove }: Props = $props();
 
   const COLS: WoStatus[] = ['backlog', 'todo', 'in_progress', 'review', 'done'];
-  const columns = $derived(COLS.map((s) => ({ status: s, items: rows.filter((r) => r.status === s) })));
-
-  let drag = $state<{ w: WoRow; x: number; y: number; dx: number; dy: number; width: number } | null>(
-    null,
+  const columns = $derived(
+    COLS.map((s) => ({ status: s, items: rows.filter((r) => r.status === s) })),
   );
+
+  let drag = $state<{
+    w: WoRow;
+    x: number;
+    y: number;
+    dx: number;
+    dy: number;
+    width: number;
+  } | null>(null);
   let over = $state<WoStatus | null>(null);
   let pending: {
     w: WoRow;
@@ -52,7 +59,14 @@
     if (e.button !== 0) return;
     const el = e.currentTarget as HTMLElement;
     moved = false;
-    pending = { w, el, x: e.clientX, y: e.clientY, id: e.pointerId, touch: e.pointerType === 'touch' };
+    pending = {
+      w,
+      el,
+      x: e.clientX,
+      y: e.clientY,
+      id: e.pointerId,
+      touch: e.pointerType === 'touch',
+    };
     if (pending.touch) {
       const p = pending;
       p.timer = setTimeout(() => {
@@ -125,7 +139,11 @@
       class:deny={drag && over === c.status && over !== drag.w.status && !canDrag(drag.w, c.status)}
       data-col={c.status}
     >
-      <div class="col-h"><StatusIcon status={c.status} />{WO_STATUS_LABEL[c.status]}<span class="n">{c.items.length}</span></div>
+      <div class="col-h">
+        <StatusIcon status={c.status} />{WO_STATUS_LABEL[c.status]}<span class="n"
+          >{c.items.length}</span
+        >
+      </div>
       {#each c.items as w (w.id)}
         <div
           class="kc"

@@ -15,7 +15,10 @@
 <div class="cats">
   <div class="bar" role="img" aria-label="Progres per kategori">
     {#each categories as c (c.category)}
-      <span style:flex-grow={Math.max(c.share, 0.02)} style:--c={`var(${WO_CATEGORY_META[c.category].token})`}>
+      <span
+        style:flex-grow={Math.max(c.share, 0.02)}
+        style:--c={`var(${WO_CATEGORY_META[c.category].token})`}
+      >
         <i style:width={ready ? `${c.progress}%` : '0%'}></i>
       </span>
     {/each}

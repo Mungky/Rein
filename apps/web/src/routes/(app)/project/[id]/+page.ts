@@ -7,9 +7,10 @@ export async function load({ params, depends }) {
   try {
     const [project, wl] = await Promise.all([
       api<ProjectDetail>(`/api/projects/${params.id}`),
-      api<{ workOrders: WoRow[]; actor: { userId: string; canEditAny: boolean; canEditOwn: boolean } }>(
-        `/api/projects/${params.id}/work-orders`,
-      ),
+      api<{
+        workOrders: WoRow[];
+        actor: { userId: string; canEditAny: boolean; canEditOwn: boolean };
+      }>(`/api/projects/${params.id}/work-orders`),
     ]);
     return { project, workOrders: wl.workOrders, actor: wl.actor };
   } catch (e) {

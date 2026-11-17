@@ -67,9 +67,12 @@
               <span class="no tnum">{w.numberLabel}</span>
               <b>{w.title}</b>
               {#if w.urgent}<span class="urg" title="Urgent">!</span>{/if}
-              {#if w.helpOpen}<span class="flag" title="Butuh bantuan"><Icon name="flag" size={12} /></span>{/if}
+              {#if w.helpOpen}<span class="flag" title="Butuh bantuan"
+                  ><Icon name="flag" size={12} /></span
+                >{/if}
             </span>
-            <span class="cell" role="cell"><Tag category={w.type.category}>{w.type.name}</Tag></span>
+            <span class="cell" role="cell"><Tag category={w.type.category}>{w.type.name}</Tag></span
+            >
             <span class="cell" role="cell">
               <Avatar name={w.assignee.fullName} src={w.assignee.avatarUrl} size={20} />
               <span class="ell">{w.assignee.fullName.split(' ')[0]}</span>

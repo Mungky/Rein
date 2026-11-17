@@ -11,6 +11,7 @@ type LiveEvent =
 
 export const live = $state({ unread: 0, connected: false });
 
+// eslint-disable-next-line svelte/prefer-svelte-reactivity -- Registry event internal, bukan state tampilan.
 const listeners = new Set<(e: LiveEvent) => void>();
 let source: EventSource | null = null;
 
