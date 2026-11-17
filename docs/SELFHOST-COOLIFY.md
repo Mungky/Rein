@@ -96,6 +96,26 @@ misalnya `https://hostname-sementara:3000`; URL pengguna tetap HTTPS port 443.
    memanggil OpenWA melalui API internal; dashboard/port OpenWA tidak perlu dibuka publik.
    Periksa status siap dan uji pengiriman OTP ke nomor karyawan.
 
+### Jika OpenWA gagal masuk database
+
+Error `password authentication failed for user "openwa"` dapat berarti password berbeda
+atau role belum dibuat. Perubahan environment tidak menjalankan ulang init pada volume yang
+sudah terisi. Di Terminal **container postgres**, jalankan skrip pemulihan yang idempoten:
+
+```sh
+sh /docker-entrypoint-initdb.d/01-databases.sh
+```
+
+Skrip memakai `OPENWA_DB_PASSWORD` container, membuat role/database OpenWA hanya bila belum
+ada, dan menyamakan password. Tabel/data REIN tidak dihapus. Pastikan environment password
+OpenWA memakai nilai yang sama, lalu restart service `openwa`. Jika skrip tidak ditemukan,
+aktifkan Preserve repository during deployment dan muat ulang/redeploy Compose terlebih dahulu.
+
+Di REIN buka **Admin → WhatsApp → Hubungkan WhatsApp**, lalu scan QR. Mengisi
+`REIN_WA_NUMBER` hanya memberi informasi nomor bot, tidak menghubungkan sesi. Setelah status
+**Terhubung**, barulah pengguna meminta OTP. Kegagalan layanan tidak menghabiskan kuota
+harian; percobaan berulang dibatasi 5/menit, sedangkan kode berhasil dikirim tetap 5/24 jam.
+
 Mengubah password PostgreSQL pada env **tidak** mengubah password role pada volume yang
 sudah terisi. Rotasi kredensial harus mengubah password database dan konfigurasi app/OpenWA
 bersama-sama; jangan menghapus volume sebagai cara memperbaikinya.
