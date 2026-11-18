@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { resolve } from '$app/paths';
+  import { asset, resolve } from '$app/paths';
   import { page } from '$app/state';
   import type { NavItem } from '$lib/nav';
   import Avatar from './Avatar.svelte';
@@ -41,7 +41,10 @@
 <svelte:window onpointerdown={closeAccount} onkeydown={onEscape} />
 
 <aside class="sidebar" aria-label="Navigasi">
-  <div class="ws"><span class="logo">R</span>REIN<span class="org">Remula</span></div>
+  <div class="ws">
+    <img class="logo" src={asset('/rein-icon-192.png')} alt="" width="24" height="24" />
+    REIN<span class="org">Remula</span>
+  </div>
   <button class="search" onclick={onpalette}>
     <Icon name="search" /><span>Cari atau perintah…</span><Kbd>Ctrl K</Kbd>
   </button>
@@ -171,15 +174,9 @@
     color: var(--color-text-tertiary);
   }
   .logo {
-    display: grid;
-    place-items: center;
-    width: 20px;
-    height: 20px;
+    display: block;
+    flex: none;
     border-radius: 5px;
-    background: var(--color-accent-default);
-    color: var(--color-text-on-accent);
-    font-size: 11px;
-    font-weight: 600;
   }
   .search {
     display: flex;

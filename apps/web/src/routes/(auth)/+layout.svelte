@@ -1,10 +1,15 @@
 <script lang="ts">
+  import { asset } from '$app/paths';
+
   /** Layout halaman auth (Figma D/01a–b, M/01a–b): kartu di tengah, logo di atas. */
   let { children } = $props();
 </script>
 
 <main class="auth">
-  <div class="brand"><span class="logo">R</span><b>REIN</b><span class="faint">Remula</span></div>
+  <div class="brand">
+    <img class="logo" src={asset('/rein-icon-192.png')} alt="" width="28" height="28" />
+    <b>REIN</b><span class="faint">Remula</span>
+  </div>
   <div class="card">{@render children()}</div>
   <p class="foot faint">PT Remula Inti Rekayasa · akses hanya dari jaringan kantor atau VPN</p>
 </main>
@@ -27,14 +32,8 @@
     font-size: 15px;
   }
   .logo {
-    display: grid;
-    place-items: center;
-    width: 28px;
-    height: 28px;
+    display: block;
     border-radius: 7px;
-    background: var(--color-accent-default);
-    color: var(--color-text-on-accent);
-    font-weight: 600;
   }
   .card {
     width: min(400px, 100%);
