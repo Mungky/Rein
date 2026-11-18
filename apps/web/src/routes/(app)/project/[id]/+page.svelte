@@ -15,7 +15,8 @@
   import { goto, invalidate } from '$app/navigation';
   import { resolve } from '$app/paths';
   import { api, ApiError } from '$lib/api';
-  import { fileUrl } from '$lib/attach';
+  import { fileUrl, isPreviewImage, thumbUrl, uploadPreparedFile } from '$lib/attach';
+  import PhotoLightbox from '$lib/components/PhotoLightbox.svelte';
   import { setChrome } from '$lib/chrome.svelte';
   import Avatar from '$lib/components/Avatar.svelte';
   import Button from '$lib/components/Button.svelte';
@@ -39,7 +40,6 @@
   import { onLive } from '$lib/live.svelte';
   import { toast } from '$lib/toast.svelte';
   import type { WoRow } from '$lib/types';
-  import { uploadAttachment } from '$lib/upload';
 
   /** Detail project (Figma D/04c–05, M/04–05; FR-021–026, FR-070–071). */
   let { data } = $props();
@@ -238,6 +238,8 @@
   interface PFile {
     id: string;
     fileName: string;
+    mime: string;
+    hasThumb: boolean;
     sizeBytes: number;
     category: string;
     createdAt: string;
@@ -260,14 +262,15 @@
   });
   let picker = $state<HTMLInputElement>();
   let uploadingFile = $state(false);
+  let uploadPercent = $state<number | null>(null);
+  let documentPhoto = $state<PFile | null>(null);
+  let photoOpen = $state(false);
   async function uploadProjectFile(file: File) {
     uploadingFile = true;
+    uploadPercent = null;
     try {
-      await uploadAttachment({
-        ownerType: 'project',
-        ownerId: p.id,
-        category: 'general',
-        file: { blob: file, name: file.name },
+      await uploadPreparedFile(file, { ownerType: 'project', ownerId: p.id }, (fraction) => {
+        uploadPercent = Math.round(fraction * 100);
       });
       toast('Dokumen diunggah');
       await loadFiles();
@@ -521,14 +524,23 @@
         <Button icon="upload" loading={uploadingFile} onclick={() => picker?.click()}>
           Unggah dokumen
         </Button>
+        {#if uploadingFile}<span role="status"
+            >{uploadPercent === null ? 'Menyiapkan dokumen…' : `Mengunggah ${uploadPercent}%`}</span
+          >{/if}
       </div>
     {/if}
     <ul class="list">
       {#each pfiles ?? [] as f (f.id)}
         <li>
-          <span class="fi"><Icon name="file" /></span>
-          <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- /files/* disajikan server -->
-          <a class="f" href={fileUrl(f.id)} target="_blank" rel="noopener">
+          {#if thumbUrl(f)}<img
+              class="fi"
+              src={thumbUrl(f)}
+              alt=""
+              loading="lazy"
+            />{:else}
+            <span class="fi"><Icon name="file" /></span>
+          {/if}
+          {#snippet fileLabel()}
             <b>{f.fileName}</b>
             <small>
               {f.ownerType === 'wo'
@@ -538,7 +550,26 @@
                   : 'Project'} · {f.uploadedBy} · {shortDate(f.createdAt)} ·
               {formatBytes(f.sizeBytes)}
             </small>
-          </a>
+          {/snippet}
+          {#if isPreviewImage(f.mime)}
+            <button
+              class="f"
+              type="button"
+              onclick={() => {
+                documentPhoto = f;
+                photoOpen = true;
+              }}>{@render fileLabel()}</button
+            >
+          {:else}
+            <a
+              class="f"
+              href={fileUrl(f.id)}
+              target={f.mime === 'application/pdf' ? '_blank' : undefined}
+              rel="external noopener"
+            >
+              {@render fileLabel()}
+            </a>
+          {/if}
           <div class="doc-links">
             {#if f.ownerType === 'wo'}{@const source = rows.find(
                 (r) => r.id === f.ownerId,
@@ -569,6 +600,8 @@
     </ul>
   </div>
 {/if}
+
+<PhotoLightbox bind:open={photoOpen} photo={documentPhoto} />
 
 <WoCreateModal
   bind:open={createOpen}
@@ -888,6 +921,7 @@
   }
   .list .f {
     display: flex;
+    text-align: start;
     flex-direction: column;
     gap: 4px;
     min-width: 0;
@@ -902,6 +936,7 @@
   }
   .fi {
     flex-shrink: 0;
+    object-fit: cover;
     display: grid;
     place-items: center;
     width: 32px;

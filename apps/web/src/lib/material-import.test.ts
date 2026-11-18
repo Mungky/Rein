@@ -99,6 +99,12 @@ describe('Pratinjau material Excel', () => {
     expect(p.rows).toEqual([]);
     expect(p.errors).toHaveLength(3);
     expect(p.errors[0]).toContain('baris 2');
+    expect(p.errors[0]).toContain('QTY “0” tidak valid');
+    const invalid = materialPreview([
+      { sheet: 'Lembar', data: [header, ['1', 'Baut', '', '', 'empat', 'Pcs']] },
+    ]);
+    expect(invalid.rows).toEqual([]);
+    expect(invalid.errors[0]).toContain('Lembar, baris 2: QTY “empat” tidak valid');
     expect(materialPreview([{ sheet: 'Kosong', data: [] }]).errors[0]).toContain('Header');
     expect(materialPreview([{ sheet: 'Kosong', data: [header] }]).errors[0]).toContain(
       'Tidak ada baris',

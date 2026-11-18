@@ -13,7 +13,7 @@
   import { invalidate } from '$app/navigation';
   import { resolve } from '$app/paths';
   import { api, ApiError } from '$lib/api';
-  import { fileUrl, thumbUrl, type Staged } from '$lib/attach';
+  import { fileUrl, isPreviewImage, thumbUrl, type Staged } from '$lib/attach';
   import { setChrome } from '$lib/chrome.svelte';
   import Avatar from '$lib/components/Avatar.svelte';
   import Button from '$lib/components/Button.svelte';
@@ -23,6 +23,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import Input from '$lib/components/Input.svelte';
   import Modal from '$lib/components/Modal.svelte';
+  import PhotoLightbox from '$lib/components/PhotoLightbox.svelte';
   import Progress from '$lib/components/Progress.svelte';
   import StagedFiles from '$lib/components/StagedFiles.svelte';
   import StatusIcon from '$lib/components/StatusIcon.svelte';
@@ -30,14 +31,16 @@
   import Toggle from '$lib/components/Toggle.svelte';
   import { formatBytes, shortDate, stamp } from '$lib/format';
   import { onLive } from '$lib/live.svelte';
+  import { logbookText } from '$lib/logbook-text';
   import { session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
-  import type { LogEntry, Member, WoType } from '$lib/types';
+  import type { FileItem, LogEntry, Member, WoType } from '$lib/types';
   import { woEditFields, woEditPatch } from '$lib/wo-edit';
 
   /** Detail WO + Logbook (Figma D/07a, M/07; FR-031–034, FR-040–042, FR-050–051). */
   let { data } = $props();
   const wo = $derived(data.wo);
+  const currentWoId = $derived(data.wo.id);
   let entries = $state<LogEntry[]>([]);
   let cursor = $state<string | null>(null);
   $effect(() => {
@@ -76,7 +79,23 @@
   let progress = $state<number | undefined>(undefined);
   let category = $state<LogbookCategory | ''>('');
   let postId = crypto.randomUUID();
+  let postError = $state('');
+  let retryPost = $state<ReturnType<typeof postPayload> | null>(null);
+  let photo = $state<FileItem | null>(null);
+  let photoOpen = $state(false);
   const uploading = $derived(files.some((f) => !f.id && !f.error));
+  const hasFiles = $derived(files.some((f) => f.id));
+
+  $effect(() => {
+    void currentWoId;
+    body = '';
+    files = [];
+    progress = undefined;
+    category = '';
+    retryPost = null;
+    postError = '';
+    postId = crypto.randomUUID();
+  });
 
   // ---------------------------------------------------------------- modals
   let reasonOpen = $state(false);
@@ -116,29 +135,42 @@
     toast(err instanceof ApiError ? err.message : 'Terjadi kesalahan', { tone: 'danger' });
   }
 
+  function postPayload() {
+    return {
+      clientId: postId,
+      body: body.trim(),
+      attachmentIds: files.filter((f) => f.id).map((f) => f.id!),
+      ...(progress !== undefined ? { progress, expectedUpdatedAt: wo.updatedAt } : {}),
+      ...(category ? { category } : {}),
+    };
+  }
+
   async function post() {
     if (posting || uploading) return;
-    if (!body.trim() && !files.some((f) => f.id) && progress === undefined) return;
+    if (!body.trim() && !hasFiles && progress === undefined) return;
+    const payload = retryPost ? $state.snapshot(retryPost) : postPayload();
+    const woId = wo.id;
+    postError = '';
     posting = true;
     try {
-      await api(`/api/work-orders/${wo.id}/logbook`, {
-        body: {
-          clientId: postId,
-          body: body.trim(),
-          attachmentIds: files.filter((f) => f.id).map((f) => f.id!),
-          ...(progress !== undefined ? { progress, expectedUpdatedAt: wo.updatedAt } : {}),
-          ...(category ? { category } : {}),
-        },
-      });
+      await api(`/api/work-orders/${woId}/logbook`, { body: payload });
+      if (wo.id !== woId) return;
+      retryPost = null;
       body = '';
+      for (const f of files) if (f.preview) URL.revokeObjectURL(f.preview);
       files = [];
       progress = undefined;
       category = '';
       postId = crypto.randomUUID();
       reasonFor = null;
-      await invalidate('app:wo');
+      void invalidate('app:wo');
     } catch (err) {
-      fail(err);
+      if (wo.id !== woId) return;
+      if (err instanceof ApiError) {
+        retryPost = err.status === 0 || err.status >= 500 ? payload : null;
+        postError = err.message;
+        if (err.code === 'STALE') void invalidate('app:wo');
+      } else postError = 'Pengiriman Logbook gagal. Coba lagi.';
     } finally {
       posting = false;
     }
@@ -375,25 +407,33 @@
           aria-label="Tulis logbook"
           placeholder="Tulis pekerjaan, kendala, atau catatan… (Ctrl+Enter untuk kirim)"
           bind:value={body}
+          readonly={posting || !!retryPost}
           {onkeydown}
           rows="3"></textarea>
         <div class="row">
-          {#if wo.can.upload}<StagedFiles {userId} bind:items={files} compact camera />{/if}
+          {#if wo.can.upload}<StagedFiles
+              {userId}
+              bind:items={files}
+              compact
+              camera
+              disabled={posting || !!retryPost}
+            />{/if}
           <span class="sp"></span>
           <Button
             variant="primary"
             onclick={post}
             loading={posting}
             disabled={uploading ||
-              (!body.trim() && !files.some((f) => f.id) && progress === undefined) ||
+              (!body.trim() && !hasFiles && progress === undefined) ||
               (progress !== undefined &&
-                (!Number.isInteger(progress) || progress < 0 || progress > 100))}>Kirim</Button
+                (!Number.isInteger(progress) || progress < 0 || progress > 100))}
+            >{retryPost ? 'Coba lagi' : 'Kirim'}</Button
           >
         </div>
         <div class="log-options">
           <label
             >Status catatan (opsional)
-            <select bind:value={category} disabled={posting}>
+            <select bind:value={category} disabled={posting || !!retryPost}>
               <option value="">Tanpa status</option>
               {#each Object.entries(LOGBOOK_CATEGORY_LABEL) as [value, label] (value)}<option
                   {value}>{label}</option
@@ -410,11 +450,12 @@
                 step="1"
                 placeholder={`Saat ini ${wo.progress}%`}
                 bind:value={progress}
-                disabled={posting}
+                disabled={posting || !!retryPost}
               />
             </label>
           {/if}
         </div>
+        {#if postError}<p role="alert">{postError}</p>{/if}
       </div>
     {/if}
 
@@ -435,7 +476,13 @@
                 <span class="pill">→ {WO_STATUS_LABEL[e.statusTo]}</span>
               {/if}
             </div>
-            {#if e.body}<p>{e.body}</p>{/if}
+            {#if e.body}<p>
+                {#each logbookText(e.body) as part, i (i)}{#if part.href}<a
+                      href={part.href}
+                      target="_blank"
+                      rel="external noopener noreferrer">{part.text}</a
+                    >{:else}{part.text}{/if}{/each}
+              </p>{/if}
             {#if e.attachments.length}{@render thumbs(e.attachments)}{/if}
           </div>
         </div>
@@ -542,29 +589,42 @@
   </aside>
 </div>
 
+{#snippet thumbContent(f: FileItem)}
+  {#if thumbUrl(f)}
+    <img src={thumbUrl(f)} alt="" width="112" height="84" loading="lazy" decoding="async" />
+  {:else}
+    <span class="im"><Icon name={isPreviewImage(f.mime) ? 'camera' : 'file'} size={20} /></span>
+  {/if}
+  <span class="tn">{f.fileName}<small>{formatBytes(f.sizeBytes)}</small></span>
+{/snippet}
+
 {#snippet thumbs(list: typeof wo.attachments)}
   <div class="thumbs">
     {#each list as f (f.id)}
-      <!-- eslint-disable svelte/no-navigation-without-resolve -- /files/* disajikan server, bukan route SPA -->
-      <a class="thumb" href={fileUrl(f.id)} target="_blank" rel="noopener">
-        {#if thumbUrl(f)}
-          <img
-            src={thumbUrl(f)}
-            alt={f.fileName}
-            width="112"
-            height="84"
-            loading="lazy"
-            decoding="async"
-          />
-        {:else}
-          <span class="im"><Icon name="file" size={20} /></span>
-        {/if}
-        <span class="tn">{f.fileName}<small>{formatBytes(f.sizeBytes)}</small></span>
-      </a>
-      <!-- eslint-enable svelte/no-navigation-without-resolve -->
+      {#if isPreviewImage(f.mime)}
+        <button
+          class="thumb"
+          type="button"
+          onclick={() => {
+            photo = f;
+            photoOpen = true;
+          }}>{@render thumbContent(f)}</button
+        >
+      {:else}
+        <a
+          class="thumb"
+          href={fileUrl(f.id)}
+          target={f.mime === 'application/pdf' ? '_blank' : undefined}
+          rel="external noopener"
+        >
+          {@render thumbContent(f)}
+        </a>
+      {/if}
     {/each}
   </div>
 {/snippet}
+
+<PhotoLightbox bind:open={photoOpen} {photo} />
 
 <Modal bind:open={reasonOpen} title="Alasan perubahan status" width={440}>
   <form id="reason-f" onsubmit={confirmReason}>
@@ -893,6 +953,7 @@
   }
   .thumb {
     width: 112px;
+    text-align: start;
     border: 1px solid var(--color-border-default);
     border-radius: var(--radius-md);
     overflow: hidden;

@@ -13,6 +13,7 @@ export default ts.config(
       '**/.svelte-kit/**',
       '**/coverage/**',
       '**/.lighthouseci/**',
+      '.data/**',
       'design/**',
     ],
   },

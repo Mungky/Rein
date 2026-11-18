@@ -1078,7 +1078,9 @@ export const woRoutes = new Hono<AppEnv>()
       return out;
     });
     publishToUsers(notified, { type: 'notification' });
-    publishToUsers(await watchersOf(db, wo.id), {
+    const watching = await watchersOf(db, wo.id);
+    if (body.resolve && open) watching.push(open.requestedBy);
+    publishToUsers(watching, {
       type: 'wo',
       woId: wo.id,
       projectId: wo.projectId,

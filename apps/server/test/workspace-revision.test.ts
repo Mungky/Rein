@@ -14,6 +14,7 @@ import {
   workOrderMaterials,
   woReferences,
 } from '../src/db/schema';
+import { subscribeUser, type BusEvent } from '../src/notify/bus';
 import { closeTestDb, createUser, hasDb, login, makeApp, testDb } from './helpers';
 
 afterAll(closeTestDb);
@@ -70,6 +71,52 @@ async function file(
   return id;
 }
 describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
+  it('menyegarkan Beranda peminta bantuan yang bukan PIC atau pengikut WO', async () => {
+    const f = await fixture();
+    const engineer = await createUser();
+    const { a: requester } = await login(f.app, engineer.username, engineer.password!);
+    await testDb().insert(projectMembers).values({
+      projectId: f.id,
+      userId: engineer.id,
+      projectRole: 'Engineer',
+      addedBy: f.manager.id,
+    });
+    const url = `/api/work-orders/${f.woId}`;
+    const before = await (await requester.get(url)).json();
+    expect(before.isWatching).toBe(false);
+    expect(before.assignee.id).not.toBe(engineer.id);
+    expect(
+      (
+        await requester.post(`${url}/help`, {
+          clientId: randomUUID(),
+          body: 'Butuh instruksi',
+          showFlag: true,
+        })
+      ).status,
+    ).toBe(201);
+    expect((await (await requester.get('/api/home')).json()).stats.help).toBe(1);
+    const live: BusEvent[] = [];
+    const unsubscribe = subscribeUser(engineer.id, (event) => live.push(event));
+    try {
+      expect(
+        (
+          await f.a.post(`${url}/help/reply`, {
+            clientId: randomUUID(),
+            body: 'Instruksi dibagikan',
+            resolve: true,
+          })
+        ).status,
+      ).toBe(201);
+      expect(live).toContainEqual({ type: 'notification' });
+      expect(live).toContainEqual({ type: 'wo', projectId: f.id, woId: f.woId });
+      expect(await (await requester.get('/api/home')).json()).toMatchObject({
+        stats: { help: 0 },
+        help: [],
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
   it('menolak edit WO yang basi pada field berbeda dan field yang sama', async () => {
     const f = await fixture();
     const engineer = await createUser();

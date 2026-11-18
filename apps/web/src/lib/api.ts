@@ -13,10 +13,13 @@ export class ApiError extends Error {
 
 export async function api<T>(
   path: string,
-  opts: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+  opts: { method?: string; body?: unknown; signal?: AbortSignal; account?: string } = {},
 ): Promise<T> {
   const method = opts.method ?? (opts.body === undefined ? 'GET' : 'POST');
+  const timeout = AbortSignal.timeout(15_000);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
   let res: Response;
+  let data: { error?: { code: string; message: string; fields?: Record<string, string> } } | null;
   try {
     res = await fetch(path, {
       method,
@@ -24,17 +27,21 @@ export async function api<T>(
       headers: {
         accept: 'application/json',
         'x-requested-with': 'rein',
+        ...(opts.account ? { 'x-rein-account': opts.account } : {}),
         ...(opts.body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       ...(opts.body === undefined ? {} : { body: JSON.stringify(opts.body) }),
-      ...(opts.signal ? { signal: opts.signal } : {}),
+      signal,
+    });
+    data = await res.json().catch((err: unknown) => {
+      if (signal.aborted) throw err;
+      return null;
     });
   } catch {
+    if (timeout.aborted)
+      throw new ApiError(0, 'TIMEOUT', 'Server belum merespons setelah 15 detik. Coba lagi.');
     throw new ApiError(0, 'NETWORK', 'Tidak dapat terhubung ke server. Periksa koneksi Anda.');
   }
-  const data = (await res.json().catch(() => null)) as {
-    error?: { code: string; message: string; fields?: Record<string, string> };
-  } | null;
   if (!res.ok) {
     // FR-004: sesi terkunci PIN → layout (app) menampilkan layar PIN.
     if (res.status === 423 && typeof window !== 'undefined') {

@@ -22,6 +22,19 @@ export interface UploadResult {
   duplicate?: boolean;
 }
 
+export function attachmentForm(input: UploadInput): FormData {
+  const fd = new FormData();
+  fd.append('ownerType', input.ownerType);
+  fd.append('ownerId', input.ownerId);
+  fd.append('category', input.category ?? 'general');
+  if (input.width) fd.append('width', String(input.width));
+  if (input.height) fd.append('height', String(input.height));
+  fd.append('file', input.file.blob, input.file.name);
+  if (input.display) fd.append('display', input.display.blob, input.display.name);
+  if (input.thumb) fd.append('thumb', input.thumb.blob, input.thumb.name);
+  return fd;
+}
+
 /**
  * Unggah lampiran (multipart) dengan progres. Ukuran dicek di klien sebelum upload
  * (PRD §7, 50 MB) dan dicek ulang di server.
@@ -32,16 +45,7 @@ export function uploadAttachment(input: UploadInput): Promise<UploadResult> {
       return Promise.reject(new ApiError(413, 'FILE_TOO_LARGE', `${f.name} melebihi 50 MB`));
     }
   }
-  const fd = new FormData();
-  // Field metadata harus dikirim sebelum file (server memvalidasi saat file pertama tiba).
-  fd.append('ownerType', input.ownerType);
-  fd.append('ownerId', input.ownerId);
-  fd.append('category', input.category ?? 'general');
-  if (input.width) fd.append('width', String(input.width));
-  if (input.height) fd.append('height', String(input.height));
-  fd.append('file', input.file.blob, input.file.name);
-  if (input.display) fd.append('display', input.display.blob, input.display.name);
-  if (input.thumb) fd.append('thumb', input.thumb.blob, input.thumb.name);
+  const fd = attachmentForm(input);
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();

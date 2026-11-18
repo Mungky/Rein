@@ -54,6 +54,13 @@ export function materialPreview(sheets: MaterialSheet[]): MaterialPreview {
       const rawQty = text(r[qty]).replace(',', '.');
       const combined = /^(\d+(?:\.\d+)?)(?:\s+(.+))?$/.exec(rawQty);
       const quantity = combined ? Number(combined[1]) : NaN;
+      const validQuantity = materialFieldsSchema.shape.quantity.safeParse(quantity);
+      if (!validQuantity.success) {
+        result.errors.push(
+          `${at}: QTY “${text(r[qty]) || '(kosong)'}” tidak valid. Isi angka positif dengan maksimal 3 desimal.`,
+        );
+        continue;
+      }
       const unitCell = text(r[unit >= 0 ? unit : qty + 1]);
       if (unitCell && combined?.[2] && unitCell.toLowerCase() !== combined[2].toLowerCase()) {
         result.errors.push(`${at}: satuan di QTY berbeda dari kolom satuan`);
