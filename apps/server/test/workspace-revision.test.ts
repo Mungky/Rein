@@ -11,6 +11,7 @@ import {
   woTypes,
   userPermissions,
   projectMaterials,
+  workOrderMaterials,
   woReferences,
 } from '../src/db/schema';
 import { closeTestDb, createUser, hasDb, login, makeApp, testDb } from './helpers';
@@ -298,7 +299,11 @@ describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
       addedBy: f.manager.id,
     });
     expect(
-      (await a.post(endpoint, { rows: [{ ...rows[0], clientId: randomUUID() }] })).status,
+      (
+        await a.post(endpoint, {
+          rows: [{ ...rows[0], description: 'Frame kedua', clientId: randomUUID() }],
+        })
+      ).status,
     ).toBe(201);
     await testDb()
       .insert(userPermissions)
@@ -317,6 +322,229 @@ describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
         where: eq(projectMaterials.id, item.id),
       }))!.status,
     ).toBe('in_stock');
+  });
+  it('Material duplikat manual, impor, dan dua request bersamaan dilewati tanpa menimpa jumlah atau catatan', async () => {
+    const f = await fixture();
+    const endpoint = `/api/projects/${f.id}/materials`;
+    const row = {
+      partNo: 'M-01',
+      description: 'Base plate',
+      material: 'AISI 304',
+      specification: '105 x 105',
+      quantity: 4,
+      unit: 'Pcs',
+      note: 'Catatan awal',
+    };
+    expect(
+      await (await f.a.post(endpoint, { rows: [{ ...row, clientId: randomUUID() }] })).json(),
+    ).toEqual({ inserted: 1, skipped: 0 });
+    const copy = {
+      ...row,
+      partNo: 'm-01',
+      description: '  BASE   plate ',
+      quantity: 99,
+      status: 'po',
+      note: 'Jangan menimpa catatan awal',
+    };
+    expect(
+      await (await f.a.post(endpoint, { rows: [{ ...copy, clientId: randomUUID() }] })).json(),
+    ).toEqual({ inserted: 0, skipped: 1 });
+    expect(
+      await (
+        await f.a.post(endpoint, {
+          rows: [
+            { ...copy, clientId: randomUUID() },
+            { ...row, partNo: 'M-02', clientId: randomUUID() },
+            { ...row, partNo: 'M-02', clientId: randomUUID() },
+          ],
+        })
+      ).json(),
+    ).toEqual({ inserted: 1, skipped: 2 });
+    const requests = await Promise.all(
+      [1, 2].map(() =>
+        f.a.post(endpoint, { rows: [{ ...row, partNo: 'M-03', clientId: randomUUID() }] }),
+      ),
+    );
+    expect(
+      (await Promise.all(requests.map((r) => r.json()))).map((r) => r.inserted).sort(),
+    ).toEqual([0, 1]);
+    const list = (await (await f.a.get(endpoint)).json()).materials;
+    expect(list).toHaveLength(3);
+    const original = list.find((r: { partNo: string }) => r.partNo === 'M-01');
+    expect(original).toMatchObject({ quantity: 4, note: 'Catatan awal', status: 'not_available' });
+    const { clientId: _id, ...values } = { ...row, clientId: randomUUID() };
+    expect(
+      (
+        await f.a.patch(
+          `${endpoint}/${list.find((r: { partNo: string }) => r.partNo === 'M-02').id}`,
+          {
+            ...values,
+            expectedUpdatedAt: list.find((r: { partNo: string }) => r.partNo === 'M-02').updatedAt,
+          },
+        )
+      ).status,
+    ).toBe(409);
+    const other = await f.createProject();
+    expect(
+      (
+        await f.a.post(`/api/projects/${other}/materials`, {
+          rows: [{ ...row, clientId: randomUUID() }],
+        })
+      ).status,
+    ).toBe(201);
+  });
+  it('Material dapat di-attach ke beberapa WO, lepas idempoten; sumber/WO lintas project ditolak', async () => {
+    const f = await fixture();
+    const endpoint = `/api/projects/${f.id}/materials`;
+    const materialId = randomUUID();
+    await f.a.post(endpoint, {
+      rows: [{ clientId: materialId, description: 'Frame', quantity: 4, unit: 'Btg' }],
+    });
+    const link = `${endpoint}/${materialId}/work-orders`;
+    expect((await f.a.post(link, { woId: f.woId })).status).toBe(200);
+    expect((await f.a.post(link, { woId: f.woId })).status).toBe(200);
+    expect(
+      (await (await f.a.get(`/api/work-orders/${f.woId}`)).json()).materials.map(
+        (r: { id: string }) => r.id,
+      ),
+    ).toEqual([materialId]);
+    const wo = await testDb().query.workOrders.findFirst({ where: eq(workOrders.id, f.woId) });
+    const wo2 = randomUUID();
+    await f.a.post(`/api/projects/${f.id}/work-orders`, {
+      clientId: wo2,
+      title: 'WO kedua',
+      typeId: wo!.typeId,
+      assigneeId: f.manager.id,
+      deadline: '2026-12-01',
+    });
+    await f.a.post(link, { woId: wo2 });
+    expect((await (await f.a.get(endpoint)).json()).materials[0].woLinks).toHaveLength(2);
+    expect(
+      await testDb()
+        .select()
+        .from(workOrderMaterials)
+        .where(eq(workOrderMaterials.materialId, materialId)),
+    ).toHaveLength(2);
+    const otherProject = await f.createProject();
+    const foreignWo = randomUUID();
+    await f.a.post(`/api/projects/${otherProject}/work-orders`, {
+      clientId: foreignWo,
+      title: 'WO project lain',
+      typeId: wo!.typeId,
+      assigneeId: f.manager.id,
+      deadline: '2026-12-01',
+    });
+    expect((await f.a.post(link, { woId: foreignWo })).status).toBe(404);
+    expect(
+      (
+        await f.a.post(`/api/projects/${otherProject}/materials/${materialId}/work-orders`, {
+          woId: foreignWo,
+        })
+      ).status,
+    ).toBe(404);
+    expect((await f.a.delete(link, { woId: f.woId })).status).toBe(200);
+    expect((await f.a.delete(link, { woId: f.woId })).status).toBe(200);
+    expect((await (await f.a.get(`/api/work-orders/${f.woId}`)).json()).materials).toEqual([]);
+    expect((await (await f.a.get(`/api/work-orders/${wo2}`)).json()).materials).toHaveLength(1);
+    await testDb().update(workOrders).set({ deletedAt: new Date() }).where(eq(workOrders.id, wo2));
+    expect((await (await f.a.get(endpoint)).json()).materials[0].woLinks).toEqual([]);
+    for (const action of ['material.linked', 'material.unlinked'])
+      expect(
+        await testDb().query.auditLogs.findFirst({
+          where: and(eq(auditLogs.entityId, f.id), eq(auditLogs.action, action)),
+        }),
+      ).toBeTruthy();
+  });
+  it('hapus material menjaga riwayat, menyembunyikan dari WO, bisa dibatalkan dan mencegah pemulihan duplikat', async () => {
+    const f = await fixture();
+    const endpoint = `/api/projects/${f.id}/materials`;
+    const row = { clientId: randomUUID(), description: 'Frame', quantity: 4, unit: 'Btg' };
+    await f.a.post(endpoint, { rows: [row] });
+    await f.a.post(`${endpoint}/${row.clientId}/work-orders`, { woId: f.woId });
+    const current = (await (await f.a.get(endpoint)).json()).materials[0];
+    expect(
+      (
+        await f.a.delete(`${endpoint}/${row.clientId}`, {
+          expectedUpdatedAt: '2000-01-01T00:00:00Z',
+        })
+      ).status,
+    ).toBe(409);
+    const removed = await f.a.delete(`${endpoint}/${row.clientId}`, {
+      expectedUpdatedAt: current.updatedAt,
+    });
+    expect(removed.status).toBe(200);
+    let removedVersion = (await removed.json()).updatedAt;
+    expect((await (await f.a.get(endpoint)).json()).materials).toEqual([]);
+    expect((await (await f.a.get(`/api/work-orders/${f.woId}`)).json()).materials).toEqual([]);
+    expect(
+      (await testDb().query.projectMaterials.findFirst({
+        where: eq(projectMaterials.id, row.clientId),
+      }))!.deletedAt,
+    ).toBeTruthy();
+    expect(
+      (await f.a.post(`${endpoint}/${row.clientId}/work-orders`, { woId: f.woId })).status,
+    ).toBe(404);
+    expect(
+      (
+        await f.a.patch(`${endpoint}/${row.clientId}`, {
+          ...row,
+          clientId: undefined,
+          expectedUpdatedAt: current.updatedAt,
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (await f.a.post(`${endpoint}/${row.clientId}/restore`, { expectedUpdatedAt: removedVersion }))
+        .status,
+    ).toBe(200);
+    expect((await (await f.a.get(`/api/work-orders/${f.woId}`)).json()).materials).toHaveLength(1);
+    const restored = (await (await f.a.get(endpoint)).json()).materials[0];
+    removedVersion = (
+      await (
+        await f.a.delete(`${endpoint}/${row.clientId}`, { expectedUpdatedAt: restored.updatedAt })
+      ).json()
+    ).updatedAt;
+    await f.a.post(endpoint, { rows: [{ ...row, clientId: randomUUID() }] });
+    expect(
+      (await f.a.post(`${endpoint}/${row.clientId}/restore`, { expectedUpdatedAt: removedVersion }))
+        .status,
+    ).toBe(409);
+    for (const action of ['material.deleted', 'material.restored'])
+      expect(
+        await testDb().query.auditLogs.findFirst({
+          where: and(eq(auditLogs.entityId, f.id), eq(auditLogs.action, action)),
+        }),
+      ).toBeTruthy();
+  });
+  it('izin Material berlaku untuk hapus, pulihkan, attach dan lepas', async () => {
+    const f = await fixture();
+    const materialId = randomUUID();
+    const endpoint = `/api/projects/${f.id}/materials/${materialId}`;
+    await f.a.post(`/api/projects/${f.id}/materials`, {
+      rows: [{ clientId: materialId, description: 'Plate', quantity: 2, unit: 'Lbr' }],
+    });
+    const viewer = await createUser();
+    const { a } = await login(f.app, viewer.username, viewer.password!);
+    expect((await a.delete(endpoint, { expectedUpdatedAt: new Date().toISOString() })).status).toBe(
+      404,
+    );
+    await testDb().insert(projectMembers).values({
+      projectId: f.id,
+      userId: viewer.id,
+      projectRole: 'Anggota',
+      addedBy: f.manager.id,
+    });
+    await testDb()
+      .insert(userPermissions)
+      .values({ userId: viewer.id, permissionKey: 'wo.create', scope: 'none' });
+    expect((await a.delete(endpoint, { expectedUpdatedAt: new Date().toISOString() })).status).toBe(
+      403,
+    );
+    expect(
+      (await a.post(`${endpoint}/restore`, { expectedUpdatedAt: new Date().toISOString() })).status,
+    ).toBe(403);
+    expect((await a.post(`${endpoint}/work-orders`, { woId: f.woId })).status).toBe(403);
+    expect((await a.delete(`${endpoint}/work-orders`, { woId: f.woId })).status).toBe(403);
   });
   it('Attach menghubungkan tanpa memindahkan/menduplikasi file; menolak sumber/WO lintas project dan izin unggah', async () => {
     const f = await fixture();

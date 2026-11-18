@@ -1,7 +1,7 @@
 # Revisi project — 18 November 2026
 
 Permintaan pengguna ini menggantikan pembatasan Logbook pada revisi sebelumnya.
-PRD revisi 1.8 menjadi sumber kebenaran. Draf `LOGBOOK-DIRECTION.md` tetap usulan.
+PRD revisi 1.9 menjadi sumber kebenaran. Draf `LOGBOOK-DIRECTION.md` tetap usulan.
 
 ## Perilaku
 
@@ -15,7 +15,7 @@ PRD revisi 1.8 menjadi sumber kebenaran. Draf `LOGBOOK-DIRECTION.md` tetap usula
   disimpan sebagian. Snapshot, progres WO, `progress_events` S-Curve, dan audit satu transaksi.
 - Material per project: Part No., Description, Material, Size or Specification, QTY
   positif (maksimal tiga desimal) + satuan, In stock/Not available/PO, tanggal diterima
-  opsional, dan Note. Dapat ditambah manual, diubah, dicari dan difilter. Mengelola
+  opsional, dan Note. Dapat ditambah manual, diubah, dihapus, dicari dan difilter. Mengelola
   mengikuti izin `wo.create` dan membaca mengikuti `project.view`; override server berlaku.
 - Impor `.xlsx` maksimal 10 MB / 500 item sekaligus. Parser dimuat saat diperlukan.
   Header Description dan QTY dikenali meski bukan baris pertama; sheet tanpa tabel
@@ -25,8 +25,19 @@ PRD revisi 1.8 menjadi sumber kebenaran. Draf `LOGBOOK-DIRECTION.md` tetap usula
   Status kosong menjadi Not available, kecuali kolom STOCK/PO menunjukkan ketersediaan.
   Tidak ada evaluasi rumus, pengambilan tautan eksternal, atau pembacaan kolom keuangan.
   Tabel hasil dan kesalahan bernomor baris ditampilkan sebelum simpan. Satu baris invalid
-  membatalkan seluruh impor. Pengulangan request dengan ID sama idempoten; memilih dan
-  mengimpor file lagi menambahkan baris baru, sesuai pemberitahuan pada pratinjau.
+  membatalkan seluruh impor. Pengulangan request dengan ID sama idempoten. Duplikat pada
+  input manual, edit, pemulihan, dalam satu file, maupun impor ulang dicegah server.
+  Identitas = Part No. + Description + Material + Spesifikasi + Satuan, huruf kecil dan
+  spasi dirapikan. Jumlah, status, tanggal dan note tidak membuat item baru. Impor melewati
+  duplikat, menampilkan hitungan sebelum simpan dan melaporkan hasil server; jumlah/note
+  lama tidak ditimpa atau dijumlah otomatis. Semua penulisan diserialkan dengan kunci
+  baris project. Duplikat lama dipertahankan agar riwayat tidak hilang; dapat dihapus manual.
+- Hapus Material memakai `deleted_at`, versi `expectedUpdatedAt`, audit, dan tombol
+  Batalkan pada notifikasi. Item terhapus tidak tampil di project maupun WO. Pemulihan
+  mengembalikan hubungan WO sebelumnya; ditolak jika sudah ada material aktif yang sama.
+- Attach Material menyimpan hubungan banyak-ke-banyak dengan WO dalam project yang sama,
+  dicek server dengan `wo.create`. Hubungan tampil pada tab Material dan detail WO,
+  dapat dilepas dari tab Material, dan tidak digandakan saat request diulang.
 - Tab Lampiran menjadi Dokumen. Kategori lama tidak lagi ditampilkan atau dipilih;
   file dan metadata lama dipertahankan. Attach membuat referensi ke WO dalam project
   yang sama dengan izin `attachment.upload`. File tetap di pemilik asal, dapat dirujuk
@@ -38,6 +49,8 @@ PRD revisi 1.8 menjadi sumber kebenaran. Draf `LOGBOOK-DIRECTION.md` tetap usula
 Migrasi `0008_project_materials.sql` hanya menambah tabel `project_materials` dan kolom
 nullable `logbook_entries.category`; tidak mengubah atau menghapus data lama. Produksi
 menjalankan migrasi saat startup seperti sebelumnya. Untuk dev: `pnpm db:migrate`.
+Migrasi `0009_material_links.sql` menambah `project_materials.deleted_at` dan tabel
+`work_order_materials`, tanpa menghapus atau menggabungkan material lama.
 
 Pengujian mencakup validasi, parser layout Platform, izin/override dan isolasi project,
 impor atomik/idempoten, benturan update progres, audit, progres S-Curve, serta referensi

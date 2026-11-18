@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     LOGBOOK_CATEGORY_LABEL,
+    MATERIAL_STATUS_LABEL,
     WO_STATUS_LABEL,
     woReasonRequired,
     type LogbookCategory,
@@ -53,7 +54,11 @@
   });
 
   const off = onLive((e) => {
-    if (e.type === 'wo' && e.woId === wo.id) void invalidate('app:wo');
+    if (
+      (e.type === 'wo' && e.woId === wo.id) ||
+      (e.type === 'project' && e.projectId === wo.project.id)
+    )
+      void invalidate('app:wo');
   });
   onDestroy(off);
 
@@ -301,6 +306,27 @@
       </div>
     {/if}
 
+    {#if wo.materials.length}
+      <div class="sec-h">
+        <Icon name="file" />
+        <h2>Material WO</h2>
+        <span class="faint">{wo.materials.length} item</span>
+      </div>
+      <ul class="wo-materials">
+        {#each wo.materials as material (material.id)}
+          <li>
+            <div>
+              <b>{material.partNo ? `${material.partNo} · ` : ''}{material.description}</b><small
+                >{material.material} · {material.specification}</small
+              >
+            </div>
+            <span>{material.quantity.toLocaleString('id-ID')} {material.unit}</span><span
+              class="faint">{MATERIAL_STATUS_LABEL[material.status]}</span
+            >
+          </li>
+        {/each}
+      </ul>
+    {/if}
     <div class="sep"></div>
     <div class="sec-h">
       <Icon name="logbook" />
@@ -594,6 +620,29 @@
 </Modal>
 
 <style>
+  .wo-materials {
+    list-style: none;
+    padding: 0;
+    margin: 12px 0;
+  }
+  .wo-materials li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--color-border-default);
+  }
+  .wo-materials li div {
+    flex: 1;
+    min-width: 160px;
+    overflow-wrap: anywhere;
+  }
+  .wo-materials small {
+    display: block;
+    margin-top: 4px;
+    color: var(--color-text-secondary);
+  }
   .log-options {
     display: flex;
     flex-wrap: wrap;

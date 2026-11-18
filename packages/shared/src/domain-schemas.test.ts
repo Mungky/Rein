@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { logbookCreateSchema, materialFieldsSchema, materialImportSchema } from './domain-schemas';
+import {
+  logbookCreateSchema,
+  materialFieldsSchema,
+  materialIdentity,
+  materialImportSchema,
+} from './domain-schemas';
 let sequence = 0;
 const randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
 
@@ -30,6 +35,26 @@ describe('Logbook revisi 1.8', () => {
 
 describe('Material', () => {
   const row = { description: 'Frame', quantity: 4, unit: 'Btg' };
+  it('identitas merapikan kapital/spasi dan mengabaikan jumlah/status/catatan', () => {
+    const original = materialFieldsSchema.parse({
+      ...row,
+      partNo: 'M-01',
+      material: 'AISI 304',
+      specification: '50 x 50',
+    });
+    expect(materialIdentity(original)).toBe(
+      materialIdentity({
+        ...original,
+        partNo: ' m-01 ',
+        description: 'FRAME',
+        material: 'aisi   304',
+      }),
+    );
+    expect(materialIdentity(original)).not.toBe(
+      materialIdentity({ ...original, specification: '60 x 60' }),
+    );
+    expect(materialIdentity(original)).not.toBe(materialIdentity({ ...original, unit: 'Pcs' }));
+  });
   it('QTY positif, maksimal tiga desimal dan status/tanggal tervalidasi', () => {
     expect(materialFieldsSchema.parse(row)).toMatchObject({
       quantity: 4,

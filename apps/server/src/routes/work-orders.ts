@@ -33,6 +33,8 @@ import {
   projectMembers,
   projects,
   progressEvents,
+  projectMaterials,
+  workOrderMaterials,
   users,
   woReferences,
   woTypes,
@@ -427,7 +429,20 @@ export const woRoutes = new Hono<AppEnv>()
     const actor = actorOf(a, wo, acc);
     const logbookExists = await hasLogbook(db, wo.id);
     const writeLogbook = canDo(a, 'logbook.create', acc.res);
+    const materials = await db
+      .select({ material: projectMaterials })
+      .from(workOrderMaterials)
+      .innerJoin(projectMaterials, eq(projectMaterials.id, workOrderMaterials.materialId))
+      .where(
+        and(
+          eq(workOrderMaterials.woId, wo.id),
+          eq(projectMaterials.projectId, wo.projectId),
+          isNull(projectMaterials.deletedAt),
+        ),
+      )
+      .orderBy(asc(projectMaterials.partNo), asc(projectMaterials.id));
     return c.json({
+      materials: materials.map((r) => r.material),
       ...shapeRow(row!, todayWib()),
       detail: wo.detailJson?.text ?? '',
       canceledReason: wo.canceledReason,

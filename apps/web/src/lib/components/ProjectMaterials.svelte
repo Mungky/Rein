@@ -2,22 +2,25 @@
   import {
     MATERIAL_STATUS_LABEL,
     materialFieldsSchema,
+    materialIdentity,
     type MaterialInput,
     type MaterialStatus,
   } from '@rein/shared';
   import { onDestroy } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
+  import { resolve } from '$app/paths';
   import { api, ApiError } from '$lib/api';
   import { shortDate } from '$lib/format';
   import { materialPreview, type MaterialPreview } from '$lib/material-import';
   import { onLive } from '$lib/live.svelte';
   import { toast } from '$lib/toast.svelte';
-  import type { MaterialRow } from '$lib/types';
+  import type { MaterialRow, WoRow } from '$lib/types';
   import Button from './Button.svelte';
   import Field from './Field.svelte';
   import Input from './Input.svelte';
   import Modal from './Modal.svelte';
 
-  let { projectId }: { projectId: string } = $props();
+  let { projectId, workOrders }: { projectId: string; workOrders: WoRow[] } = $props();
   let rows = $state<MaterialRow[]>([]);
   let canManage = $state(false);
   let loading = $state(true);
@@ -46,6 +49,22 @@
   let previewOpen = $state(false);
   let importRows = $state<Array<MaterialInput & { clientId: string }>>([]);
   let sourceName = $state('');
+  let deleteOpen = $state(false);
+  let deleteMaterial = $state<MaterialRow | null>(null);
+  let attachOpen = $state(false);
+  let attachMaterial = $state<MaterialRow | null>(null);
+  let attachWoId = $state('');
+  let actionError = $state('');
+  const importDuplicates = $derived.by(() => {
+    const identities = new SvelteSet(rows.map(materialIdentity));
+    let duplicates = 0;
+    for (const row of importRows) {
+      const identity = materialIdentity(row);
+      if (identities.has(identity)) duplicates++;
+      identities.add(identity);
+    }
+    return duplicates;
+  });
   const filtered = $derived(
     rows.filter(
       (r) =>
@@ -119,10 +138,19 @@
           method: 'PATCH',
           body: { ...parsed.data, expectedUpdatedAt: selected.updatedAt },
         });
-      else
-        await api(`/api/projects/${projectId}/materials`, {
-          body: { rows: [{ ...parsed.data, clientId: formId }] },
-        });
+      else {
+        const result = await api<{ inserted: number; skipped: number }>(
+          `/api/projects/${projectId}/materials`,
+          {
+            body: { rows: [{ ...parsed.data, clientId: formId }] },
+          },
+        );
+        if (result.skipped) {
+          error =
+            'Material yang sama sudah ada. Ubah item yang ada untuk memperbarui jumlah atau status.';
+          return;
+        }
+      }
       formOpen = false;
       toast('Material disimpan');
       await load();
@@ -157,12 +185,77 @@
     if (busy || !preview || preview.errors.length || !importRows.length) return;
     busy = true;
     try {
-      await api(`/api/projects/${projectId}/materials`, { body: { rows: importRows } });
+      const result = await api<{ inserted: number; skipped: number }>(
+        `/api/projects/${projectId}/materials`,
+        { body: { rows: importRows } },
+      );
       previewOpen = false;
-      toast(`${importRows.length} material diimpor`);
+      toast(
+        `${result.inserted} material ditambahkan${result.skipped ? ` · ${result.skipped} duplikat dilewati` : ''}`,
+      );
       await load();
     } catch (err) {
       toast(err instanceof ApiError ? err.message : 'Impor gagal', { tone: 'danger' });
+    } finally {
+      busy = false;
+    }
+  }
+  async function remove() {
+    if (!deleteMaterial || busy) return;
+    const row = deleteMaterial;
+    busy = true;
+    actionError = '';
+    try {
+      const deleted = await api<{ updatedAt: string }>(
+        `/api/projects/${projectId}/materials/${row.id}`,
+        { method: 'DELETE', body: { expectedUpdatedAt: row.updatedAt } },
+      );
+      deleteOpen = false;
+      toast('Material dihapus', {
+        duration: 10000,
+        link: {
+          label: 'Batalkan',
+          onclick: () => {
+            void restore(row.id, deleted.updatedAt);
+          },
+        },
+      });
+      await load();
+    } catch (err) {
+      actionError = err instanceof ApiError ? err.message : 'Material gagal dihapus';
+    } finally {
+      busy = false;
+    }
+  }
+  async function restore(id: string, expectedUpdatedAt: string) {
+    try {
+      await api(`/api/projects/${projectId}/materials/${id}/restore`, {
+        body: { expectedUpdatedAt },
+      });
+      toast('Material dipulihkan');
+      await load();
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Material gagal dipulihkan', {
+        tone: 'danger',
+      });
+    }
+  }
+  async function link(row: MaterialRow, woId: string, linking: boolean) {
+    if (busy || !woId) return;
+    busy = true;
+    actionError = '';
+    try {
+      await api(`/api/projects/${projectId}/materials/${row.id}/work-orders`, {
+        method: linking ? 'POST' : 'DELETE',
+        body: { woId },
+      });
+      attachOpen = false;
+      toast(linking ? 'Material dihubungkan ke WO' : 'Hubungan material ke WO dilepas');
+      await load();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Hubungan material gagal diubah';
+      actionError = message;
+      if (!linking) toast(message, { tone: 'danger' });
     } finally {
       busy = false;
     }
@@ -222,7 +315,9 @@
           ><tr
             ><th>Part No.</th><th>Description</th><th>Material</th><th>Size or Specification</th><th
               >QTY</th
-            ><th>Status</th><th>Diterima</th><th>Note</th>{#if canManage}<th>Aksi</th>{/if}</tr
+            ><th>Status</th><th>Diterima</th><th>Note</th><th>Work Order</th>{#if canManage}<th
+                >Aksi</th
+              >{/if}</tr
           ></thead
         >
         <tbody
@@ -232,16 +327,89 @@
                 >{row.quantity.toLocaleString('id-ID')} {row.unit}</td
               ><td><span class="badge">{MATERIAL_STATUS_LABEL[row.status]}</span></td><td
                 >{row.receivedAt ? shortDate(row.receivedAt) : '—'}</td
-              ><td>{row.note || '—'}</td>{#if canManage}<td
-                  ><Button size="sm" variant="ghost" onclick={() => edit(row)}>Ubah</Button></td
+              ><td>{row.note || '—'}</td><td
+                ><div class="wo-links">
+                  {#each row.woLinks as linked (linked.woId)}<span
+                      ><a href={resolve('/(app)/w/[id]', { id: linked.woId })} title={linked.title}
+                        >{linked.numberLabel}</a
+                      >{#if canManage}<button
+                          class="unlink"
+                          aria-label={`Lepas dari ${linked.numberLabel}`}
+                          title={`Lepas dari ${linked.numberLabel}`}
+                          disabled={busy}
+                          onclick={() => link(row, linked.woId, false)}>×</button
+                        >{/if}</span
+                    >{:else}—{/each}
+                </div></td
+              >{#if canManage}<td
+                  ><div class="row-actions">
+                    <Button size="sm" variant="ghost" disabled={busy} onclick={() => edit(row)}
+                      >Ubah</Button
+                    >
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy ||
+                        !workOrders.some((w) => !row.woLinks.some((l) => l.woId === w.id))}
+                      onclick={() => {
+                        attachMaterial = row;
+                        attachWoId = '';
+                        actionError = '';
+                        attachOpen = true;
+                      }}>Attach</Button
+                    >
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onclick={() => {
+                        deleteMaterial = row;
+                        actionError = '';
+                        deleteOpen = true;
+                      }}>Hapus</Button
+                    >
+                  </div></td
                 >{/if}</tr
-            >{:else}<tr><td colspan={canManage ? 9 : 8}>Tidak ada material yang cocok.</td></tr
+            >{:else}<tr><td colspan={canManage ? 10 : 9}>Tidak ada material yang cocok.</td></tr
             >{/each}</tbody
         >
       </table>
     </div>
   {/if}
 </section>
+
+<Modal bind:open={deleteOpen} title="Hapus material?" width={440}>
+  <p>
+    <b>{deleteMaterial?.description}</b> akan dihapus dari daftar project dan WO terkait. Anda dapat membatalkannya
+    melalui notifikasi setelah menghapus.
+  </p>
+  {#if actionError}<p role="alert" class="error">{actionError}</p>{/if}
+  {#snippet footer()}<Button disabled={busy} onclick={() => (deleteOpen = false)}>Batal</Button
+    ><Button variant="primary" loading={busy} onclick={remove}>Hapus material</Button>{/snippet}
+</Modal>
+
+<Modal bind:open={attachOpen} title="Attach material ke Work Order" width={500}>
+  <p>{attachMaterial?.partNo} · {attachMaterial?.description}</p>
+  <Field label="Work Order" id="material-wo"
+    ><select id="material-wo" bind:value={attachWoId} disabled={busy}
+      ><option value="">Pilih WO di project ini</option
+      >{#each workOrders.filter((w) => !attachMaterial?.woLinks.some((l) => l.woId === w.id)) as wo (wo.id)}<option
+          value={wo.id}>{wo.numberLabel} — {wo.title}</option
+        >{/each}</select
+    ></Field
+  >
+  <p class="muted">Material tetap di project dan dapat dihubungkan ke beberapa WO.</p>
+  {#if actionError}<p role="alert" class="error">{actionError}</p>{/if}
+  {#snippet footer()}<Button disabled={busy} onclick={() => (attachOpen = false)}>Batal</Button
+    ><Button
+      variant="primary"
+      disabled={!attachWoId}
+      loading={busy}
+      onclick={() => {
+        if (attachMaterial) void link(attachMaterial, attachWoId, true);
+      }}>Attach</Button
+    >{/snippet}
+</Modal>
 
 <Modal bind:open={formOpen} title={selected ? 'Ubah material' : 'Tambah material'} width={640}>
   <form id="material-form" onsubmit={save} class="form">
@@ -289,8 +457,9 @@
   {#if preview}
     <p>{sourceName} · {preview.rows.length} material · {preview.sheets.join(', ')}</p>
     <p class="muted">
-      Impor menambahkan baris baru. Material yang sudah ada tetap tersimpan. Periksa daftar sebelum
-      mengimpor ulang file yang sama.
+      {importRows.length - importDuplicates} material baru · {importDuplicates} duplikat akan dilewati.
+      Duplikat diperiksa dari Part No., Description, Material, Spesifikasi, dan Satuan; jumlah/status
+      tidak membuat item baru.
     </p>
     {#if preview.errors.length}<div class="error" role="alert">
         <b>Perbaiki file sebelum mengimpor:</b>
@@ -323,12 +492,36 @@
     ><Button
       variant="primary"
       loading={busy}
-      disabled={!preview || !!preview.errors.length || !preview.rows.length}
-      onclick={importMaterials}>Impor {preview?.rows.length ?? 0} material</Button
+      disabled={!preview ||
+        !!preview.errors.length ||
+        !preview.rows.length ||
+        importDuplicates === importRows.length}
+      onclick={importMaterials}>Impor {importRows.length - importDuplicates} material baru</Button
     >{/snippet}
 </Modal>
 
 <style>
+  .row-actions,
+  .wo-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .row-actions {
+    min-width: 155px;
+  }
+  .wo-links span {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    padding-left: 6px;
+  }
+  .unlink {
+    padding: 4px 8px;
+    color: var(--color-text-secondary);
+  }
   .materials {
     padding: 24px 32px;
   }

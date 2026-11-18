@@ -16,6 +16,8 @@
 ## 1. Ringkasan, tujuan, non-goals
 
 ### 1.1 Ringkasan
+> **Revisi 1.9 (18 Nov 2026, permintaan pengguna):** Material dapat dihapus (soft delete, dengan aksi Batalkan), serta dihubungkan/dilepas ke beberapa WO dalam project yang sama. Material terhubung ditampilkan pada detail WO. Izin pengelolaan tetap `wo.create`. Input manual, impor, edit, dan pemulihan mencegah duplikat berdasarkan kombinasi Part No., Description, Material, Spesifikasi, dan Satuan yang dinormalisasi (huruf kecil, spasi dirapikan); jumlah/status/tanggal/note bukan identitas baru. Impor melewati duplikat dan melaporkan jumlahnya. Duplikat lama tidak digabung atau dihapus otomatis agar catatan dan hubungan tidak hilang. Perubahan bersamaan diserialkan per project. Revisi ini menggantikan perilaku impor ulang yang menambahkan baris pada revisi 1.8.
+
 REIN melacak setiap project fabrikasi (mixing tank, storage tank, reaktor, panel, line otomasi) mulai **PO diterima** sampai **Selesai**. Status Selesai ditentukan manual oleh pengguna yang memiliki izin `project.close`; tidak mensyaratkan punch list habis, tanggal serah terima, ataupun lampiran BAST.
 
 Pelunasan terjadi setelah itu dan **berada di luar REIN**.

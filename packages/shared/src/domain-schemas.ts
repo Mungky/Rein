@@ -161,6 +161,15 @@ const materialFields = {
 };
 export const materialFieldsSchema = z.object(materialFields).strict();
 export type MaterialInput = z.infer<typeof materialFieldsSchema>;
+export function materialIdentity(
+  row: Pick<MaterialInput, 'partNo' | 'description' | 'material' | 'specification' | 'unit'>,
+): string {
+  return JSON.stringify(
+    [row.partNo, row.description, row.material, row.specification, row.unit].map((v) =>
+      v.trim().toLowerCase().replace(/\s+/g, ' '),
+    ),
+  );
+}
 export const materialCreateSchema = z.object({ clientId: z.uuid(), ...materialFields }).strict();
 export const materialImportSchema = z
   .object({ rows: z.array(materialCreateSchema).min(1).max(500) })
@@ -172,6 +181,8 @@ export const materialImportSchema = z
 export const materialUpdateSchema = z
   .object({ ...materialFields, expectedUpdatedAt: z.iso.datetime({ offset: true }) })
   .strict();
+export const materialDeleteSchema = materialUpdateSchema.pick({ expectedUpdatedAt: true });
+export const materialLinkSchema = z.object({ woId: z.uuid() }).strict();
 
 export const helpRequestSchema = z.object({
   clientId: z.uuid(),

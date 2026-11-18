@@ -501,6 +501,7 @@ export const projectMaterials = pgTable(
       .notNull()
       .references(() => users.id),
     creationHash: text('creation_hash').notNull(),
+    deletedAt: tz('deleted_at'),
     ...timestamps,
   },
   (t) => [
@@ -510,6 +511,23 @@ export const projectMaterials = pgTable(
       'project_materials_status_check',
       sql`${t.status} in ('in_stock', 'not_available', 'po')`,
     ),
+  ],
+);
+
+export const workOrderMaterials = pgTable(
+  'work_order_materials',
+  {
+    woId: uuid('wo_id')
+      .notNull()
+      .references(() => workOrders.id),
+    materialId: uuid('material_id')
+      .notNull()
+      .references(() => projectMaterials.id),
+    ...timestamps,
+  },
+  (t) => [
+    primaryKey({ columns: [t.woId, t.materialId] }),
+    index('work_order_materials_material_idx').on(t.materialId),
   ],
 );
 

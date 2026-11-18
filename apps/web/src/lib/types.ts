@@ -108,6 +108,7 @@ export interface FileItem {
 }
 
 export interface WoDetail extends WoRow {
+  materials: Array<MaterialInput & { id: string }>;
   statusHint: string | null;
   detail: string;
   canceledReason: string | null;
@@ -157,6 +158,7 @@ export interface LogEntry {
 export interface MaterialRow extends MaterialInput {
   id: string;
   updatedAt: string;
+  woLinks: Array<{ woId: string; numberLabel: string; title: string }>;
 }
 
 export interface HomeData {

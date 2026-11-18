@@ -476,7 +476,7 @@
       </aside>{/if}
   </div>
 {:else if tab === 'materials'}
-  {#key p.id}<ProjectMaterials projectId={p.id} />{/key}
+  {#key p.id}<ProjectMaterials projectId={p.id} workOrders={rows} />{/key}
 {:else if tab === 'members'}
   <div class="pane">
     {#if p.can.manageMembers}
