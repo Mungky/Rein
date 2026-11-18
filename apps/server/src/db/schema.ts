@@ -14,6 +14,8 @@ import {
   VERIFICATION_PURPOSES,
   WO_CATEGORIES,
   WO_STATUSES,
+  type LogbookCategory,
+  type MaterialStatus,
 } from '@rein/shared';
 import {
   type AnyPgColumn,
@@ -459,6 +461,7 @@ export const logbookEntries = pgTable(
       .references(() => users.id),
     kind: logbookKind('kind').notNull().default('note'),
     body: text('body').notNull().default(''),
+    category: text('category').$type<LogbookCategory>(),
     progressFrom: smallint('progress_from'),
     progressTo: smallint('progress_to'),
     statusFrom: woStatus('status_from'),
@@ -475,6 +478,38 @@ export const logbookEntries = pgTable(
     index('logbook_wo_created_idx').on(t.woId, t.createdAt.desc()),
     uniqueIndex('logbook_author_client_uuid_unique').on(t.authorId, t.clientUuid),
     check('logbook_body_len', sql`char_length(${t.body}) <= 5000`),
+  ],
+);
+
+export const projectMaterials = pgTable(
+  'project_materials',
+  {
+    id: uuid('id').primaryKey(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id),
+    partNo: text('part_no').notNull().default(''),
+    description: text('description').notNull(),
+    material: text('material').notNull().default(''),
+    specification: text('specification').notNull().default(''),
+    quantity: numeric('quantity', { precision: 12, scale: 3, mode: 'number' }).notNull(),
+    unit: text('unit').notNull(),
+    status: text('status').$type<MaterialStatus>().notNull().default('not_available'),
+    receivedAt: date('received_at'),
+    note: text('note').notNull().default(''),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id),
+    creationHash: text('creation_hash').notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index('project_materials_project_idx').on(t.projectId, t.createdAt),
+    check('project_materials_quantity_check', sql`${t.quantity} > 0`),
+    check(
+      'project_materials_status_check',
+      sql`${t.status} in ('in_stock', 'not_available', 'po')`,
+    ),
   ],
 );
 

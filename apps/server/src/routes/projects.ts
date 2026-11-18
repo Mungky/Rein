@@ -26,6 +26,7 @@ import {
   canDo,
   loadProjectAccess,
   projectCapabilities,
+  resolveOwner,
   type ProjectAccess,
 } from '../auth/project-access';
 import type { AppEnv, AuthContext, Deps } from '../context';
@@ -41,6 +42,7 @@ import {
   workOrders,
   logbookEntries,
   progressEvents,
+  woReferences,
 } from '../db/schema';
 import { HttpError, notFound, readJson, validate } from '../lib/http';
 import { userAgent } from '../lib/ip';
@@ -694,7 +696,93 @@ export const projectRoutes = new Hono<AppEnv>()
         ),
       )
       .orderBy(desc(attachments.createdAt));
-    return c.json({ attachments: rows });
+    const links = await db
+      .select({
+        attachmentId: woReferences.attachmentId,
+        woId: workOrders.id,
+        numberLabel: workOrders.numberLabel,
+        title: workOrders.title,
+      })
+      .from(woReferences)
+      .innerJoin(workOrders, eq(workOrders.id, woReferences.woId))
+      .where(
+        and(
+          eq(woReferences.kind, 'attachment'),
+          eq(workOrders.projectId, acc.project.id),
+          isNull(workOrders.deletedAt),
+        ),
+      );
+    return c.json({
+      attachments: rows.map((f) => ({
+        ...f,
+        woLinks: links.filter((l) => l.attachmentId === f.id),
+      })),
+    });
+  })
+  .post('/:id/attachments/:attachmentId/link', async (c) => {
+    const a = authOf(c);
+    const { db } = c.var.deps;
+    const acc = await loadProjectAccess(db, a, c.req.param('id'));
+    assertCan(a, 'attachment.upload', acc.res);
+    const body = await readJson(c, z.object({ woId: z.uuid() }).strict());
+    const attachmentId = validate(z.uuid(), c.req.param('attachmentId'));
+    const result = await db.transaction(async (tx) => {
+      // Serialize attachment links while preserving the file's original owner.
+      const [file] = await tx
+        .select()
+        .from(attachments)
+        .where(and(eq(attachments.id, attachmentId), isNull(attachments.deletedAt)))
+        .for('update');
+      if (!file || !['project', 'wo', 'logbook'].includes(file.ownerType))
+        throw notFound('Dokumen tidak ditemukan');
+      const owner = await resolveOwner(
+        tx,
+        file.ownerType as 'project' | 'wo' | 'logbook',
+        file.ownerId,
+      );
+      if (owner?.projectId !== acc.project.id) throw notFound('Dokumen tidak ditemukan');
+      const [wo] = await tx
+        .select()
+        .from(workOrders)
+        .where(
+          and(
+            eq(workOrders.id, body.woId),
+            eq(workOrders.projectId, acc.project.id),
+            isNull(workOrders.deletedAt),
+          ),
+        );
+      if (!wo) throw notFound('WO tidak ditemukan di project ini');
+      const existing = await tx.query.woReferences.findFirst({
+        where: and(
+          eq(woReferences.woId, wo.id),
+          eq(woReferences.attachmentId, file.id),
+          eq(woReferences.kind, 'attachment'),
+        ),
+      });
+      if (existing || (file.ownerType === 'wo' && file.ownerId === wo.id)) return { linked: true };
+      await tx
+        .insert(woReferences)
+        .values({ woId: wo.id, attachmentId: file.id, kind: 'attachment', label: file.fileName });
+      await audit(tx, {
+        actorId: a.user.id,
+        action: 'attachment.linked',
+        entityType: 'project',
+        entityId: acc.project.id,
+        diff: { attachmentId: file.id, woId: wo.id },
+        ip: c.var.ip,
+        userAgent: userAgent(c),
+      });
+      return { linked: true };
+    });
+    const members = await db
+      .select({ id: projectMembers.userId })
+      .from(projectMembers)
+      .where(eq(projectMembers.projectId, acc.project.id));
+    publishToUsers(
+      members.map((m) => m.id),
+      { type: 'wo', woId: body.woId, projectId: acc.project.id },
+    );
+    return c.json(result);
   });
 
 /** Direktori ringkas untuk pemilih anggota & PIC, autocomplete klien, dan jenis WO aktif. */

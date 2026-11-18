@@ -57,6 +57,13 @@
       "when": 1794835656391,
       "tag": "0007_onboarding_whatsapp",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794983624548,
+      "tag": "0008_project_materials",
+      "breakpoints": true
     }
   ]
 }

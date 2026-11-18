@@ -7,7 +7,6 @@
     WO_CATEGORY_META,
     WO_STATUS_LABEL,
     woReasonRequired,
-    type AttachmentCategory,
     type ProjectStatus,
     type WoCategory,
     type WoStatus,
@@ -29,6 +28,7 @@
   import Modal from '$lib/components/Modal.svelte';
   import Progress from '$lib/components/Progress.svelte';
   import ProjectMediaModal from '$lib/components/ProjectMediaModal.svelte';
+  import ProjectMaterials from '$lib/components/ProjectMaterials.svelte';
   import Segmented from '$lib/components/Segmented.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
   import WoCreateModal from '$lib/components/WoCreateModal.svelte';
@@ -84,7 +84,7 @@
       // abaikan
     }
   });
-  let tab = $state<'worklist' | 'members' | 'files'>('worklist');
+  let tab = $state<'worklist' | 'members' | 'files' | 'materials'>('worklist');
   let cat = $state<WoCategory | ''>('');
   let onlyUrgent = $state(false);
   let pic = $state('');
@@ -244,6 +244,7 @@
     uploadedBy: string;
     ownerType: 'project' | 'wo' | 'logbook';
     ownerId: string;
+    woLinks: Array<{ woId: string; numberLabel: string; title: string }>;
   }
   let pfiles = $state<PFile[] | null>(null);
   async function loadFiles() {
@@ -251,13 +252,12 @@
       pfiles = (await api<{ attachments: PFile[] }>(`/api/projects/${p.id}/attachments`))
         .attachments;
     } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Lampiran gagal dimuat', { tone: 'danger' });
+      toast(err instanceof ApiError ? err.message : 'Dokumen gagal dimuat', { tone: 'danger' });
     }
   }
   $effect(() => {
     if (tab === 'files' && p.updatedAt) void loadFiles();
   });
-  let upCat = $state<AttachmentCategory>('general');
   let picker = $state<HTMLInputElement>();
   let uploadingFile = $state(false);
   async function uploadProjectFile(file: File) {
@@ -266,10 +266,10 @@
       await uploadAttachment({
         ownerType: 'project',
         ownerId: p.id,
-        category: upCat,
+        category: 'general',
         file: { blob: file, name: file.name },
       });
-      toast('Lampiran diunggah');
+      toast('Dokumen diunggah');
       await loadFiles();
       await invalidate('app:project');
     } catch (err) {
@@ -278,17 +278,28 @@
       uploadingFile = false;
     }
   }
-  const CAT_LABEL: Record<AttachmentCategory, string> = {
-    general: 'Umum',
-    po_client: 'PO klien',
-    contract: 'Kontrak',
-    bast: 'BAST',
-    qc_doc: 'Dokumen QC',
-    photo: 'Foto',
-    drawing: 'Gambar',
-    purchase_doc: 'Dokumen pembelian',
-  };
-  const catLabel = (c: string) => CAT_LABEL[c as AttachmentCategory] ?? c;
+  let attachFile = $state<PFile | null>(null);
+  let attachOpen = $state(false);
+  let attachWoId = $state('');
+  let attaching = $state(false);
+  let attachError = $state('');
+  async function linkDocument() {
+    if (!attachFile || !attachWoId || attaching) return;
+    attaching = true;
+    attachError = '';
+    try {
+      await api(`/api/projects/${p.id}/attachments/${attachFile.id}/link`, {
+        body: { woId: attachWoId },
+      });
+      toast('Dokumen dihubungkan ke WO');
+      attachOpen = false;
+      await loadFiles();
+    } catch (err) {
+      attachError = err instanceof ApiError ? err.message : 'Dokumen gagal dihubungkan';
+    } finally {
+      attaching = false;
+    }
+  }
   const initials = $derived(
     p.client.name
       .split(/\s+/)
@@ -365,7 +376,13 @@
     role="tab"
     class:on={tab === 'files'}
     aria-selected={tab === 'files'}
-    onclick={() => (tab = 'files')}>Lampiran<em>{pfiles?.length ?? ''}</em></button
+    onclick={() => (tab = 'files')}>Dokumen<em>{pfiles?.length ?? ''}</em></button
+  >
+  <button
+    role="tab"
+    class:on={tab === 'materials'}
+    aria-selected={tab === 'materials'}
+    onclick={() => (tab = 'materials')}>Material</button
   >
 </div>
 
@@ -458,6 +475,8 @@
         </ul>
       </aside>{/if}
   </div>
+{:else if tab === 'materials'}
+  {#key p.id}<ProjectMaterials projectId={p.id} />{/key}
 {:else if tab === 'members'}
   <div class="pane">
     {#if p.can.manageMembers}
@@ -489,9 +508,6 @@
   <div class="pane">
     {#if p.can.upload}
       <div class="up">
-        <select aria-label="Kategori lampiran" bind:value={upCat}>
-          {#each Object.entries(CAT_LABEL) as [k, l] (k)}<option value={k}>{l}</option>{/each}
-        </select>
         <input
           bind:this={picker}
           type="file"
@@ -503,7 +519,7 @@
           }}
         />
         <Button icon="upload" loading={uploadingFile} onclick={() => picker?.click()}>
-          Unggah lampiran
+          Unggah dokumen
         </Button>
       </div>
     {/if}
@@ -519,13 +535,36 @@
                 ? 'Work Order'
                 : f.ownerType === 'logbook'
                   ? 'Logbook'
-                  : 'Project'} · {catLabel(f.category)} · {f.uploadedBy} · {shortDate(f.createdAt)} ·
+                  : 'Project'} · {f.uploadedBy} · {shortDate(f.createdAt)} ·
               {formatBytes(f.sizeBytes)}
             </small>
           </a>
+          <div class="doc-links">
+            {#if f.ownerType === 'wo'}{@const source = rows.find(
+                (r) => r.id === f.ownerId,
+              )}{#if source}<a href={resolve('/(app)/w/[id]', { id: source.id })}
+                  >{source.numberLabel}</a
+                >{/if}{/if}
+            {#each f.woLinks as link (link.woId)}<a
+                href={resolve('/(app)/w/[id]', { id: link.woId })}
+                title={link.title}>{link.numberLabel}</a
+              >{/each}
+            {#if p.can.upload}<Button
+                size="sm"
+                variant="ghost"
+                icon="paperclip"
+                disabled={!rows.length}
+                onclick={() => {
+                  attachFile = f;
+                  attachWoId = '';
+                  attachError = '';
+                  attachOpen = true;
+                }}>Attach</Button
+              >{/if}
+          </div>
         </li>
       {:else}
-        <li class="faint">Belum ada lampiran project, WO, atau logbook.</li>
+        <li class="faint">Belum ada dokumen project, WO, atau Logbook.</li>
       {/each}
     </ul>
   </div>
@@ -539,6 +578,24 @@
   canUpload={p.can.upload}
   oncreated={(id) => goto(resolve('/(app)/w/[id]', { id }))}
 />
+
+<Modal bind:open={attachOpen} title="Attach dokumen ke Work Order" width={500}>
+  <p>{attachFile?.fileName}</p>
+  <Field label="Work Order" id="attach-wo"
+    ><select id="attach-wo" bind:value={attachWoId} disabled={attaching}>
+      <option value="">Pilih WO di project ini</option>
+      {#each rows.filter((r) => !attachFile?.woLinks.some((l) => l.woId === r.id) && !(attachFile?.ownerType === 'wo' && attachFile.ownerId === r.id)) as row (row.id)}<option
+          value={row.id}>{row.numberLabel} — {row.title}</option
+        >{/each}
+    </select></Field
+  >
+  <p class="muted">Dokumen tetap tersimpan di asalnya dan akan tampil di WO yang dipilih.</p>
+  {#if attachError}<p role="alert">{attachError}</p>{/if}
+  {#snippet footer()}<Button disabled={attaching} onclick={() => (attachOpen = false)}>Batal</Button
+    ><Button variant="primary" loading={attaching} disabled={!attachWoId} onclick={linkDocument}
+      >Attach</Button
+    >{/snippet}
+</Modal>
 
 <Modal bind:open={reasonOpen} title="Alasan perubahan status" width={440}>
   <form id="mv-f" onsubmit={confirmMove}>
@@ -615,6 +672,16 @@
 {/if}
 
 <style>
+  .doc-links {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .doc-links a {
+    color: var(--color-text-secondary);
+    font: var(--text-caption);
+  }
   .layout.wide {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -819,7 +886,22 @@
     padding: 8px 0;
     border-bottom: 1px solid var(--color-border-default);
   }
+  .list .f {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
+  }
+  .list .f small {
+    color: var(--color-text-secondary);
+  }
+  .doc-links {
+    max-width: 180px;
+  }
   .fi {
+    flex-shrink: 0;
     display: grid;
     place-items: center;
     width: 32px;
@@ -832,13 +914,6 @@
     display: flex;
     gap: 8px;
     align-items: center;
-  }
-  .up select {
-    height: 28px;
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-md);
-    background: var(--color-bg-surface);
-    color: var(--color-text-primary);
   }
   .g {
     display: flex;
@@ -872,6 +947,16 @@
     }
   }
   @media (max-width: 767px) {
+    .list li {
+      flex-wrap: wrap;
+    }
+    .list .f {
+      flex-basis: calc(100% - 40px);
+    }
+    .doc-links {
+      margin-left: 40px;
+      max-width: 100%;
+    }
     .ph,
     .tabs {
       padding-left: 16px;

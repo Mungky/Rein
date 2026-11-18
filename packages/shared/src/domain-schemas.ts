@@ -1,6 +1,12 @@
 /** Schema Zod domain M1: project, anggota, WO, logbook, Butuh bantuan (PRD §3.3–3.6). */
 import { z } from 'zod';
-import { PROJECT_STATUSES, WO_CATEGORIES, WO_STATUSES } from './enums';
+import {
+  LOGBOOK_CATEGORIES,
+  MATERIAL_STATUSES,
+  PROJECT_STATUSES,
+  WO_CATEGORIES,
+  WO_STATUSES,
+} from './enums';
 
 const req = (label: string) => `${label} wajib diisi`;
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD');
@@ -117,13 +123,55 @@ export const logbookCreateSchema = z
     body: z.string().trim().max(5000).default(''),
     attachmentIds: z.array(z.uuid()).max(10).default([]),
     clientCreatedAt: z.iso.datetime({ offset: true }).optional(),
+    progress: z.number().int().min(0).max(100).optional(),
+    category: z.enum(LOGBOOK_CATEGORIES).optional(),
+    expectedUpdatedAt: z.iso.datetime({ offset: true }).optional(),
   })
   .strict()
-  .refine((v) => v.body || v.attachmentIds.length, {
-    message: 'Isi catatan atau lampiran',
+  .refine((v) => v.body || v.attachmentIds.length || v.progress !== undefined, {
+    message: 'Isi catatan, lampiran, atau progres',
     path: ['body'],
+  })
+  .refine((v) => v.progress === undefined || v.expectedUpdatedAt !== undefined, {
+    message: 'Versi WO wajib untuk memperbarui progres',
+    path: ['expectedUpdatedAt'],
   });
 export type LogbookCreateInput = z.infer<typeof logbookCreateSchema>;
+
+const materialFields = {
+  partNo: z.string().trim().max(120).default(''),
+  description: trimmed('Description', 500),
+  material: z.string().trim().max(200).default(''),
+  specification: z.string().trim().max(500).default(''),
+  quantity: z
+    .number()
+    .positive()
+    .max(999999999)
+    .refine((v) => Math.abs(v * 1000 - Math.round(v * 1000)) < 0.00001, 'QTY maksimal 3 desimal'),
+  unit: trimmed('Satuan', 30),
+  status: z.enum(MATERIAL_STATUSES).default('not_available'),
+  receivedAt: isoDate
+    .refine(
+      (v) => !Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v,
+      'Tanggal tidak valid',
+    )
+    .nullable()
+    .default(null),
+  note: z.string().trim().max(2000).default(''),
+};
+export const materialFieldsSchema = z.object(materialFields).strict();
+export type MaterialInput = z.infer<typeof materialFieldsSchema>;
+export const materialCreateSchema = z.object({ clientId: z.uuid(), ...materialFields }).strict();
+export const materialImportSchema = z
+  .object({ rows: z.array(materialCreateSchema).min(1).max(500) })
+  .strict()
+  .refine(
+    (v) => new Set(v.rows.map((r) => r.clientId)).size === v.rows.length,
+    'ID material tidak boleh berulang',
+  );
+export const materialUpdateSchema = z
+  .object({ ...materialFields, expectedUpdatedAt: z.iso.datetime({ offset: true }) })
+  .strict();
 
 export const helpRequestSchema = z.object({
   clientId: z.uuid(),

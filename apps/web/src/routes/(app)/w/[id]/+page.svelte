@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { WO_STATUS_LABEL, woReasonRequired, type WoStatus } from '@rein/shared';
+  import {
+    LOGBOOK_CATEGORY_LABEL,
+    WO_STATUS_LABEL,
+    woReasonRequired,
+    type LogbookCategory,
+    type WoStatus,
+  } from '@rein/shared';
   import { onDestroy } from 'svelte';
   import { invalidate } from '$app/navigation';
   import { resolve } from '$app/paths';
@@ -59,6 +65,9 @@
   let body = $state('');
   let files = $state<Staged[]>([]);
   let posting = $state(false);
+  let progress = $state<number | undefined>(undefined);
+  let category = $state<LogbookCategory | ''>('');
+  let postId = crypto.randomUUID();
   const uploading = $derived(files.some((f) => !f.id && !f.error));
 
   // ---------------------------------------------------------------- modals
@@ -93,19 +102,23 @@
 
   async function post() {
     if (posting || uploading) return;
-    if (!body.trim() && !files.some((f) => f.id)) return;
+    if (!body.trim() && !files.some((f) => f.id) && progress === undefined) return;
     posting = true;
     try {
       await api(`/api/work-orders/${wo.id}/logbook`, {
         body: {
-          clientId: crypto.randomUUID(),
+          clientId: postId,
           body: body.trim(),
           attachmentIds: files.filter((f) => f.id).map((f) => f.id!),
-          clientCreatedAt: new Date().toISOString(),
+          ...(progress !== undefined ? { progress, expectedUpdatedAt: wo.updatedAt } : {}),
+          ...(category ? { category } : {}),
         },
       });
       body = '';
       files = [];
+      progress = undefined;
+      category = '';
+      postId = crypto.randomUUID();
       reasonFor = null;
       await invalidate('app:wo');
     } catch (err) {
@@ -310,8 +323,36 @@
             variant="primary"
             onclick={post}
             loading={posting}
-            disabled={uploading || (!body.trim() && !files.some((f) => f.id))}>Kirim</Button
+            disabled={uploading ||
+              (!body.trim() && !files.some((f) => f.id) && progress === undefined) ||
+              (progress !== undefined &&
+                (!Number.isInteger(progress) || progress < 0 || progress > 100))}>Kirim</Button
           >
+        </div>
+        <div class="log-options">
+          <label
+            >Status catatan (opsional)
+            <select bind:value={category} disabled={posting}>
+              <option value="">Tanpa status</option>
+              {#each Object.entries(LOGBOOK_CATEGORY_LABEL) as [value, label] (value)}<option
+                  {value}>{label}</option
+                >{/each}
+            </select>
+          </label>
+          {#if wo.can.updateProgress}
+            <label
+              >Progres WO % (opsional)
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                placeholder={`Saat ini ${wo.progress}%`}
+                bind:value={progress}
+                disabled={posting}
+              />
+            </label>
+          {/if}
         </div>
       </div>
     {/if}
@@ -325,7 +366,8 @@
               <b>{e.author.fullName}</b>
               <span class="faint">· {stamp(e.createdAt)}</span>
               {#if PILL[e.kind]}<span class="pill {e.kind}">{PILL[e.kind]}</span>{/if}
-              {#if e.progressTo != null && e.progressTo !== e.progressFrom}
+              {#if e.category}<span class="pill">{LOGBOOK_CATEGORY_LABEL[e.category]}</span>{/if}
+              {#if e.progressTo != null}
                 <span class="pill">Progres {e.progressFrom ?? 0}% → {e.progressTo}%</span>
               {/if}
               {#if e.statusTo && e.statusTo !== e.statusFrom}
@@ -367,6 +409,7 @@
         {/if}
       </span>
     </div>
+    {#if wo.statusHint}<p class="status-hint">{wo.statusHint}</p>{/if}
     <div class="prop">
       <span>PIC</span>
       <span class="v"
@@ -551,6 +594,35 @@
 </Modal>
 
 <style>
+  .log-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 0 12px 12px;
+  }
+  .log-options label {
+    display: grid;
+    gap: 6px;
+    font: var(--text-caption);
+    color: var(--color-text-secondary);
+    flex: 1;
+    min-width: 150px;
+  }
+  .log-options input,
+  .log-options select {
+    width: 100%;
+    height: 36px;
+    padding: 0 8px;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+  }
+  .status-hint {
+    font: var(--text-caption);
+    color: var(--color-text-secondary);
+    line-height: 1.6;
+    margin: 0 0 14px;
+  }
   .wo {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 300px;

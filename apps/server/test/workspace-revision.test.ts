@@ -10,6 +10,8 @@ import {
   workOrders,
   woTypes,
   userPermissions,
+  projectMaterials,
+  woReferences,
 } from '../src/db/schema';
 import { closeTestDb, createUser, hasDb, login, makeApp, testDb } from './helpers';
 
@@ -67,6 +69,306 @@ async function file(
   return id;
 }
 describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
+  it('progres Logbook opsional disimpan atomik, idempoten, tercatat dalam S-Curve dan status catatan terpisah', async () => {
+    const f = await fixture();
+    const before = await (await f.a.get(`/api/work-orders/${f.woId}`)).json();
+    const payload = {
+      clientId: randomUUID(),
+      progress: 45,
+      category: 'activity',
+      expectedUpdatedAt: before.updatedAt,
+    };
+    const created = await f.a.post(`/api/work-orders/${f.woId}/logbook`, payload);
+    expect(created.status).toBe(201);
+    const { id } = await created.json();
+    expect((await f.a.post(`/api/work-orders/${f.woId}/logbook`, payload)).status).toBe(200);
+    const after = await (await f.a.get(`/api/work-orders/${f.woId}`)).json();
+    expect([after.progress, after.status]).toEqual([45, before.status]);
+    expect(
+      (
+        await f.a.post(`/api/work-orders/${f.woId}/logbook`, {
+          ...payload,
+          expectedUpdatedAt: after.updatedAt,
+        })
+      ).status,
+    ).toBe(200);
+    const entry = await testDb().query.logbookEntries.findFirst({
+      where: eq(logbookEntries.id, id),
+    });
+    expect(entry).toMatchObject({ category: 'activity', progressFrom: 0, progressTo: 45 });
+    const event = await testDb().query.progressEvents.findFirst({
+      where: eq(progressEvents.sourceEntryId, id),
+    });
+    expect(event).toMatchObject({ progress: 45, status: before.status });
+    const curve = await (await f.a.get(`/api/projects/${f.id}/scurve`)).json();
+    expect(JSON.stringify(curve)).toContain('45');
+    expect(
+      (
+        await f.a.post(`/api/work-orders/${f.woId}/logbook`, {
+          ...payload,
+          clientId: randomUUID(),
+          progress: 50,
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      await testDb()
+        .select()
+        .from(logbookEntries)
+        .where(eq(logbookEntries.clientUuid, payload.clientId)),
+    ).toHaveLength(1);
+  });
+  it('dua progres bersamaan tidak saling menimpa; perubahan status membaca progres terbaru', async () => {
+    const f = await fixture();
+    const current = await (await f.a.get(`/api/work-orders/${f.woId}`)).json();
+    const results = await Promise.all(
+      [30, 60].map((progress) =>
+        f.a.post(`/api/work-orders/${f.woId}/logbook`, {
+          clientId: randomUUID(),
+          progress,
+          expectedUpdatedAt: current.updatedAt,
+        }),
+      ),
+    );
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    const after = await (await f.a.get(`/api/work-orders/${f.woId}`)).json();
+    expect(
+      (
+        await f.a.post(`/api/work-orders/${f.woId}/status`, {
+          status: 'in_progress',
+          expectedUpdatedAt: current.updatedAt,
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (await f.a.post(`/api/work-orders/${f.woId}/status`, { status: 'in_progress' })).status,
+    ).toBe(200);
+    expect((await (await f.a.get(`/api/work-orders/${f.woId}`)).json()).progress).toBe(
+      after.progress,
+    );
+  });
+  it('anggota dapat mencatat Dokumen/Kendala tetapi tidak mengubah progres WO orang lain; override izin dihormati', async () => {
+    const f = await fixture();
+    const u = await createUser();
+    await testDb()
+      .insert(projectMembers)
+      .values({ projectId: f.id, userId: u.id, projectRole: 'Anggota', addedBy: f.manager.id });
+    const { a } = await login(f.app, u.username, u.password!);
+    const wo = await (await f.a.get(`/api/work-orders/${f.woId}`)).json();
+    expect(
+      (
+        await a.post(`/api/work-orders/${f.woId}/logbook`, {
+          clientId: randomUUID(),
+          body: 'Dokumen diperiksa',
+          category: 'document',
+        })
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await a.post(`/api/work-orders/${f.woId}/logbook`, {
+          clientId: randomUUID(),
+          body: 'Kendala bahan',
+          category: 'issue',
+        })
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await a.post(`/api/work-orders/${f.woId}/logbook`, {
+          clientId: randomUUID(),
+          progress: 10,
+          expectedUpdatedAt: wo.updatedAt,
+        })
+      ).status,
+    ).toBe(403);
+    await testDb()
+      .insert(userPermissions)
+      .values({ userId: f.manager.id, permissionKey: 'wo.edit.any', scope: 'none' });
+    await testDb()
+      .insert(userPermissions)
+      .values({ userId: f.manager.id, permissionKey: 'wo.edit.own', scope: 'none' });
+    expect(
+      (
+        await f.a.post(`/api/work-orders/${f.woId}/logbook`, {
+          clientId: randomUUID(),
+          progress: 10,
+          expectedUpdatedAt: wo.updatedAt,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await f.a.post(`/api/work-orders/${f.woId}/logbook`, {
+          clientId: randomUUID(),
+          body: 'Catatan tetap boleh',
+        })
+      ).status,
+    ).toBe(201);
+  });
+  it('Review memerlukan Logbook dan Selesai hanya oleh pembuat/izin edit semua; progres WO tertutup dilindungi', async () => {
+    const f = await fixture();
+    expect(
+      (await f.a.post(`/api/work-orders/${f.woId}/status`, { status: 'in_progress' })).status,
+    ).toBe(200);
+    const detail = await (await f.a.get(`/api/work-orders/${f.woId}`)).json();
+    expect(detail.statusHint).toContain('Logbook');
+    expect(detail.can.statusTargets).not.toContain('review');
+    expect((await f.a.post(`/api/work-orders/${f.woId}/status`, { status: 'review' })).status).toBe(
+      422,
+    );
+    await f.a.post(`/api/work-orders/${f.woId}/logbook`, {
+      clientId: randomUUID(),
+      body: 'Hasil pekerjaan',
+    });
+    expect((await f.a.post(`/api/work-orders/${f.woId}/status`, { status: 'review' })).status).toBe(
+      200,
+    );
+    expect((await f.a.post(`/api/work-orders/${f.woId}/status`, { status: 'done' })).status).toBe(
+      200,
+    );
+    const done = await (await f.a.get(`/api/work-orders/${f.woId}`)).json();
+    expect(done.progress).toBe(100);
+    expect(done.can.updateProgress).toBe(false);
+    expect(
+      (
+        await f.a.post(`/api/work-orders/${f.woId}/logbook`, {
+          clientId: randomUUID(),
+          progress: 20,
+          expectedUpdatedAt: done.updatedAt,
+        })
+      ).status,
+    ).toBe(422);
+  });
+  it('Material input manual/impor atomik dan idempoten, edit dengan versi, izin project dan audit', async () => {
+    const f = await fixture();
+    const rows = [
+      {
+        clientId: randomUUID(),
+        partNo: '001',
+        description: 'Frame',
+        material: 'AISI 304',
+        specification: '50 x 50',
+        quantity: 4,
+        unit: 'Btg',
+      },
+      {
+        clientId: randomUUID(),
+        description: 'Plate',
+        quantity: 2,
+        unit: 'Lbr',
+        status: 'po',
+        receivedAt: '2026-11-18',
+      },
+    ];
+    const endpoint = `/api/projects/${f.id}/materials`;
+    expect((await f.a.post(endpoint, { rows })).status).toBe(201);
+    expect(await (await f.a.post(endpoint, { rows })).json()).toMatchObject({ inserted: 0 });
+    const list = await (await f.a.get(endpoint)).json();
+    expect(list.canManage).toBe(true);
+    expect(list.materials).toHaveLength(2);
+    const item = list.materials.find((r: { id: string }) => r.id === rows[0]!.clientId);
+    const update = {
+      ...rows[0]!,
+      clientId: undefined,
+      status: 'in_stock',
+      expectedUpdatedAt: item.updatedAt,
+    };
+    expect((await f.a.patch(`${endpoint}/${item.id}`, update)).status).toBe(200);
+    expect((await f.a.patch(`${endpoint}/${item.id}`, update)).status).toBe(409);
+    expect(
+      (
+        await f.a.post(endpoint, {
+          rows: [
+            { ...rows[0], clientId: randomUUID() },
+            { ...rows[1], clientId: randomUUID(), quantity: 0 },
+          ],
+        })
+      ).status,
+    ).toBe(422);
+    expect((await (await f.a.get(endpoint)).json()).materials).toHaveLength(2);
+    const outsider = await createUser();
+    const { a } = await login(f.app, outsider.username, outsider.password!);
+    expect((await a.get(endpoint)).status).toBe(404);
+    expect((await a.post(endpoint, { rows })).status).toBe(404);
+    await testDb().insert(projectMembers).values({
+      projectId: f.id,
+      userId: outsider.id,
+      projectRole: 'Purchasing',
+      addedBy: f.manager.id,
+    });
+    expect(
+      (await a.post(endpoint, { rows: [{ ...rows[0], clientId: randomUUID() }] })).status,
+    ).toBe(201);
+    await testDb()
+      .insert(userPermissions)
+      .values({ userId: outsider.id, permissionKey: 'wo.create', scope: 'none' });
+    expect(
+      (await a.post(endpoint, { rows: [{ ...rows[0], clientId: randomUUID() }] })).status,
+    ).toBe(403);
+    expect((await a.patch(`${endpoint}/${item.id}`, update)).status).toBe(403);
+    expect(
+      await testDb().query.auditLogs.findFirst({
+        where: and(eq(auditLogs.entityId, f.id), eq(auditLogs.action, 'material.updated')),
+      }),
+    ).toBeTruthy();
+    expect(
+      (await testDb().query.projectMaterials.findFirst({
+        where: eq(projectMaterials.id, item.id),
+      }))!.status,
+    ).toBe('in_stock');
+  });
+  it('Attach menghubungkan tanpa memindahkan/menduplikasi file; menolak sumber/WO lintas project dan izin unggah', async () => {
+    const f = await fixture();
+    const doc = await file(f.manager.id, 'project', f.id);
+    const endpoint = `/api/projects/${f.id}/attachments/${doc}/link`;
+    expect((await f.a.post(endpoint, { woId: f.woId })).status).toBe(200);
+    expect((await f.a.post(endpoint, { woId: f.woId })).status).toBe(200);
+    expect(
+      (await testDb().query.attachments.findFirst({ where: eq(attachments.id, doc) }))!.ownerType,
+    ).toBe('project');
+    const refs = await testDb()
+      .select()
+      .from(woReferences)
+      .where(eq(woReferences.attachmentId, doc));
+    expect(refs).toHaveLength(1);
+    const list = await (await f.a.get(`/api/projects/${f.id}/attachments`)).json();
+    expect(list.attachments.find((r: { id: string }) => r.id === doc).woLinks[0].woId).toBe(f.woId);
+    expect(
+      (await (await f.a.get(`/api/work-orders/${f.woId}`)).json()).attachments.map(
+        (r: { id: string }) => r.id,
+      ),
+    ).toContain(doc);
+    const otherProject = await f.createProject();
+    expect(
+      (await f.a.post(`/api/projects/${otherProject}/attachments/${doc}/link`, { woId: f.woId }))
+        .status,
+    ).toBe(404);
+    const foreignDoc = await file(f.manager.id, 'project', otherProject);
+    expect(
+      (await f.a.post(`/api/projects/${f.id}/attachments/${foreignDoc}/link`, { woId: f.woId }))
+        .status,
+    ).toBe(404);
+    const wo = await testDb().query.workOrders.findFirst({ where: eq(workOrders.id, f.woId) });
+    const foreignWoId = randomUUID();
+    await f.a.post(`/api/projects/${otherProject}/work-orders`, {
+      clientId: foreignWoId,
+      title: 'WO project lain',
+      typeId: wo!.typeId,
+      assigneeId: f.manager.id,
+      deadline: '2026-12-01',
+    });
+    expect((await f.a.post(endpoint, { woId: foreignWoId })).status).toBe(404);
+    await testDb()
+      .insert(userPermissions)
+      .values({ userId: f.manager.id, permissionKey: 'attachment.upload', scope: 'none' });
+    expect((await f.a.post(endpoint, { woId: f.woId })).status).toBe(403);
+    expect(
+      await testDb().query.auditLogs.findFirst({
+        where: and(eq(auditLogs.entityId, f.id), eq(auditLogs.action, 'attachment.linked')),
+      }),
+    ).toBeTruthy();
+  });
   it('staging milik sendiri tetap memerlukan izin unggah saat dilampirkan ke WO atau logbook', async () => {
     const f = await fixture();
     const stagingId = await file(f.manager.id, 'user', f.manager.id);

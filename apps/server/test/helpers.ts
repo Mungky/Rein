@@ -155,6 +155,7 @@ export function agent(
     jar,
     get: (p: string, h?: Record<string, string>) => req('GET', p, undefined, h),
     post: (p: string, b?: unknown, h?: Record<string, string>) => req('POST', p, b ?? {}, h),
+    patch: (p: string, b: unknown) => req('PATCH', p, b),
   };
 }
 
