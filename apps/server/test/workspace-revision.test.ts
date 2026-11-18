@@ -5,7 +5,9 @@ import {
   attachments,
   auditLogs,
   logbookEntries,
+  notifications,
   projectMembers,
+  projectStatusHistory,
   progressEvents,
   workOrders,
   woTypes,
@@ -71,6 +73,75 @@ async function file(
   return id;
 }
 describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
+  it('menyimpan info dan status project bersama dengan izin, histori, dan notifikasi', async () => {
+    const f = await fixture();
+    const path = `/api/projects/${f.id}`;
+    const { updatedAt } = await (await f.a.get(path)).json();
+    const form = { expectedUpdatedAt: updatedAt, name: 'Jadwal project terbaru' };
+    const closer = await createUser();
+    const { a: member } = await login(f.app, closer.username, closer.password!);
+    await testDb().insert(projectMembers).values({
+      projectId: f.id,
+      userId: closer.id,
+      projectRole: 'Koordinator',
+      addedBy: f.manager.id,
+    });
+    await testDb().insert(userPermissions).values({
+      userId: closer.id,
+      permissionKey: 'project.close',
+      scope: 'all',
+    });
+
+    expect((await f.a.patch(path, { ...form, statusChange: { status: 'on_hold' } })).status).toBe(
+      422,
+    );
+    expect((await member.patch(path, { ...form, statusChange: { status: 'done' } })).status).toBe(
+      403,
+    );
+    expect(await (await f.a.get(path)).json()).toMatchObject({
+      name: 'Project revisi',
+      status: 'active',
+      updatedAt,
+    });
+    const change = { status: 'on_hold', note: 'Menunggu jadwal dari klien' };
+    const saved = await f.a.patch(path, { ...form, statusChange: change });
+    expect(saved.status).toBe(200);
+    const savedProject = await saved.json();
+    expect(savedProject).toMatchObject({
+      name: form.name,
+      status: 'on_hold',
+      onHoldReason: change.note,
+    });
+    expect((await f.a.patch(path, { ...form, name: 'Versi lama' })).status).toBe(409);
+    expect(
+      await testDb().query.projectStatusHistory.findFirst({
+        where: and(
+          eq(projectStatusHistory.projectId, f.id),
+          eq(projectStatusHistory.toStatus, 'on_hold'),
+        ),
+      }),
+    ).toMatchObject({ fromStatus: 'active', note: change.note, changedBy: f.manager.id });
+    const events = await testDb().select().from(auditLogs).where(eq(auditLogs.entityId, f.id));
+    expect(events.filter((e) => e.action === 'project.status_changed')).toHaveLength(1);
+    expect(events.filter((e) => e.action === 'project.updated')).toHaveLength(1);
+    expect(
+      await testDb().query.notifications.findFirst({
+        where: and(eq(notifications.projectId, f.id), eq(notifications.userId, closer.id)),
+      }),
+    ).toMatchObject({ title: `${form.name}: Ditunda` });
+
+    const closed = await member.patch(path, {
+      expectedUpdatedAt: savedProject.updatedAt,
+      statusChange: { status: 'done' },
+    });
+    expect(closed.status).toBe(200);
+    expect(await closed.json()).toMatchObject({
+      name: form.name,
+      status: 'done',
+      onHoldReason: null,
+    });
+  });
+
   it('menolak sinkronisasi lintas akun dan mencatat perubahan status idempoten satu kali', async () => {
     const f = await fixture();
     const path = `/api/work-orders/${f.woId}`;

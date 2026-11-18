@@ -34,7 +34,7 @@ import {
   or,
   sql,
 } from 'drizzle-orm';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { audit } from '../audit';
 import { authOf, requireVerified } from '../auth/middleware';
@@ -177,6 +177,87 @@ async function assertNotLastManager(db: Db, projectId: string, userId: string) {
       ),
     );
   if ((row?.n ?? 0) === 0) throw conflict('Project harus punya minimal satu pengelola');
+}
+
+type StatusChange = z.infer<typeof projectStatusSchema>;
+
+function assertProjectTransition(a: AuthContext, acc: ProjectAccess, change: StatusChange) {
+  const check = checkProjectTransition(acc.project.status, change.status, {
+    canEdit: canDo(a, 'project.edit', acc.res),
+    canClose: canDo(a, 'project.close', acc.res),
+    canCloseAll: a.permissions['project.close'] === 'all',
+  });
+  if (!check.ok) throw new HttpError(403, 'FORBIDDEN', check.message);
+  if (check.reasonRequired && !change.note) {
+    throw new HttpError(422, 'VALIDATION', 'Isi alasan', { note: 'Alasan wajib diisi' });
+  }
+}
+
+function statusFields({ status, note }: StatusChange) {
+  return {
+    status,
+    onHoldReason: status === 'on_hold' ? (note ?? null) : null,
+    doneAt: status === 'done' ? new Date() : null,
+  };
+}
+
+const staleProject = () =>
+  new HttpError(409, 'STALE', 'Project sudah diubah orang lain. Muat ulang lalu coba lagi.');
+
+async function updateProject(
+  tx: Tx,
+  p: ProjectAccess['project'],
+  fields: Partial<typeof projects.$inferInsert>,
+) {
+  const [updated] = await tx
+    .update(projects)
+    .set({ ...fields, updatedAt: new Date(Math.max(Date.now(), p.updatedAt.getTime() + 1)) })
+    .where(
+      and(
+        eq(projects.id, p.id),
+        sql`date_trunc('milliseconds', ${projects.updatedAt}) = ${p.updatedAt.toISOString()}::timestamptz`,
+      ),
+    )
+    .returning({ id: projects.id });
+  if (!updated) throw staleProject();
+}
+
+async function recordProjectStatus(
+  tx: Tx,
+  c: Context<AppEnv>,
+  p: ProjectAccess['project'],
+  { status, note }: StatusChange,
+  recipients: string[],
+  name = p.name,
+) {
+  const a = authOf(c);
+  await tx.insert(projectStatusHistory).values({
+    projectId: p.id,
+    fromStatus: p.status,
+    toStatus: status,
+    changedBy: a.user.id,
+    note: note ?? null,
+  });
+  await audit(tx, {
+    actorId: a.user.id,
+    action: 'project.status_changed',
+    entityType: 'project',
+    entityId: p.id,
+    diff: { from: p.status, to: status, note },
+    ip: c.var.ip,
+    userAgent: userAgent(c),
+  });
+  return enqueueNotifications(tx, {
+    event: 'project.status_changed',
+    recipients,
+    actorId: a.user.id,
+    projectId: p.id,
+    entityType: 'project',
+    entityId: p.id,
+    title: `${name}: ${PROJECT_STATUS_LABEL[status]}`,
+    body: note ?? `${a.user.fullName} mengubah status project`,
+    url: `/project/${p.id}`,
+  });
 }
 
 export const projectRoutes = new Hono<AppEnv>()
@@ -406,16 +487,13 @@ export const projectRoutes = new Hono<AppEnv>()
     const a = authOf(c);
     const { db } = c.var.deps;
     const acc = await loadProjectAccess(db, a, c.req.param('id'));
-    assertCan(a, 'project.edit', acc.res);
     const body = await readJson(c, projectUpdateSchema);
     const p = acc.project;
-    if (new Date(body.expectedUpdatedAt).getTime() !== p.updatedAt.getTime()) {
-      throw new HttpError(
-        409,
-        'STALE',
-        'Project sudah diubah orang lain. Muat ulang lalu coba lagi.',
-      );
-    }
+    const { expectedUpdatedAt, clientName, statusChange, ...fields } = body;
+    const hasInfo = !!clientName || Object.keys(fields).length > 0;
+    if (hasInfo || !statusChange) assertCan(a, 'project.edit', acc.res);
+    if (statusChange) assertProjectTransition(a, acc, statusChange);
+    if (new Date(expectedUpdatedAt).getTime() !== p.updatedAt.getTime()) throw staleProject();
     if (body.rpoNumber && body.rpoNumber !== p.rpoNumber) {
       await assertRpoFree(db, body.rpoNumber, p.id);
     }
@@ -426,49 +504,33 @@ export const projectRoutes = new Hono<AppEnv>()
         endDate: 'Tanggal selesai tidak boleh sebelum tanggal mulai',
       });
     }
-    const { expectedUpdatedAt: _ignored, clientName, ...fields } = body;
+    const recipients = (await memberList(db, p.id)).map((m) => m.userId);
     try {
-      await db.transaction(async (tx) => {
+      const notified = await db.transaction(async (tx) => {
         const patch: Partial<typeof projects.$inferInsert> = { ...fields };
         if (clientName) patch.clientId = await upsertClient(tx, clientName);
-        const [updated] = await tx
-          .update(projects)
-          .set({ ...patch, updatedAt: new Date(Math.max(Date.now(), p.updatedAt.getTime() + 1)) })
-          .where(
-            and(
-              eq(projects.id, p.id),
-              sql`date_trunc('milliseconds', ${projects.updatedAt}) = ${p.updatedAt.toISOString()}::timestamptz`,
-            ),
-          )
-          .returning({ id: projects.id });
-        if (!updated)
-          throw new HttpError(
-            409,
-            'STALE',
-            'Project sudah diubah orang lain. Muat ulang lalu coba lagi.',
-          );
-        await audit(tx, {
-          actorId: a.user.id,
-          action: 'project.updated',
-          entityType: 'project',
-          entityId: p.id,
-          diff: { ...fields, ...(clientName ? { clientName } : {}) },
-          ip: c.var.ip,
-          userAgent: userAgent(c),
-        });
+        await updateProject(tx, p, { ...patch, ...(statusChange && statusFields(statusChange)) });
+        if (hasInfo || !statusChange)
+          await audit(tx, {
+            actorId: a.user.id,
+            action: 'project.updated',
+            entityType: 'project',
+            entityId: p.id,
+            diff: { ...fields, ...(clientName ? { clientName } : {}) },
+            ip: c.var.ip,
+            userAgent: userAgent(c),
+          });
+        return statusChange
+          ? recordProjectStatus(tx, c, p, statusChange, recipients, fields.name)
+          : [];
       });
+      publishToUsers(notified, { type: 'notification' });
     } catch (err) {
       if (body.rpoNumber) await assertRpoFree(db, body.rpoNumber, p.id);
       throw err;
     }
     const fresh = await loadProjectAccess(db, a, p.id);
-    publishToUsers(
-      (await memberList(db, p.id)).map((member) => member.userId),
-      {
-        type: 'project',
-        projectId: p.id,
-      },
-    );
+    publishToUsers(recipients, { type: 'project', projectId: p.id });
     return c.json(await projectDetail(db, a, fresh));
   })
 
@@ -479,52 +541,11 @@ export const projectRoutes = new Hono<AppEnv>()
     const acc = await loadProjectAccess(db, a, c.req.param('id'));
     const body = await readJson(c, projectStatusSchema);
     const p = acc.project;
-    const check = checkProjectTransition(p.status, body.status, {
-      canEdit: canDo(a, 'project.edit', acc.res),
-      canClose: canDo(a, 'project.close', acc.res),
-      canCloseAll: a.permissions['project.close'] === 'all',
-    });
-    if (!check.ok) throw new HttpError(403, 'FORBIDDEN', check.message);
-    if (check.reasonRequired && !body.note) {
-      throw new HttpError(422, 'VALIDATION', 'Isi alasan', { note: 'Alasan wajib diisi' });
-    }
+    assertProjectTransition(a, acc, body);
     const recipients = (await memberList(db, p.id)).map((m) => m.userId);
     const notified = await db.transaction(async (tx) => {
-      await tx
-        .update(projects)
-        .set({
-          status: body.status,
-          onHoldReason: body.status === 'on_hold' ? (body.note ?? null) : null,
-          doneAt: body.status === 'done' ? new Date() : null,
-        })
-        .where(eq(projects.id, p.id));
-      await tx.insert(projectStatusHistory).values({
-        projectId: p.id,
-        fromStatus: p.status,
-        toStatus: body.status,
-        changedBy: a.user.id,
-        note: body.note ?? null,
-      });
-      await audit(tx, {
-        actorId: a.user.id,
-        action: 'project.status_changed',
-        entityType: 'project',
-        entityId: p.id,
-        diff: { from: p.status, to: body.status, note: body.note },
-        ip: c.var.ip,
-        userAgent: userAgent(c),
-      });
-      return enqueueNotifications(tx, {
-        event: 'project.status_changed',
-        recipients,
-        actorId: a.user.id,
-        projectId: p.id,
-        entityType: 'project',
-        entityId: p.id,
-        title: `${p.name}: ${PROJECT_STATUS_LABEL[body.status]}`,
-        body: body.note ?? `${a.user.fullName} mengubah status project`,
-        url: `/project/${p.id}`,
-      });
+      await updateProject(tx, p, statusFields(body));
+      return recordProjectStatus(tx, c, p, body, recipients);
     });
     publishToUsers(notified, { type: 'notification' });
     publishToUsers(recipients, { type: 'project', projectId: p.id });

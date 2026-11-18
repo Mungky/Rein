@@ -41,6 +41,11 @@ export const projectMediaSchema = z
     message: 'Pilih foto/logo atau banner yang ingin diubah',
   });
 
+export const projectStatusSchema = z.object({
+  status: z.enum(PROJECT_STATUSES),
+  note: z.string().trim().max(300).optional(),
+});
+
 export const projectUpdateSchema = z
   .object({
     expectedUpdatedAt: z.iso.datetime({ offset: true }),
@@ -51,16 +56,12 @@ export const projectUpdateSchema = z
     startDate: isoDate.optional(),
     endDate: isoDate.optional(),
     description: z.string().trim().max(500).nullable().optional(),
+    statusChange: projectStatusSchema.optional(),
   })
   .refine((v) => !v.startDate || !v.endDate || v.endDate >= v.startDate, {
     path: ['endDate'],
     message: 'Tanggal selesai tidak boleh sebelum tanggal mulai',
   });
-
-export const projectStatusSchema = z.object({
-  status: z.enum(PROJECT_STATUSES),
-  note: z.string().trim().max(300).optional(),
-});
 
 export const memberUpsertSchema = z.object({
   userId: z.uuid(),

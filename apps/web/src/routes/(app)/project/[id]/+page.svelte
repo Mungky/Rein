@@ -33,9 +33,9 @@
   import Modal from '$lib/components/Modal.svelte';
   import Progress from '$lib/components/Progress.svelte';
   import ProjectMediaModal from '$lib/components/ProjectMediaModal.svelte';
+  import ProjectMembersModal from '$lib/components/ProjectMembersModal.svelte';
   import ProjectMaterials from '$lib/components/ProjectMaterials.svelte';
   import Segmented from '$lib/components/Segmented.svelte';
-  import Toggle from '$lib/components/Toggle.svelte';
   import WoCreateModal from '$lib/components/WoCreateModal.svelte';
   import WoTable from '$lib/components/WoTable.svelte';
   import WoTimeline from '$lib/components/WoTimeline.svelte';
@@ -50,11 +50,13 @@
   /** Detail project (Figma D/04c–05, M/04–05; FR-021–026, FR-070–071). */
   let { data } = $props();
   const p = $derived(data.project);
-  let mediaOpen = $state(false);
+  let mediaKind = $state<'logo' | 'banner' | null>(null);
+  let memberOpen = $state(false);
   let rows = $derived<WoRow[]>(data.workOrders);
   let infoOpen = $state(false);
   let infoSaving = $state(false);
   let infoVersion = '';
+  let initialInfo = '';
   let infoErrors = $state<Record<string, string>>({});
   let infoMessage = $state('');
   let info = $state({
@@ -66,6 +68,23 @@
     endDate: '',
     description: '',
   });
+  let initialStatus = $state<ProjectStatus>('active');
+  let nextStatus = $state<ProjectStatus>('active');
+  let note = $state('');
+  const statusActor = $derived({
+    canEdit: !!p.can.edit,
+    canClose: !!p.can.close,
+    canCloseAll: !!p.can.reopen,
+  });
+  const statusTargets = $derived(
+    PROJECT_STATUSES.filter((s) => checkProjectTransition(p.status, s, statusActor).ok),
+  );
+  const editStatusTargets = $derived(
+    PROJECT_STATUSES.filter((s) => checkProjectTransition(initialStatus, s, statusActor).ok),
+  );
+  const statusChange = $derived(nextStatus !== initialStatus);
+  const transition = $derived(checkProjectTransition(initialStatus, nextStatus, statusActor));
+  const needsReason = $derived(statusChange && transition.ok && transition.reasonRequired);
 
   function openInfo() {
     info = {
@@ -77,7 +96,11 @@
       endDate: p.endDate,
       description: p.description ?? '',
     };
+    initialInfo = JSON.stringify(info);
     infoVersion = p.updatedAt;
+    initialStatus = p.status;
+    nextStatus = p.status;
+    note = '';
     infoErrors = {};
     infoMessage = '';
     infoOpen = true;
@@ -88,11 +111,28 @@
     if (infoSaving) return;
     infoErrors = {};
     infoMessage = '';
-    const parsed = projectCreateSchema.safeParse(info);
-    if (!parsed.success) {
-      infoErrors = Object.fromEntries(
-        parsed.error.issues.map((issue) => [String(issue.path[0]), issue.message]),
-      );
+    let fields = {};
+    const changed = p.can.edit && JSON.stringify(info) !== initialInfo;
+    if (changed) {
+      const parsed = projectCreateSchema.safeParse(info);
+      if (!parsed.success) {
+        infoErrors = Object.fromEntries(
+          parsed.error.issues.map((issue) => [String(issue.path[0]), issue.message]),
+        );
+        return;
+      }
+      fields = {
+        ...parsed.data,
+        location: parsed.data.location || null,
+        description: parsed.data.description || null,
+      };
+    }
+    if (needsReason && !note.trim()) {
+      infoErrors = { note: 'Alasan wajib diisi' };
+      return;
+    }
+    if (!changed && !statusChange) {
+      infoOpen = false;
       return;
     }
     infoSaving = true;
@@ -100,14 +140,19 @@
       await api(`/api/projects/${p.id}`, {
         method: 'PATCH',
         body: {
-          ...parsed.data,
-          location: parsed.data.location || null,
-          description: parsed.data.description || null,
+          ...fields,
+          ...(statusChange
+            ? { statusChange: { status: nextStatus, note: note.trim() || undefined } }
+            : {}),
           expectedUpdatedAt: infoVersion,
         },
       });
       infoOpen = false;
-      toast('Info project diperbarui');
+      toast(
+        statusChange && !changed
+          ? `Status project: ${PROJECT_STATUS_LABEL[nextStatus]}`
+          : 'Info project diperbarui',
+      );
       await invalidate('app:project');
       await invalidate('app:projects');
     } catch (err) {
@@ -155,7 +200,7 @@
       // abaikan
     }
   });
-  let tab = $state<'worklist' | 'members' | 'files' | 'materials'>('worklist');
+  let tab = $state<'worklist' | 'files' | 'materials'>('worklist');
   $effect(() => {
     const source = page.url.searchParams.get('tab');
     tab = source === 'files' || source === 'materials' ? source : 'worklist';
@@ -255,89 +300,6 @@
   // ---------------------------------------------------------------- Buat WO
   let createOpen = $state(false);
 
-  // ---------------------------------------------------------------- Status project
-  let statusOpen = $state(false);
-  let nextStatus = $state<ProjectStatus>('on_hold');
-  let note = $state('');
-  let busy = $state(false);
-  const statusTargets = $derived(
-    PROJECT_STATUSES.filter(
-      (status) =>
-        checkProjectTransition(p.status, status, {
-          canEdit: p.can.edit ?? false,
-          canClose: p.can.close ?? false,
-          canCloseAll: p.can.reopen ?? false,
-        }).ok,
-    ),
-  );
-  function openStatus() {
-    nextStatus = statusTargets[0] ?? p.status;
-    note = '';
-    statusOpen = true;
-  }
-  async function saveStatus(e?: SubmitEvent) {
-    e?.preventDefault();
-    busy = true;
-    try {
-      await api(`/api/projects/${p.id}/status`, {
-        body: { status: nextStatus, ...(note.trim() ? { note: note.trim() } : {}) },
-      });
-      statusOpen = false;
-      toast(`Status project: ${PROJECT_STATUS_LABEL[nextStatus]}`);
-      await invalidate('app:project');
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Gagal', { tone: 'danger' });
-    } finally {
-      busy = false;
-    }
-  }
-
-  // ---------------------------------------------------------------- Anggota
-  interface DirUser {
-    id: string;
-    fullName: string;
-    roleName: string;
-    avatarUrl: string | null;
-  }
-  let memberOpen = $state(false);
-  let dir = $state<DirUser[]>([]);
-  let q = $state('');
-  let m = $state({ userId: '', projectRole: 'Anggota', isProjectManager: false });
-  $effect(() => {
-    if (!memberOpen) return;
-    const term = q;
-    const t = setTimeout(async () => {
-      dir = (await api<{ users: DirUser[] }>(`/api/directory/users?q=${encodeURIComponent(term)}`))
-        .users;
-    }, 200);
-    return () => clearTimeout(t);
-  });
-  const candidates = $derived(dir.filter((u) => !p.members.some((x) => x.userId === u.id)));
-  async function addMember(e?: SubmitEvent) {
-    e?.preventDefault();
-    if (!m.userId) return;
-    busy = true;
-    try {
-      await api(`/api/projects/${p.id}/members`, { method: 'PUT', body: m });
-      memberOpen = false;
-      m = { userId: '', projectRole: 'Anggota', isProjectManager: false };
-      toast('Anggota ditambahkan');
-      await invalidate('app:project');
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Gagal', { tone: 'danger' });
-    } finally {
-      busy = false;
-    }
-  }
-  async function removeMember(userId: string) {
-    try {
-      await api(`/api/projects/${p.id}/members/${userId}`, { method: 'DELETE', body: {} });
-      await invalidate('app:project');
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Gagal', { tone: 'danger' });
-    }
-  }
-
   // ---------------------------------------------------------------- Lampiran project
   interface PFile {
     id: string;
@@ -424,17 +386,46 @@
 
 <svelte:head><title>{p.name} · REIN</title></svelte:head>
 
-<div class="banner">
-  {#if p.bannerUrl}<img src={p.bannerUrl} alt={'Banner ' + p.name} />{/if}
-</div>
+{#snippet banner()}
+  {#if p.bannerUrl}<img src={p.bannerUrl} alt={p.can.edit ? '' : 'Banner ' + p.name} />{/if}
+{/snippet}
+{#snippet logo()}
+  {#if p.logoUrl}
+    <img src={p.logoUrl} alt={p.can.edit ? '' : 'Foto/logo ' + p.client.name} />
+  {:else}
+    {initials}
+  {/if}
+{/snippet}
+
+{#if p.can.edit}
+  <button
+    type="button"
+    class="banner media-edit"
+    onclick={() => (mediaKind = 'banner')}
+    aria-haspopup="dialog"
+  >
+    {@render banner()}
+    <span class="banner-edit"><Icon name="camera" size={14} />Ubah banner</span>
+  </button>
+{:else}
+  <div class="banner">{@render banner()}</div>
+{/if}
 <header class="ph">
   <div class="ph-top">
-    <span class="clogo"
-      >{#if p.logoUrl}<img
-          src={p.logoUrl}
-          alt={'Foto/logo ' + p.client.name}
-        />{:else}{initials}{/if}</span
-    >
+    {#if p.can.edit}
+      <button
+        type="button"
+        class="clogo media-edit"
+        onclick={() => (mediaKind = 'logo')}
+        aria-label="Ubah foto/logo"
+        aria-haspopup="dialog"
+      >
+        {@render logo()}
+        <span class="logo-edit"><Icon name="camera" size={12} /></span>
+      </button>
+    {:else}
+      <span class="clogo">{@render logo()}</span>
+    {/if}
     <div class="ttl">
       <h1>{p.name}</h1>
       <div class="meta">
@@ -455,12 +446,12 @@
       <Progress value={p.progress} width={180} />
     </div>
     <div class="acts">
-      {#if p.can.edit}<Button icon="edit" onclick={openInfo}>Edit info</Button>{/if}
-      {#if p.can.edit}<Button icon="image" onclick={() => (mediaOpen = true)}>Foto & banner</Button
-        >{/if}
-      {#if statusTargets.length}
-        <Button icon="refresh" onclick={openStatus}>Status</Button>
+      {#if p.can.edit || statusTargets.length}
+        <Button icon="edit" aria-haspopup="dialog" onclick={openInfo}>Edit info</Button>
       {/if}
+      <Button icon="users" aria-haspopup="dialog" onclick={() => (memberOpen = true)}>
+        {p.can.manageMembers ? 'Kelola anggota' : 'Anggota'}
+      </Button>
       {#if p.can.createWo}
         <Button variant="primary" icon="plus" onclick={() => (createOpen = true)}>Buat WO</Button>
       {/if}
@@ -479,12 +470,6 @@
     class:on={tab === 'worklist'}
     aria-selected={tab === 'worklist'}
     onclick={() => (tab = 'worklist')}>Worklist<em>{rows.length}</em></button
-  >
-  <button
-    role="tab"
-    class:on={tab === 'members'}
-    aria-selected={tab === 'members'}
-    onclick={() => (tab = 'members')}>Anggota<em>{p.members.length}</em></button
   >
   <button
     role="tab"
@@ -642,33 +627,6 @@
   </div>
 {:else if tab === 'materials'}
   {#key p.id}<ProjectMaterials projectId={p.id} workOrders={rows} />{/key}
-{:else if tab === 'members'}
-  <div class="pane">
-    {#if p.can.manageMembers}
-      <div><Button icon="plus" onclick={() => (memberOpen = true)}>Tambah anggota</Button></div>
-    {/if}
-    <ul class="list">
-      {#each p.members as mm (mm.userId)}
-        <li>
-          <Avatar name={mm.fullName} src={mm.avatarUrl} size={32} />
-          <span class="f">
-            <b>{mm.fullName}</b>
-            <small>
-              {mm.roleName} · {mm.projectRole}{mm.isProjectManager ? ' · Pengelola' : ''}
-            </small>
-          </span>
-          {#if p.can.manageMembers}
-            <Button
-              variant="ghost"
-              icon="x"
-              aria-label={`Keluarkan ${mm.fullName}`}
-              onclick={() => removeMember(mm.userId)}
-            />
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  </div>
 {:else}
   <div class="pane documents">
     {#if p.can.upload}
@@ -780,45 +738,79 @@
 <Modal bind:open={infoOpen} title="Edit info project" width={560}>
   <form id="project-info" class="g" onsubmit={saveInfo} novalidate>
     {#if infoMessage}<p role="alert">{infoMessage}</p>{/if}
-    <Input
-      label="Nama project"
-      bind:value={info.name}
-      error={infoErrors.name}
-      required
-      maxlength={160}
-    />
-    <Input
-      label="Nama klien"
-      bind:value={info.clientName}
-      error={infoErrors.clientName}
-      required
-      maxlength={120}
-    />
-    <Input
-      label="No RPO"
-      bind:value={info.rpoNumber}
-      error={infoErrors.rpoNumber}
-      required
-      maxlength={40}
-    />
-    <Input label="Lokasi" bind:value={info.location} error={infoErrors.location} maxlength={160} />
-    <Input
-      label="Tanggal mulai"
-      type="date"
-      bind:value={info.startDate}
-      error={infoErrors.startDate}
-      required
-    />
-    <Input
-      label="Tanggal selesai"
-      type="date"
-      bind:value={info.endDate}
-      error={infoErrors.endDate}
-      required
-    />
-    <Field label="Deskripsi" id="info-desc" error={infoErrors.description}>
-      <textarea id="info-desc" bind:value={info.description} rows="3" maxlength={500}></textarea>
+    <Field label="Status project" id="info-status">
+      <select
+        id="info-status"
+        bind:value={nextStatus}
+        disabled={!editStatusTargets.length || infoSaving}
+      >
+        <option value={initialStatus}>{PROJECT_STATUS_LABEL[initialStatus]}</option>
+        {#each editStatusTargets as target (target)}
+          <option value={target}>{PROJECT_STATUS_LABEL[target]}</option>
+        {/each}
+      </select>
     </Field>
+    {#if statusChange}
+      <Field
+        label={needsReason ? 'Alasan perubahan status' : 'Catatan status (opsional)'}
+        id="info-note"
+        error={infoErrors.note}
+      >
+        <textarea
+          id="info-note"
+          bind:value={note}
+          rows="2"
+          maxlength="300"
+          required={needsReason}
+          disabled={infoSaving}></textarea>
+      </Field>
+    {/if}
+    {#if p.can.edit}
+      <Input
+        label="Nama project"
+        bind:value={info.name}
+        error={infoErrors.name}
+        required
+        maxlength={160}
+      />
+      <Input
+        label="Nama klien"
+        bind:value={info.clientName}
+        error={infoErrors.clientName}
+        required
+        maxlength={120}
+      />
+      <Input
+        label="No RPO"
+        bind:value={info.rpoNumber}
+        error={infoErrors.rpoNumber}
+        required
+        maxlength={40}
+      />
+      <Input
+        label="Lokasi"
+        bind:value={info.location}
+        error={infoErrors.location}
+        maxlength={160}
+      />
+      <Input
+        label="Tanggal mulai"
+        type="date"
+        bind:value={info.startDate}
+        error={infoErrors.startDate}
+        required
+      />
+      <Input
+        label="Tanggal selesai"
+        type="date"
+        bind:value={info.endDate}
+        error={infoErrors.endDate}
+        required
+      />
+      <Field label="Deskripsi" id="info-desc" error={infoErrors.description}>
+        <textarea id="info-desc" bind:value={info.description} rows="3" maxlength={500}></textarea>
+      </Field>
+    {/if}
   </form>
   {#snippet footer()}
     <Button onclick={() => (infoOpen = false)}>Batal</Button>
@@ -865,66 +857,29 @@
   {/snippet}
 </Modal>
 
-<Modal bind:open={statusOpen} title="Ubah status project" width={460}>
-  <form id="st-f" class="g" onsubmit={saveStatus}>
-    <Field label="Status" id="st-s">
-      <select id="st-s" bind:value={nextStatus}>
-        {#each statusTargets as s (s)}
-          <option value={s}>
-            {PROJECT_STATUS_LABEL[s]}
-          </option>
-        {/each}
-      </select>
-    </Field>
-    <Field
-      label="Catatan / alasan"
-      id="st-n"
-      hint="Wajib saat menunda atau membuka kembali project."
-    >
-      <textarea id="st-n" bind:value={note} rows="3" maxlength="300"></textarea>
-    </Field>
-  </form>
-  {#snippet footer()}
-    <Button onclick={() => (statusOpen = false)}>Batal</Button>
-    <Button variant="primary" type="submit" form="st-f" loading={busy}>Simpan</Button>
-  {/snippet}
-</Modal>
+{#if memberOpen}
+  {#key p.id}
+    <ProjectMembersModal
+      project={p}
+      onclose={() => (memberOpen = false)}
+      onchange={() => invalidate('app:project')}
+    />
+  {/key}
+{/if}
 
-<Modal bind:open={memberOpen} title="Tambah anggota" width={480}>
-  <form id="mb-f" class="g" onsubmit={addMember}>
-    <Input label="Cari pengguna" bind:value={q} placeholder="Nama atau username" />
-    <ul class="pick">
-      {#each candidates as u (u.id)}
-        <li>
-          <label>
-            <input type="radio" name="mb-u" value={u.id} bind:group={m.userId} />
-            <Avatar name={u.fullName} src={u.avatarUrl} size={24} />
-            <span>{u.fullName}<small class="faint"> · {u.roleName}</small></span>
-          </label>
-        </li>
-      {/each}
-    </ul>
-    <Input label="Peran di project" bind:value={m.projectRole} maxlength={40} />
-    <Toggle bind:checked={m.isProjectManager} label="Pengelola project" showLabel />
-  </form>
-  {#snippet footer()}
-    <Button onclick={() => (memberOpen = false)}>Batal</Button>
-    <Button variant="primary" type="submit" form="mb-f" loading={busy} disabled={!m.userId}>
-      Tambahkan
-    </Button>
-  {/snippet}
-</Modal>
-
-{#if mediaOpen && p.can.edit}
-  <ProjectMediaModal
-    project={p}
-    onclose={() => (mediaOpen = false)}
-    onsaved={async () => {
-      mediaOpen = false;
-      await invalidate('app:project');
-      await invalidate('app:projects');
-    }}
-  />
+{#if mediaKind && p.can.edit}
+  {#key p.id}
+    <ProjectMediaModal
+      project={p}
+      kind={mediaKind}
+      onclose={() => (mediaKind = null)}
+      onsaved={async () => {
+        mediaKind = null;
+        await invalidate('app:project');
+        await invalidate('app:projects');
+      }}
+    />
+  {/key}
 {/if}
 
 <style>
@@ -996,6 +951,8 @@
     padding: 24px;
   }
   .banner {
+    display: block;
+    width: 100%;
     overflow: hidden;
     height: 72px;
     background: linear-gradient(100deg, var(--color-accent-subtle), var(--color-bg-subtle));
@@ -1014,6 +971,7 @@
     flex-wrap: wrap;
   }
   .clogo {
+    position: relative;
     overflow: hidden;
     flex: none;
     display: grid;
@@ -1038,6 +996,39 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+  .media-edit {
+    position: relative;
+    cursor: pointer;
+  }
+  .media-edit:focus-visible {
+    outline: 2px solid var(--color-accent-default);
+    outline-offset: -2px;
+  }
+  .banner-edit,
+  .logo-edit {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    color: var(--color-text-primary);
+  }
+  .banner-edit {
+    inset: 10px 12px auto auto;
+    padding: 4px 8px;
+    border-radius: var(--radius-md);
+    font: var(--text-caption);
+  }
+  .logo-edit {
+    inset: auto 2px 2px auto;
+    padding: 2px;
+    border-radius: var(--radius-sm);
+  }
+  .media-edit:is(:hover, :focus-visible) :is(.banner-edit, .logo-edit) {
+    background: var(--color-accent-subtle);
+    color: var(--color-accent-default);
   }
   .meta {
     display: flex;
@@ -1189,22 +1180,6 @@
     padding: 16px 24px 32px;
     max-width: 720px;
   }
-  .list li {
-    padding: 8px 0;
-    border-bottom: 1px solid var(--color-border-default);
-  }
-  .list .f {
-    display: flex;
-    text-align: start;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-    flex: 1;
-    overflow-wrap: anywhere;
-  }
-  .list .f small {
-    color: var(--color-text-secondary);
-  }
   .fi {
     flex-shrink: 0;
     object-fit: cover;
@@ -1226,23 +1201,6 @@
     flex-direction: column;
     gap: 12px;
   }
-  .pick {
-    max-height: 220px;
-    overflow: auto;
-    gap: 2px;
-  }
-  .pick label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 6px;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-  }
-  .pick label:hover {
-    background: var(--color-bg-hover);
-  }
   @media (max-width: 1023px) {
     .layout {
       grid-template-columns: 1fr;
@@ -1253,12 +1211,6 @@
     }
   }
   @media (max-width: 767px) {
-    .list li {
-      flex-wrap: wrap;
-    }
-    .list .f {
-      flex-basis: calc(100% - 40px);
-    }
     .ph,
     .tabs {
       padding-left: 16px;

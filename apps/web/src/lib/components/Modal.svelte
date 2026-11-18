@@ -45,6 +45,12 @@
   const FOCUSABLE =
     'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
+  function focusables(root: HTMLElement) {
+    return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+      (el) => el.tabIndex >= 0 && el.getClientRects().length > 0,
+    );
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -52,7 +58,7 @@
       return;
     }
     if (e.key !== 'Tab' || !panel) return;
-    const items = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)];
+    const items = focusables(panel);
     if (!items.length) return;
     const first = items[0]!;
     const last = items[items.length - 1]!;
@@ -70,10 +76,9 @@
     const prev = document.activeElement as HTMLElement | null;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    const body = panel.querySelector<HTMLElement>('.m-b');
     const target =
-      panel.querySelector<HTMLElement>('[autofocus]') ??
-      panel.querySelector<HTMLElement>('.m-b ' + FOCUSABLE.split(',').join(', .m-b ')) ??
-      panel;
+      panel.querySelector<HTMLElement>('[autofocus]') ?? (body && focusables(body)[0]) ?? panel;
     target.focus();
     return () => {
       document.body.style.overflow = overflow;
