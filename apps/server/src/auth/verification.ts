@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { userContacts, verificationCodes } from '../db/schema';
+import { userContacts, users, verificationCodes } from '../db/schema';
 import type { Env } from '../env';
 import { hmacHex, randomToken, safeEqual, sha256Hex, sixDigitCode } from '../lib/crypto';
 import { HttpError } from '../lib/http';
@@ -18,7 +18,11 @@ export const tokenInvalid = () =>
 type MailDeps = { db: Db; env: Env; mail: MailProvider };
 
 /** Matikan kode/tautan lama yang belum dipakai untuk tujuan yang sama. */
-async function expireOutstanding(db: Db, userId: string, purpose: 'activate' | 'verify_email') {
+export async function expireOutstanding(
+  db: Pick<Db, 'update'>,
+  userId: string,
+  purpose: 'activate' | 'verify_email' | 'reset_password',
+) {
   await db
     .update(verificationCodes)
     .set({ expiresAt: new Date() })
@@ -101,17 +105,26 @@ export async function issueEmailVerification(
   p: { userId: string; contactId: string; email: string; name: string },
 ): Promise<{ sent: boolean }> {
   const { db, env, mail } = deps;
-  await expireOutstanding(db, p.userId, 'verify_email');
   const code = sixDigitCode();
   const token = randomToken(32);
-  await db.insert(verificationCodes).values({
-    userId: p.userId,
-    contactId: p.contactId,
-    purpose: 'verify_email',
-    codeHash: hmacHex(code, env.AUTH_PEPPER),
-    tokenHash: sha256Hex(token),
-    expiresAt: new Date(Date.now() + EMAIL_CODE_TTL_MS),
+  const created = await db.transaction(async (tx) => {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, p.userId)).for('update');
+    const contact = await tx.query.userContacts.findFirst({
+      where: eq(userContacts.id, p.contactId),
+    });
+    if (!contact || contact.verifiedAt || (!contact.pending && !contact.isPrimary)) return false;
+    await expireOutstanding(tx, p.userId, 'verify_email');
+    await tx.insert(verificationCodes).values({
+      userId: p.userId,
+      contactId: p.contactId,
+      purpose: 'verify_email',
+      codeHash: hmacHex(code, env.AUTH_PEPPER),
+      tokenHash: sha256Hex(token),
+      expiresAt: new Date(Date.now() + EMAIL_CODE_TTL_MS),
+    });
+    return true;
   });
+  if (!created) return { sent: false };
   const link = `${env.APP_URL}/verifikasi/email?token=${encodeURIComponent(token)}`;
   try {
     await mail.send({ to: p.email, ...verifyEmailMail({ name: p.name, code, link }) });
@@ -122,20 +135,35 @@ export async function issueEmailVerification(
 }
 
 /** Tandai kontak email terverifikasi. Menolak jika email yang sama sudah terverifikasi milik user lain. */
-export async function markEmailVerified(db: Db, contactId: string): Promise<void> {
-  const contact = await db.query.userContacts.findFirst({ where: eq(userContacts.id, contactId) });
-  if (!contact) throw tokenInvalid();
-  if (contact.verifiedAt) return;
-  const taken = await db.query.userContacts.findFirst({
-    where: and(
-      eq(userContacts.kind, 'email'),
-      eq(userContacts.value, contact.value),
-      ne(userContacts.id, contact.id),
-      sql`${userContacts.verifiedAt} is not null`,
-    ),
-  });
-  if (taken) throw new HttpError(409, 'EMAIL_TAKEN', 'Email ini sudah dipakai akun lain');
+async function markEmailVerified(db: Db, userId: string, contactId: string, codeId: string) {
   await db.transaction(async (tx) => {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
+    const contact = await tx.query.userContacts.findFirst({
+      where: eq(userContacts.id, contactId),
+    });
+    if (!contact || (!contact.pending && !contact.isPrimary)) throw tokenInvalid();
+    const [claimed] = await tx
+      .update(verificationCodes)
+      .set({ consumedAt: new Date() })
+      .where(
+        and(
+          eq(verificationCodes.id, codeId),
+          isNull(verificationCodes.consumedAt),
+          gt(verificationCodes.expiresAt, sql`clock_timestamp()`),
+          sql`${verificationCodes.attempts} < ${MAX_CODE_ATTEMPTS}`,
+        ),
+      )
+      .returning({ id: verificationCodes.id });
+    if (!claimed) throw tokenInvalid();
+    const taken = await tx.query.userContacts.findFirst({
+      where: and(
+        eq(userContacts.kind, 'email'),
+        eq(userContacts.value, contact.value),
+        ne(userContacts.id, contact.id),
+        sql`${userContacts.verifiedAt} is not null`,
+      ),
+    });
+    if (taken) throw new HttpError(409, 'EMAIL_TAKEN', 'Email ini sudah dipakai akun lain');
     await tx
       .update(userContacts)
       .set({ isPrimary: false, pending: false })
@@ -182,8 +210,7 @@ export async function verifyEmailCode(
       { code: 'Kode salah' },
     );
   }
-  await markEmailVerified(db, row.contactId);
-  await consumeCode(db, row.id);
+  await markEmailVerified(db, row.userId, row.contactId, row.id);
   return { contactId: row.contactId };
 }
 
@@ -201,8 +228,7 @@ export async function verifyEmailToken(
     ),
   });
   if (!row || !row.contactId) throw tokenInvalid();
-  await markEmailVerified(db, row.contactId);
-  await consumeCode(db, row.id);
+  await markEmailVerified(db, row.userId, row.contactId, row.id);
   return { userId: row.userId, contactId: row.contactId };
 }
 

@@ -23,7 +23,10 @@ export interface NewSession {
   userAgent?: string | null;
 }
 
-export async function createSession(db: Db, p: NewSession): Promise<{ token: string; id: string }> {
+export async function createSession(
+  db: Pick<Db, 'insert' | 'update'>,
+  p: NewSession,
+): Promise<{ token: string; id: string }> {
   const token = randomToken(32);
   const now = Date.now();
   const [row] = await db
@@ -179,7 +182,7 @@ export async function revokeSession(db: Db, id: string): Promise<void> {
 
 /** Logout semua: cabut semua sesi dan akhiri status trusted semua perangkat (PRD §5). */
 export async function revokeAllSessions(
-  db: Db,
+  db: Pick<Db, 'update'>,
   userId: string,
   opts: { untrustDevices?: boolean } = {},
 ): Promise<void> {
@@ -195,7 +198,7 @@ export async function revokeAllSessions(
 
 /** Daftarkan/perbarui perangkat. `trusted` → perangkat dipercaya 30 hari (FR-001 AC4). */
 export async function registerDevice(
-  db: Db,
+  db: Pick<Db, 'insert'>,
   userId: string,
   deviceId: string,
   label: string,

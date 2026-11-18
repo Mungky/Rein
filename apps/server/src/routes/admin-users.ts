@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { audit } from '../audit';
 import { authOf, requirePermission, requireVerified } from '../auth/middleware';
 import { revokeAllSessions } from '../auth/session';
+import { issuePasswordReset } from '../auth/password-reset';
 import { assertAssignableRole, assertManageableUser, managesRoles } from '../auth/permissions';
 import { issueActivation, primaryEmailContact } from '../auth/verification';
 import { markWhatsAppVerified } from '../auth/wa-verification';
@@ -271,6 +272,33 @@ export const adminUserRoutes = new Hono<AppEnv>()
   })
 
   /** FR-091: reset PIN semua perangkat user (wajib login password lalu buat PIN baru). */
+  .post('/users/:id/reset-password', requirePermission('admin.users'), async (c) => {
+    const a = authOf(c);
+    const { db, mail, limits } = c.var.deps;
+    const id = c.req.param('id');
+    const user = await db.query.users.findFirst({ where: eq(users.id, id) });
+    if (!user) throw notFound('Pengguna tidak ditemukan');
+    await assertManageableUser(db, a, user);
+    if (user.status !== 'active')
+      throw new HttpError(409, 'INACTIVE', 'Reset password hanya untuk pengguna aktif');
+    if (mail.name === 'null')
+      throw new HttpError(409, 'MAIL_DISABLED', 'Layanan pengiriman email belum aktif');
+    const contact = await primaryEmailContact(db, id);
+    if (!contact?.verifiedAt)
+      throw new HttpError(409, 'NO_EMAIL', 'Pengguna belum memiliki email aktif terverifikasi');
+    if (!limits.emailSend.take(`reset:user:${id}`))
+      throw new HttpError(429, 'RATE_LIMITED', 'Batas pengiriman tercapai. Coba lagi nanti.');
+    if (
+      !(await issuePasswordReset(c.var.deps, id, {
+        actorId: a.user.id,
+        ip: c.var.ip,
+        userAgent: userAgent(c),
+      }))
+    )
+      throw new HttpError(502, 'MAIL_FAILED', 'Tautan reset gagal dikirim. Coba lagi nanti.');
+    return c.json({ ok: true });
+  })
+
   .post('/users/:id/reset-pin', requirePermission('admin.users'), async (c) => {
     const a = authOf(c);
     const { db } = c.var.deps;
@@ -278,20 +306,25 @@ export const adminUserRoutes = new Hono<AppEnv>()
     const user = await db.query.users.findFirst({ where: eq(users.id, id) });
     if (!user) throw notFound('Pengguna tidak ditemukan');
     await assertManageableUser(db, a, user);
-    const res = await db
-      .update(devices)
-      .set({ pinHash: null, pinFailedCount: 0, pinDisabledAt: null, updatedAt: new Date() })
-      .where(eq(devices.userId, id));
-    await audit(db, {
-      actorId: a.user.id,
-      action: 'auth.pin.reset_by_admin',
-      entityType: 'user',
-      entityId: id,
-      diff: { devices: res.rowCount ?? 0 },
-      ip: c.var.ip,
-      userAgent: userAgent(c),
+    if (user.status !== 'active')
+      throw new HttpError(409, 'INACTIVE', 'Reset PIN hanya untuk pengguna aktif');
+    const count = await db.transaction(async (tx) => {
+      const res = await tx
+        .update(devices)
+        .set({ pinHash: null, pinFailedCount: 0, pinDisabledAt: null, updatedAt: new Date() })
+        .where(eq(devices.userId, id));
+      await audit(tx, {
+        actorId: a.user.id,
+        action: 'auth.pin.reset_by_admin',
+        entityType: 'user',
+        entityId: id,
+        diff: { devices: res.rowCount ?? 0 },
+        ip: c.var.ip,
+        userAgent: userAgent(c),
+      });
+      return res.rowCount ?? 0;
     });
-    return c.json({ ok: true, devices: res.rowCount ?? 0 });
+    return c.json({ ok: true, devices: count });
   })
 
   /** FR-003 AC2 fallback: Admin memverifikasi nomor WA secara manual. */
@@ -302,6 +335,8 @@ export const adminUserRoutes = new Hono<AppEnv>()
     const user = await db.query.users.findFirst({ where: eq(users.id, id) });
     if (!user) throw notFound('Pengguna tidak ditemukan');
     await assertManageableUser(db, a, user);
+    if (user.status === 'disabled')
+      throw new HttpError(409, 'INACTIVE', 'Aktifkan pengguna sebelum memverifikasi nomor');
     const { phone } = await readJson(c, adminVerifyWhatsAppSchema);
     let contact = phone
       ? await db.query.userContacts.findFirst({

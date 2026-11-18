@@ -1,6 +1,7 @@
 <script lang="ts">
   import { safeNextPath } from '@rein/shared';
   import { goto } from '$app/navigation';
+  import { resolve } from '$app/paths';
   import { page } from '$app/state';
   import { api, ApiError } from '$lib/api';
   import Button from '$lib/components/Button.svelte';
@@ -98,6 +99,7 @@
   <Checkbox bind:checked={remember}>Ingat perangkat ini</Checkbox>
   <Button type="submit" variant="primary" size="md" block {loading}>Masuk</Button>
 </form>
+<a href={resolve('/reset-password')}>Lupa password?</a>
 
 {#if data.googleEnabled}
   <div class="or"><span>atau</span></div>
