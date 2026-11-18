@@ -114,6 +114,13 @@
   .clock:hover {
     background: var(--color-bg-hover);
   }
+  @media (max-width: 767px) {
+    .clock,
+    .calendar button {
+      min-width: 44px;
+      min-height: 44px;
+    }
+  }
   time {
     font-variant-numeric: tabular-nums;
   }

@@ -20,7 +20,7 @@ import {
   type WoStatus,
 } from '@rein/shared';
 import { and, asc, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { audit } from '../audit';
 import { authOf, requireVerified } from '../auth/middleware';
@@ -41,6 +41,7 @@ import {
   woWatchers,
   workOrders,
   type WorkOrder,
+  type LogbookEntry,
 } from '../db/schema';
 import { forbidden, HttpError, notFound, readJson, validate } from '../lib/http';
 import { userAgent } from '../lib/ip';
@@ -54,6 +55,19 @@ type Db = Deps['db'];
 const hashOf = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const stale = () =>
   new HttpError(409, 'STALE', 'WO sudah diubah orang lain. Muat ulang lalu coba lagi.');
+const LOGBOOK_EDIT_MS = 24 * 60 * 60_000;
+
+function canEditLogbook(
+  a: AuthContext,
+  entry: Pick<LogbookEntry, 'kind' | 'createdAt'>,
+  authorId: string,
+) {
+  return (
+    (entry.kind === 'note' || entry.kind === 'comment') &&
+    canDo(a, 'logbook.edit.own', { ownerIds: [authorId] }) &&
+    Date.now() - entry.createdAt.getTime() <= LOGBOOK_EDIT_MS
+  );
+}
 
 async function loadWo(db: Db, a: AuthContext, woId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(woId)) throw notFound('WO tidak ditemukan');
@@ -784,6 +798,7 @@ export const woRoutes = new Hono<AppEnv>()
     return c.json({
       entries: page.map(({ author, ...e }) => ({
         ...e,
+        canEdit: canEditLogbook(a, e, author.id),
         author: {
           id: author.id,
           fullName: author.fullName,
@@ -794,6 +809,9 @@ export const woRoutes = new Hono<AppEnv>()
       nextCursor: rows.length > 20 ? page[page.length - 1]!.createdAt.toISOString() : null,
     });
   })
+
+  .patch('/:id/logbook/:entryId', (c) => mutateLogbook(c, false))
+  .delete('/:id/logbook/:entryId', (c) => mutateLogbook(c, true))
 
   /** Catatan + progres opsional disimpan atomik; status catatan terpisah dari status WO. */
   .post('/:id/logbook', async (c) => {
@@ -812,7 +830,7 @@ export const woRoutes = new Hono<AppEnv>()
       ),
     });
     if (dup) {
-      if (dup.requestHash !== digest) {
+      if (dup.requestHash !== digest || dup.woId !== wo.id || dup.kind === 'system') {
         throw new HttpError(409, 'CLIENT_ID_REUSED', 'ID logbook sudah dipakai untuk catatan lain');
       }
       return c.json({ id: dup.id, duplicate: true });
@@ -834,7 +852,11 @@ export const woRoutes = new Hono<AppEnv>()
         ),
       });
       if (repeated) {
-        if (repeated.requestHash !== digest)
+        if (
+          repeated.requestHash !== digest ||
+          repeated.woId !== wo.id ||
+          repeated.kind === 'system'
+        )
           throw new HttpError(
             409,
             'CLIENT_ID_REUSED',
@@ -1088,6 +1110,76 @@ export const woRoutes = new Hono<AppEnv>()
     return c.json({ ok: true }, 201);
   });
 
+const logbookVersion = z.object({ expectedEditedAt: z.iso.datetime({ offset: true }).nullable() });
+const logbookEdit = logbookVersion.extend({
+  body: z.string().trim().max(5000, 'Catatan maksimal 5.000 karakter'),
+});
+
+async function mutateLogbook(c: Context<AppEnv>, remove: boolean) {
+  const a = authOf(c);
+  const { db } = c.var.deps;
+  const { wo } = await loadWo(db, a, c.req.param('id') ?? '');
+  const entryId = c.req.param('entryId') ?? '';
+  if (!z.uuid().safeParse(entryId).success) throw notFound('Entri Logbook tidak ditemukan');
+  const { expectedEditedAt, body } = remove
+    ? { ...(await readJson(c, logbookVersion)), body: undefined }
+    : await readJson(c, logbookEdit);
+  await db.transaction(async (tx) => {
+    const [entry] = await tx
+      .select()
+      .from(logbookEntries)
+      .where(
+        and(
+          eq(logbookEntries.id, entryId),
+          eq(logbookEntries.woId, wo.id),
+          isNull(logbookEntries.deletedAt),
+        ),
+      )
+      .for('update');
+    if (!entry) throw notFound('Entri Logbook tidak ditemukan');
+    if (!canEditLogbook(a, entry, entry.authorId))
+      throw forbidden('Hanya penulis dengan izin yang dapat mengubah catatan dalam 24 jam');
+    if ((entry.editedAt?.toISOString() ?? null) !== expectedEditedAt)
+      throw new HttpError(
+        409,
+        'STALE',
+        'Catatan sudah berubah. Buka kembali entri untuk meninjau perubahan.',
+      );
+    if (body === '') {
+      const file = await tx.query.attachments.findFirst({
+        where: and(
+          eq(attachments.ownerType, 'logbook'),
+          eq(attachments.ownerId, entry.id),
+          isNull(attachments.deletedAt),
+        ),
+      });
+      if (!file && entry.progressTo === null)
+        throw new HttpError(422, 'VALIDATION', 'Isi catatan sebelum menyimpan');
+    }
+    if (!remove && body === entry.body) return;
+    const now = new Date(Math.max(Date.now(), (entry.editedAt?.getTime() ?? 0) + 1));
+    await tx
+      .update(logbookEntries)
+      .set(remove ? { deletedAt: now } : { body, editedAt: now })
+      .where(eq(logbookEntries.id, entry.id));
+    await audit(tx, {
+      actorId: a.user.id,
+      action: remove ? 'logbook.deleted' : 'logbook.updated',
+      entityType: 'logbook',
+      entityId: entry.id,
+      diff: { woId: wo.id, before: entry.body, ...(body !== undefined ? { after: body } : {}) },
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+  });
+  publishToUsers([a.user.id, ...(await watchersOf(db, wo.id))], {
+    type: 'wo',
+    woId: wo.id,
+    projectId: wo.projectId,
+  });
+  return c.json({ ok: true });
+}
+
 /** Ubah status + efek samping (PRD §4.5): progres, entri system, progress_events, notifikasi. */
 async function changeStatus(
   tx: Tx,
@@ -1098,10 +1190,9 @@ async function changeStatus(
   reason: string | undefined,
   ip: string,
   ua: string | null,
-  opts: { entryId?: string; hasLogbook?: boolean; progress?: number } = {},
 ): Promise<string[]> {
   const check = checkWoTransition(wo.status, to, actorOf(a, wo, acc), {
-    hasLogbook: opts.hasLogbook ?? (await hasLogbook(tx, wo.id)),
+    hasLogbook: await hasLogbook(tx, wo.id),
   });
   if (!check.ok) {
     throw new HttpError(check.code === 'LOGBOOK_REQUIRED' ? 422 : 403, check.code, check.message);
@@ -1109,12 +1200,13 @@ async function changeStatus(
   if (check.reasonRequired && !reason) {
     throw new HttpError(422, 'VALIDATION', 'Alasan wajib diisi', { reason: 'Alasan wajib diisi' });
   }
-  const progress = to === 'done' ? 100 : (opts.progress ?? wo.progress);
+  const progress = to === 'done' ? 100 : wo.progress;
   await tx
     .update(workOrders)
     .set({
       status: to,
       progress,
+      updatedAt: new Date(Math.max(Date.now(), wo.updatedAt.getTime() + 1)),
       completedAt: to === 'done' ? new Date() : null,
       canceledReason: to === 'canceled' ? (reason ?? null) : null,
     })
@@ -1123,13 +1215,15 @@ async function changeStatus(
     woId: wo.id,
     progress,
     status: to,
-    sourceEntryId: opts.entryId ?? null,
   });
   const verb =
     wo.status === 'review' && to === 'in_progress'
       ? `Dikembalikan: ${reason}`
       : `${a.user.fullName} mengubah status ${WO_STATUS_LABEL[wo.status]} → ${WO_STATUS_LABEL[to]}${reason ? ` (${reason})` : ''}`;
-  await systemEntry(tx, wo.id, a.user.id, verb, { statusFrom: wo.status, statusTo: to });
+  await systemEntry(tx, wo.id, a.user.id, verb, {
+    statusFrom: wo.status,
+    statusTo: to,
+  });
   await audit(tx, {
     actorId: a.user.id,
     action: 'wo.status_changed',

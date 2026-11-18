@@ -151,6 +151,7 @@ export interface LogEntry {
   statusTo: WoStatus | null;
   createdAt: string;
   editedAt: string | null;
+  canEdit: boolean;
   author: Person;
   attachments: FileItem[];
 }

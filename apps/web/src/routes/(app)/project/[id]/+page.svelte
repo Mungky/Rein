@@ -4,8 +4,11 @@
     checkProjectTransition,
     PROJECT_STATUS_LABEL,
     PROJECT_STATUSES,
+    projectCreateSchema,
     WO_CATEGORY_META,
     WO_STATUS_LABEL,
+    WO_STATUSES,
+    todayWib,
     woReasonRequired,
     type ProjectStatus,
     type WoCategory,
@@ -40,12 +43,78 @@
   import { onLive } from '$lib/live.svelte';
   import { toast } from '$lib/toast.svelte';
   import type { WoRow } from '$lib/types';
+  import { sortWorklist, type WorklistGroup, type WorklistSort } from '$lib/worklist';
 
   /** Detail project (Figma D/04c–05, M/04–05; FR-021–026, FR-070–071). */
   let { data } = $props();
   const p = $derived(data.project);
   let mediaOpen = $state(false);
   let rows = $derived<WoRow[]>(data.workOrders);
+  let infoOpen = $state(false);
+  let infoSaving = $state(false);
+  let infoVersion = '';
+  let infoErrors = $state<Record<string, string>>({});
+  let infoMessage = $state('');
+  let info = $state({
+    name: '',
+    clientName: '',
+    rpoNumber: '',
+    location: '',
+    startDate: '',
+    endDate: '',
+    description: '',
+  });
+
+  function openInfo() {
+    info = {
+      name: p.name,
+      clientName: p.client.name,
+      rpoNumber: p.rpoNumber,
+      location: p.location ?? '',
+      startDate: p.startDate,
+      endDate: p.endDate,
+      description: p.description ?? '',
+    };
+    infoVersion = p.updatedAt;
+    infoErrors = {};
+    infoMessage = '';
+    infoOpen = true;
+  }
+
+  async function saveInfo(e: SubmitEvent) {
+    e.preventDefault();
+    if (infoSaving) return;
+    infoErrors = {};
+    infoMessage = '';
+    const parsed = projectCreateSchema.safeParse(info);
+    if (!parsed.success) {
+      infoErrors = Object.fromEntries(
+        parsed.error.issues.map((issue) => [String(issue.path[0]), issue.message]),
+      );
+      return;
+    }
+    infoSaving = true;
+    try {
+      await api(`/api/projects/${p.id}`, {
+        method: 'PATCH',
+        body: {
+          ...parsed.data,
+          location: parsed.data.location || null,
+          description: parsed.data.description || null,
+          expectedUpdatedAt: infoVersion,
+        },
+      });
+      infoOpen = false;
+      toast('Info project diperbarui');
+      await invalidate('app:project');
+      await invalidate('app:projects');
+    } catch (err) {
+      if (err instanceof ApiError && Object.keys(err.fields).length) infoErrors = err.fields;
+      else infoMessage = err instanceof ApiError ? err.message : 'Gagal menyimpan info project.';
+    } finally {
+      infoSaving = false;
+    }
+  }
 
   $effect(() => {
     setChrome({
@@ -88,12 +157,39 @@
   let cat = $state<WoCategory | ''>('');
   let onlyUrgent = $state(false);
   let pic = $state('');
+  let kind = $state('');
+  let status = $state<WoStatus | ''>('');
+  let onlyHelp = $state(false);
+  let deadline = $state<'' | 'late' | 'next7' | 'range'>('');
+  let from = $state('');
+  let to = $state('');
+  let groupBy = $state<WorklistGroup>('status');
+  let sort = $state<WorklistSort>('deadline');
+  const kinds = $derived(
+    [...new Map(rows.map((w) => [w.type.id, w.type])).values()].sort((a, b) =>
+      a.name.localeCompare(b.name, 'id'),
+    ),
+  );
+  const today = todayWib();
+  const nextWeek = new Date(Date.parse(today) + 7 * 86_400_000).toISOString().slice(0, 10);
+  const dueFrom = $derived(deadline === 'range' ? from : deadline === 'next7' ? today : '');
+  const dueTo = $derived(deadline === 'range' ? to : deadline === 'next7' ? nextWeek : '');
   const filtered = $derived(
-    rows.filter(
-      (w) =>
-        (!cat || w.type.category === cat) &&
-        (!onlyUrgent || w.urgent) &&
-        (!pic || w.assignee.id === pic),
+    sortWorklist(
+      rows.filter(
+        (w) =>
+          (!cat || w.type.category === cat) &&
+          (!onlyUrgent || w.urgent) &&
+          (!pic || w.assignee.id === pic) &&
+          (!kind || w.type.id === kind) &&
+          (!status || w.status === status) &&
+          (!onlyHelp || w.helpOpen) &&
+          (deadline !== 'late' || w.overdue) &&
+          (deadline !== 'next7' || (w.status !== 'done' && w.status !== 'canceled')) &&
+          (!dueFrom || w.deadline >= dueFrom) &&
+          (!dueTo || w.deadline <= dueTo),
+      ),
+      sort,
     ),
   );
 
@@ -346,6 +442,7 @@
       <Progress value={p.progress} width={180} />
     </div>
     <div class="acts">
+      {#if p.can.edit}<Button icon="edit" onclick={openInfo}>Edit info</Button>{/if}
       {#if p.can.edit}<Button icon="image" onclick={() => (mediaOpen = true)}>Foto & banner</Button
         >{/if}
       {#if statusTargets.length}
@@ -359,6 +456,7 @@
   {#if p.status === 'on_hold' && p.onHoldReason}
     <p class="hold"><Icon name="clock" size={14} />Ditunda: {p.onHoldReason}</p>
   {/if}
+  {#if p.description}<p class="muted">{p.description}</p>{/if}
   {#if p.categories.length}<CategoryBar categories={p.categories} />{/if}
 </header>
 
@@ -426,11 +524,56 @@
           {view === 'kanban'
             ? 'Seret kartu untuk mengubah status'
             : view === 'table'
-              ? 'Kelompok: Status'
+              ? ''
               : view === 'scurve'
                 ? 'Rencana vs aktual'
                 : 'Jadwal Work Order'}
         </span>
+      </div>
+      <div class="toolbar filters">
+        <select class="chip" aria-label="Filter jenis WO" bind:value={kind}>
+          <option value="">Semua jenis</option>
+          {#each kinds as type (type.id)}<option value={type.id}>{type.name}</option>{/each}
+        </select>
+        <select class="chip" aria-label="Filter status WO" bind:value={status}>
+          <option value="">Semua status</option>
+          {#each WO_STATUSES as item (item)}<option value={item}>{WO_STATUS_LABEL[item]}</option
+            >{/each}
+        </select>
+        <select class="chip" aria-label="Filter deadline" bind:value={deadline}>
+          <option value="">Semua deadline</option>
+          <option value="late">Terlambat</option>
+          <option value="next7">7 hari ke depan</option>
+          <option value="range">Rentang tanggal</option>
+        </select>
+        {#if deadline === 'range'}
+          <Input label="Deadline dari" type="date" bind:value={from} max={to || undefined} />
+          <Input label="Deadline sampai" type="date" bind:value={to} min={from || undefined} />
+        {/if}
+        <button
+          class="chip"
+          class:on={onlyHelp}
+          aria-pressed={onlyHelp}
+          onclick={() => (onlyHelp = !onlyHelp)}
+        >
+          <Icon name="flag" size={12} />Butuh bantuan
+        </button>
+        {#if view === 'table'}
+          <select class="chip" aria-label="Kelompok worklist" bind:value={groupBy}>
+            <option value="status">Grup: Status</option>
+            <option value="category">Grup: Kategori</option>
+            <option value="type">Grup: Jenis</option>
+            <option value="pic">Grup: PIC</option>
+            <option value="none">Tanpa grup</option>
+          </select>
+        {/if}
+        {#if view !== 'scurve'}
+          <select class="chip" aria-label="Urutkan worklist" bind:value={sort}>
+            <option value="deadline">Urut: Deadline</option>
+            <option value="number">Urut: Nomor WO</option>
+            <option value="updated">Urut: Terakhir diubah</option>
+          </select>
+        {/if}
       </div>
       {#if !rows.length}
         <div class="box">
@@ -450,7 +593,7 @@
           Tidak ada WO yang cocok dengan filter.
         </p>
       {:else if view === 'table'}
-        <WoTable rows={filtered} />
+        <WoTable rows={filtered} group={groupBy} />
       {:else if view === 'timeline'}
         <WoTimeline rows={filtered} />
       {:else if view === 'scurve'}
@@ -459,10 +602,16 @@
           category={cat}
           assignee={pic}
           urgent={onlyUrgent}
+          {kind}
+          {status}
+          help={onlyHelp}
+          activeDeadline={deadline === 'late' || deadline === 'next7' ? deadline : ''}
+          {dueFrom}
+          {dueTo}
           revision={p.updatedAt + rows.map((w) => w.updatedAt).join('')}
         />
       {:else}
-        <Kanban rows={filtered} {canDrag} {onmove} />
+        <Kanban rows={filtered} showCanceled={status === 'canceled'} {canDrag} {onmove} />
       {/if}
     </div>
     {#if view === 'table' || view === 'kanban'}<aside class="side">
@@ -602,6 +751,55 @@
 {/if}
 
 <PhotoLightbox bind:open={photoOpen} photo={documentPhoto} />
+
+<Modal bind:open={infoOpen} title="Edit info project" width={560}>
+  <form id="project-info" class="g" onsubmit={saveInfo} novalidate>
+    {#if infoMessage}<p role="alert">{infoMessage}</p>{/if}
+    <Input
+      label="Nama project"
+      bind:value={info.name}
+      error={infoErrors.name}
+      required
+      maxlength={160}
+    />
+    <Input
+      label="Nama klien"
+      bind:value={info.clientName}
+      error={infoErrors.clientName}
+      required
+      maxlength={120}
+    />
+    <Input
+      label="No RPO"
+      bind:value={info.rpoNumber}
+      error={infoErrors.rpoNumber}
+      required
+      maxlength={40}
+    />
+    <Input label="Lokasi" bind:value={info.location} error={infoErrors.location} maxlength={160} />
+    <Input
+      label="Tanggal mulai"
+      type="date"
+      bind:value={info.startDate}
+      error={infoErrors.startDate}
+      required
+    />
+    <Input
+      label="Tanggal selesai"
+      type="date"
+      bind:value={info.endDate}
+      error={infoErrors.endDate}
+      required
+    />
+    <Field label="Deskripsi" id="info-desc" error={infoErrors.description}>
+      <textarea id="info-desc" bind:value={info.description} rows="3" maxlength={500}></textarea>
+    </Field>
+  </form>
+  {#snippet footer()}
+    <Button onclick={() => (infoOpen = false)}>Batal</Button>
+    <Button variant="primary" type="submit" form="project-info" loading={infoSaving}>Simpan</Button>
+  {/snippet}
+</Modal>
 
 <WoCreateModal
   bind:open={createOpen}

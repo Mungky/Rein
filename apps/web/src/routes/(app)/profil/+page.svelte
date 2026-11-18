@@ -318,7 +318,7 @@
           {/if}
         </div>
       </section>
-      {#if hasGlobal('admin.roles') || hasGlobal('admin.users')}
+      {#if hasGlobal('admin.roles') || hasGlobal('admin.users') || hasGlobal('admin.wo_types')}
         <section class="mobile-admin" aria-labelledby="admin-title">
           <div class="section-heading"><h2 id="admin-title">Administrasi</h2></div>
           <div class="admin-links">
@@ -330,6 +330,10 @@
               >{/if}
             {#if hasGlobal('admin.roles')}<Button href={resolve('/admin/role')} icon="shield"
                 >Role & izin</Button
+              >{/if}
+            {#if hasGlobal('admin.wo_types')}<Button
+                href={resolve('/admin/jenis-wo')}
+                icon="logbook">Jenis WO</Button
               >{/if}
           </div>
         </section>

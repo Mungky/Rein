@@ -71,6 +71,157 @@ async function file(
   return id;
 }
 describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
+  it('mengedit dan menyembunyikan catatan sendiri tanpa menghapus riwayat progres', async () => {
+    const f = await fixture();
+    const outsider = await createUser();
+    const { a: other } = await login(f.app, outsider.username, outsider.password!);
+    await testDb().insert(projectMembers).values({
+      projectId: f.id,
+      userId: outsider.id,
+      projectRole: 'Engineer',
+      addedBy: f.manager.id,
+    });
+    const att = await file(f.manager.id, 'user', f.manager.id);
+    const wo = `/api/work-orders/${f.woId}`;
+    const created = await f.a.post(`${wo}/logbook`, {
+      clientId: randomUUID(),
+      expectedUpdatedAt: (await (await f.a.get(wo)).json()).updatedAt,
+      progress: 30,
+      body: 'Catatan awal',
+      attachmentIds: [att],
+    });
+    expect(created.status).toBe(201);
+    const { id } = await created.json();
+    const url = `${wo}/logbook/${id}`;
+    const body = { expectedEditedAt: null, body: 'Catatan koreksi' };
+    expect((await other.patch(url, body)).status).toBe(403);
+    expect((await f.a.patch(url, body)).status).toBe(200);
+    expect((await f.a.patch(url, body)).status).toBe(409);
+    const modified = (await (await f.a.get(`${wo}/logbook`)).json()).entries[0];
+    expect(modified).toMatchObject({
+      body: 'Catatan koreksi',
+      editedAt: expect.any(String),
+      canEdit: true,
+      attachments: [expect.objectContaining({ id: att })],
+    });
+    const version = { expectedEditedAt: modified.editedAt };
+    await testDb()
+      .update(logbookEntries)
+      .set({ createdAt: new Date(Date.now() - 25 * 3_600_000) })
+      .where(eq(logbookEntries.id, id));
+    expect((await f.a.delete(url, version)).status).toBe(403);
+    await testDb()
+      .update(logbookEntries)
+      .set({ createdAt: new Date() })
+      .where(eq(logbookEntries.id, id));
+    expect((await f.a.delete(url, version)).status).toBe(200);
+    expect((await (await f.a.get(`${wo}/logbook`)).json()).entries).not.toContainEqual(
+      expect.objectContaining({ id }),
+    );
+    expect(
+      (await (await f.a.get(`/api/projects/${f.id}/attachments`)).json()).attachments,
+    ).not.toContainEqual(expect.objectContaining({ id: att }));
+    expect(
+      await testDb().query.progressEvents.findFirst({
+        where: eq(progressEvents.sourceEntryId, id),
+      }),
+    ).toMatchObject({ progress: 30 });
+    expect((await (await f.a.get(wo)).json()).progress).toBe(30);
+    expect(
+      await testDb().query.auditLogs.findFirst({
+        where: and(eq(auditLogs.entityId, id), eq(auditLogs.action, 'logbook.updated')),
+      }),
+    ).toMatchObject({
+      diffJson: { before: 'Catatan awal', after: 'Catatan koreksi', woId: f.woId },
+    });
+  });
+
+  it('memvalidasi perubahan info project dan menampilkannya di daftar dan detail', async () => {
+    const f = await fixture();
+    const url = `/api/projects/${f.id}`;
+    const second = await f.createProject();
+    const before = await (await f.a.get(url)).json();
+    const other = await (await f.a.get(`/api/projects/${second}`)).json();
+    const expectedUpdatedAt = before.updatedAt;
+    expect(
+      await (await f.a.patch(url, { expectedUpdatedAt, rpoNumber: other.rpoNumber })).json(),
+    ).toMatchObject({ error: { fields: { rpoNumber: expect.stringContaining(other.name) } } });
+    expect((await f.a.patch(url, { expectedUpdatedAt, endDate: '2026-10-31' })).status).toBe(422);
+    const changes = {
+      name: 'Nama baru project',
+      clientName: 'Klien baru',
+      rpoNumber: randomUUID(),
+      location: 'Bandung',
+      description: 'Catatan project',
+      startDate: '2026-11-03',
+      endDate: '2026-12-22',
+    };
+    expect((await f.a.patch(url, { expectedUpdatedAt, ...changes })).status).toBe(200);
+    expect(await (await f.a.get(url)).json()).toMatchObject({
+      name: changes.name,
+      client: { name: changes.clientName },
+      rpoNumber: changes.rpoNumber,
+      location: changes.location,
+      description: changes.description,
+      startDate: changes.startDate,
+      endDate: changes.endDate,
+    });
+    expect((await (await f.a.get('/api/projects')).json()).projects).toContainEqual(
+      expect.objectContaining({ id: f.id, name: changes.name }),
+    );
+  });
+
+  it('mengatur Jenis WO dan menolak penghapusan jenis yang dipakai', async () => {
+    const f = await fixture();
+    const admin = await createUser({ role: 'admin' });
+    const { a } = await login(f.app, admin.username, admin.password!);
+    const path = '/api/admin/wo-types';
+    const engineer = await createUser();
+    const { a: unauthorized } = await login(f.app, engineer.username, engineer.password!);
+    expect((await unauthorized.get(path)).status).toBe(403);
+    const code = Array.from(randomUUID().replaceAll('-', '').slice(0, 4), (c) =>
+      String.fromCharCode(65 + parseInt(c, 16)),
+    ).join('');
+    const created = await a.post(path, { name: `Jenis audit ${code}`, code, category: 'general' });
+    expect(created.status).toBe(201);
+    const { id } = await created.json();
+    try {
+      expect(
+        (
+          await a.patch(`${path}/${id}`, {
+            active: false,
+            name: `Jenis baru ${code}`,
+            category: 'production',
+          })
+        ).status,
+      ).toBe(200);
+      const rows = (await (await a.get(path)).json()).types;
+      expect(rows.find((row: { id: string }) => row.id === id)).toMatchObject({
+        active: false,
+        name: `Jenis baru ${code}`,
+        category: 'production',
+      });
+      const ids = [id, ...rows.flatMap((row: { id: string }) => (row.id !== id ? [row.id] : []))];
+      expect(
+        (
+          await f.app.request(`${path}/order`, {
+            method: 'PUT',
+            headers: {
+              'x-requested-with': 'rein',
+              'content-type': 'application/json',
+              cookie: [...a.jar].map(([k, v]) => `${k}=${v}`).join('; '),
+            },
+            body: JSON.stringify({ ids }),
+          })
+        ).status,
+      ).toBe(200);
+      expect((await (await a.get(path)).json()).types[0].id).toBe(id);
+      const wo = await (await f.a.get(`/api/work-orders/${f.woId}`)).json();
+      expect((await a.delete(`${path}/${wo.type.id}`, {})).status).toBe(409);
+    } finally {
+      await a.delete(`${path}/${id}`, {});
+    }
+  });
   it('menyegarkan Beranda peminta bantuan yang bukan PIC atau pengikut WO', async () => {
     const f = await fixture();
     const engineer = await createUser();

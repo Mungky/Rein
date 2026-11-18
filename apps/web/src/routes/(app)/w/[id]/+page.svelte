@@ -83,6 +83,43 @@
   let retryPost = $state<ReturnType<typeof postPayload> | null>(null);
   let photo = $state<FileItem | null>(null);
   let photoOpen = $state(false);
+  let entryOpen = $state(false);
+  let activeEntry = $state<LogEntry | null>(null);
+  let entryBody = $state('');
+  let entryDeleting = $state(false);
+  let entryBusy = $state(false);
+  let entryError = $state('');
+
+  function openEntry(entry: LogEntry, remove: boolean) {
+    activeEntry = entry;
+    entryBody = entry.body;
+    entryDeleting = remove;
+    entryError = '';
+    entryOpen = true;
+  }
+
+  async function saveEntry(e: SubmitEvent) {
+    e.preventDefault();
+    if (!activeEntry || entryBusy) return;
+    entryBusy = true;
+    entryError = '';
+    try {
+      await api(`/api/work-orders/${wo.id}/logbook/${activeEntry.id}`, {
+        method: entryDeleting ? 'DELETE' : 'PATCH',
+        body: {
+          expectedEditedAt: activeEntry.editedAt,
+          ...(entryDeleting ? {} : { body: entryBody }),
+        },
+      });
+      entryOpen = false;
+      toast(entryDeleting ? 'Catatan dihapus' : 'Catatan diperbarui');
+      await invalidate('app:wo');
+    } catch (err) {
+      entryError = err instanceof ApiError ? err.message : 'Perubahan catatan gagal disimpan.';
+    } finally {
+      entryBusy = false;
+    }
+  }
   const uploading = $derived(files.some((f) => !f.id && !f.error));
   const hasFiles = $derived(files.some((f) => f.id));
 
@@ -467,6 +504,7 @@
             <div class="eh">
               <b>{e.author.fullName}</b>
               <span class="faint">· {stamp(e.createdAt)}</span>
+              {#if e.editedAt}<span class="faint" title={stamp(e.editedAt)}>· diedit</span>{/if}
               {#if PILL[e.kind]}<span class="pill {e.kind}">{PILL[e.kind]}</span>{/if}
               {#if e.category}<span class="pill">{LOGBOOK_CATEGORY_LABEL[e.category]}</span>{/if}
               {#if e.progressTo != null}
@@ -484,6 +522,12 @@
                     >{:else}{part.text}{/if}{/each}
               </p>{/if}
             {#if e.attachments.length}{@render thumbs(e.attachments)}{/if}
+            {#if e.canEdit}
+              <div class="entry-actions">
+                <Button variant="ghost" onclick={() => openEntry(e, false)}>Edit catatan</Button>
+                <Button variant="ghost" onclick={() => openEntry(e, true)}>Hapus catatan</Button>
+              </div>
+            {/if}
           </div>
         </div>
       {:else}
@@ -626,6 +670,34 @@
 
 <PhotoLightbox bind:open={photoOpen} {photo} />
 
+<Modal
+  bind:open={entryOpen}
+  title={entryDeleting ? 'Hapus catatan Logbook?' : 'Edit catatan Logbook'}
+  width={520}
+>
+  <form id="logbook-entry" class="grid" onsubmit={saveEntry}>
+    {#if entryError}<p role="alert">{entryError}</p>{/if}
+    {#if entryDeleting}
+      <p>Catatan dan lampirannya akan hilang dari Logbook. Riwayat progres WO tetap tercatat.</p>
+    {:else}
+      <Field label="Catatan" id="edit-logbook">
+        <textarea id="edit-logbook" rows="4" maxlength="5000" bind:value={entryBody}></textarea>
+      </Field>
+    {/if}
+  </form>
+  {#snippet footer()}
+    <Button onclick={() => (entryOpen = false)}>Batal</Button>
+    <Button
+      variant={entryDeleting ? 'danger' : 'primary'}
+      type="submit"
+      form="logbook-entry"
+      loading={entryBusy}
+    >
+      {entryDeleting ? 'Hapus' : 'Simpan'}
+    </Button>
+  {/snippet}
+</Modal>
+
 <Modal bind:open={reasonOpen} title="Alasan perubahan status" width={440}>
   <form id="reason-f" onsubmit={confirmReason}>
     <Field label={`Kenapa ${reasonFor ? WO_STATUS_LABEL[reasonFor.to] : ''}?`} id="reason">
@@ -749,6 +821,11 @@
 </Modal>
 
 <style>
+  .entry-actions {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
   .wo-materials {
     list-style: none;
     padding: 0;

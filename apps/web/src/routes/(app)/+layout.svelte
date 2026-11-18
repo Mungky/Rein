@@ -42,6 +42,9 @@
     ...(hasGlobal('admin.roles')
       ? [{ href: resolve('/admin/role'), label: 'Role & izin', icon: 'shield' as const }]
       : []),
+    ...(hasGlobal('admin.wo_types')
+      ? [{ href: resolve('/admin/jenis-wo'), label: 'Jenis WO', icon: 'logbook' as const }]
+      : []),
   ]);
 
   // FR-004: respons 423 di mana pun → layar PIN, lalu kembali ke halaman ini.

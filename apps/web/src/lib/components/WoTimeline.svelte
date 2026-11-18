@@ -11,7 +11,7 @@
   let page = $state(0);
   const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
   const day = (value: string) => Date.parse(value) / 86_400_000;
-  const sorted = $derived([...rows].sort((a, b) => a.plannedStart.localeCompare(b.plannedStart)));
+  const sorted = $derived(rows);
   const shown = $derived(sorted.slice(page * 300, (page + 1) * 300));
   const start = $derived(Math.min(day(today), ...rows.map((w) => day(w.plannedStart))) - 1);
   const end = $derived(Math.max(day(today), ...rows.map((w) => day(w.deadline))) + 2);

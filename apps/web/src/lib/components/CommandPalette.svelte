@@ -40,13 +40,17 @@
 
   $effect(() => {
     if (open) {
+      const trigger = document.activeElement as HTMLElement | null;
       query = '';
       index = 0;
-      queueMicrotask(() => input?.focus());
+      return () => trigger?.focus();
     }
   });
   $effect(() => {
     if (index >= filtered.length) index = Math.max(0, filtered.length - 1);
+  });
+  $effect(() => {
+    if (open && input) input.focus();
   });
 
   function run(it: PaletteItem | undefined) {
@@ -56,7 +60,11 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
-    if (e.key === 'ArrowDown') {
+    if (!open) return;
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      input?.focus();
+    } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       index = filtered.length ? (index + 1) % filtered.length : 0;
     } else if (e.key === 'ArrowUp') {
@@ -71,6 +79,11 @@
     }
   }
 
+  function trapFocus(e: FocusEvent) {
+    if (open && input && e.target instanceof Node && !input.closest('.pal')?.contains(e.target))
+      input.focus();
+  }
+
   let listEl = $state<HTMLElement>();
   let hlTop = $state(0);
   $effect(() => {
@@ -81,6 +94,8 @@
     }
   });
 </script>
+
+<svelte:window {onkeydown} onfocusin={trapFocus} />
 
 {#if open}
   <div
@@ -94,6 +109,7 @@
       role="dialog"
       aria-modal="true"
       aria-label="Command palette"
+      tabindex="-1"
       transition:scale={{ start: 0.98, duration: dur(140), easing: easeOut }}
     >
       <div class="pal-in">
@@ -101,7 +117,7 @@
         <input
           bind:this={input}
           bind:value={query}
-          {onkeydown}
+          aria-label="Cari atau ketik perintah"
           placeholder="Cari atau ketik perintah…"
           role="combobox"
           aria-expanded="true"
@@ -121,6 +137,7 @@
               class="pal-i"
               id="pal-{it.id}"
               role="option"
+              tabindex="-1"
               aria-selected={it.n === index}
               data-n={it.n}
               onmousemove={() => (index = it.n)}

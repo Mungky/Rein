@@ -15,8 +15,25 @@ import {
   type WoProgressInput,
   buildSCurve,
   WO_CATEGORIES,
+  WO_STATUSES,
+  todayWib,
 } from '@rein/shared';
-import { and, asc, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gte,
+  ilike,
+  inArray,
+  isNull,
+  lte,
+  lt,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { audit } from '../audit';
@@ -32,6 +49,7 @@ import {
 import type { AppEnv, AuthContext, Deps } from '../context';
 import {
   attachments,
+  helpRequests,
   clients,
   projectMembers,
   projects,
@@ -409,24 +427,48 @@ export const projectRoutes = new Hono<AppEnv>()
       });
     }
     const { expectedUpdatedAt: _ignored, clientName, ...fields } = body;
-    await db.transaction(async (tx) => {
-      const patch: Partial<typeof projects.$inferInsert> = {};
-      if (clientName) patch.clientId = await upsertClient(tx, clientName);
-      for (const [k, v] of Object.entries(fields)) {
-        if (v !== undefined) (patch as Record<string, unknown>)[k] = v;
-      }
-      await tx.update(projects).set(patch).where(eq(projects.id, p.id));
-      await audit(tx, {
-        actorId: a.user.id,
-        action: 'project.updated',
-        entityType: 'project',
-        entityId: p.id,
-        diff: { ...fields, ...(clientName ? { clientName } : {}) },
-        ip: c.var.ip,
-        userAgent: userAgent(c),
+    try {
+      await db.transaction(async (tx) => {
+        const patch: Partial<typeof projects.$inferInsert> = { ...fields };
+        if (clientName) patch.clientId = await upsertClient(tx, clientName);
+        const [updated] = await tx
+          .update(projects)
+          .set({ ...patch, updatedAt: new Date(Math.max(Date.now(), p.updatedAt.getTime() + 1)) })
+          .where(
+            and(
+              eq(projects.id, p.id),
+              sql`date_trunc('milliseconds', ${projects.updatedAt}) = ${p.updatedAt.toISOString()}::timestamptz`,
+            ),
+          )
+          .returning({ id: projects.id });
+        if (!updated)
+          throw new HttpError(
+            409,
+            'STALE',
+            'Project sudah diubah orang lain. Muat ulang lalu coba lagi.',
+          );
+        await audit(tx, {
+          actorId: a.user.id,
+          action: 'project.updated',
+          entityType: 'project',
+          entityId: p.id,
+          diff: { ...fields, ...(clientName ? { clientName } : {}) },
+          ip: c.var.ip,
+          userAgent: userAgent(c),
+        });
       });
-    });
+    } catch (err) {
+      if (body.rpoNumber) await assertRpoFree(db, body.rpoNumber, p.id);
+      throw err;
+    }
     const fresh = await loadProjectAccess(db, a, p.id);
+    publishToUsers(
+      (await memberList(db, p.id)).map((member) => member.userId),
+      {
+        type: 'project',
+        projectId: p.id,
+      },
+    );
     return c.json(await projectDetail(db, a, fresh));
   })
 
@@ -601,6 +643,12 @@ export const projectRoutes = new Hono<AppEnv>()
         category: z.enum(WO_CATEGORIES).optional(),
         assignee: z.uuid().optional(),
         urgent: z.enum(['true']).optional(),
+        kind: z.uuid().optional(),
+        status: z.enum(WO_STATUSES).optional(),
+        help: z.enum(['true']).optional(),
+        activeDeadline: z.enum(['late', 'next7']).optional(),
+        dueFrom: z.iso.date().optional(),
+        dueTo: z.iso.date().optional(),
       }),
       c.req.query(),
     );
@@ -625,6 +673,24 @@ export const projectRoutes = new Hono<AppEnv>()
           query.category ? eq(woTypes.category, query.category) : undefined,
           query.assignee ? eq(workOrders.assigneeId, query.assignee) : undefined,
           query.urgent ? eq(workOrders.urgent, true) : undefined,
+          query.kind ? eq(workOrders.typeId, query.kind) : undefined,
+          query.status ? eq(workOrders.status, query.status) : undefined,
+          query.help
+            ? exists(
+                db
+                  .select({ id: helpRequests.id })
+                  .from(helpRequests)
+                  .where(
+                    and(eq(helpRequests.woId, workOrders.id), eq(helpRequests.status, 'open')),
+                  ),
+              )
+            : undefined,
+          query.activeDeadline
+            ? and(ne(workOrders.status, 'done'), ne(workOrders.status, 'canceled'))
+            : undefined,
+          query.activeDeadline === 'late' ? lt(workOrders.deadline, todayWib()) : undefined,
+          query.dueFrom ? gte(workOrders.deadline, query.dueFrom) : undefined,
+          query.dueTo ? lte(workOrders.deadline, query.dueTo) : undefined,
         ),
       );
     const ids = rows.map((w) => w.id);
