@@ -1,6 +1,7 @@
 <script lang="ts">
   import { safeNextPath } from '@rein/shared';
   import { goto } from '$app/navigation';
+  import { resolve } from '$app/paths';
   import { page } from '$app/state';
   import { api, ApiError } from '$lib/api';
   import Button from '$lib/components/Button.svelte';
@@ -8,7 +9,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import Input from '$lib/components/Input.svelte';
   import { deviceId } from '$lib/device';
-  import { invalidateMe } from '$lib/session.svelte';
+  import { flushPendingLogout, invalidateMe } from '$lib/session.svelte';
 
   /** FR-001 + FR-006 (Figma D/01a, M/01a). */
   let { data } = $props();
@@ -46,6 +47,7 @@
     }
     loading = true;
     try {
+      await flushPendingLogout();
       const res = await api<{ next: string }>('/api/auth/login', {
         body: { identifier, password, remember, next, deviceId: deviceId() },
       });
@@ -98,6 +100,7 @@
   <Checkbox bind:checked={remember}>Ingat perangkat ini</Checkbox>
   <Button type="submit" variant="primary" size="md" block {loading}>Masuk</Button>
 </form>
+<a href={resolve('/reset-password')}>Lupa password?</a>
 
 {#if data.googleEnabled}
   <div class="or"><span>atau</span></div>

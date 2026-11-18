@@ -6,6 +6,7 @@ import { isSecureCookie } from './env';
 import { HttpError } from './lib/http';
 import { clientIp } from './lib/ip';
 import { adminSettingsRoutes } from './routes/admin-settings';
+import { activityRoutes } from './routes/activity';
 import { adminUserRoutes } from './routes/admin-users';
 import { userAccessRoutes } from './routes/user-access';
 import { preferenceRoutes } from './routes/preferences';
@@ -13,6 +14,7 @@ import { attachmentRoutes } from './routes/attachments';
 import { devRoutes } from './routes/dev';
 import { fileRoutes } from './routes/files';
 import { meRoutes } from './routes/me';
+import { materialRoutes } from './routes/materials';
 import { pinRoutes } from './routes/pin';
 import { notificationRoutes, streamRoutes } from './routes/notifications';
 import { directoryRoutes, projectRoutes } from './routes/projects';
@@ -67,7 +69,16 @@ export function createApp(deps: Deps) {
   });
   // Upload lampiran di-stream (batas sendiri per file); endpoint lain JSON ≤ 64 KB.
   app.use('/api/*', (c, next) =>
-    c.req.path.startsWith('/api/attachments') ? next() : jsonLimit(c, next),
+    c.req.path.startsWith('/api/attachments')
+      ? next()
+      : /^\/api\/projects\/[^/]+\/materials$/.test(c.req.path) && c.req.method === 'POST'
+        ? bodyLimit({
+            maxSize: 2 * 1024 * 1024,
+            onError: () => {
+              throw new HttpError(413, 'TOO_LARGE', 'Daftar material terlalu besar');
+            },
+          })(c, next)
+        : jsonLimit(c, next),
   );
   app.use('/api/*', sessionMiddleware);
   app.use('/files/*', sessionMiddleware);
@@ -81,10 +92,12 @@ export function createApp(deps: Deps) {
   app.route('/api/attachments', attachmentRoutes);
   app.route('/api/me', meRoutes);
   app.route('/api/projects', projectRoutes);
+  app.route('/api/projects', materialRoutes);
   app.route('/api/directory', directoryRoutes);
   app.route('/api/projects', projectWoRoutes);
   app.route('/api/work-orders', woRoutes);
   app.route('/api/home', homeRoutes);
+  app.route('/api/activity', activityRoutes);
   app.route('/api/notifications', notificationRoutes);
   app.route('/api/stream', streamRoutes);
   app.route('/files', fileRoutes);

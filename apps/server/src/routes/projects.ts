@@ -15,9 +15,26 @@ import {
   type WoProgressInput,
   buildSCurve,
   WO_CATEGORIES,
+  WO_STATUSES,
+  todayWib,
 } from '@rein/shared';
-import { and, asc, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm';
-import { Hono } from 'hono';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gte,
+  ilike,
+  inArray,
+  isNull,
+  lte,
+  lt,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { audit } from '../audit';
 import { authOf, requireVerified } from '../auth/middleware';
@@ -26,11 +43,13 @@ import {
   canDo,
   loadProjectAccess,
   projectCapabilities,
+  resolveOwner,
   type ProjectAccess,
 } from '../auth/project-access';
 import type { AppEnv, AuthContext, Deps } from '../context';
 import {
   attachments,
+  helpRequests,
   clients,
   projectMembers,
   projects,
@@ -41,6 +60,7 @@ import {
   workOrders,
   logbookEntries,
   progressEvents,
+  woReferences,
 } from '../db/schema';
 import { HttpError, notFound, readJson, validate } from '../lib/http';
 import { userAgent } from '../lib/ip';
@@ -157,6 +177,87 @@ async function assertNotLastManager(db: Db, projectId: string, userId: string) {
       ),
     );
   if ((row?.n ?? 0) === 0) throw conflict('Project harus punya minimal satu pengelola');
+}
+
+type StatusChange = z.infer<typeof projectStatusSchema>;
+
+function assertProjectTransition(a: AuthContext, acc: ProjectAccess, change: StatusChange) {
+  const check = checkProjectTransition(acc.project.status, change.status, {
+    canEdit: canDo(a, 'project.edit', acc.res),
+    canClose: canDo(a, 'project.close', acc.res),
+    canCloseAll: a.permissions['project.close'] === 'all',
+  });
+  if (!check.ok) throw new HttpError(403, 'FORBIDDEN', check.message);
+  if (check.reasonRequired && !change.note) {
+    throw new HttpError(422, 'VALIDATION', 'Isi alasan', { note: 'Alasan wajib diisi' });
+  }
+}
+
+function statusFields({ status, note }: StatusChange) {
+  return {
+    status,
+    onHoldReason: status === 'on_hold' ? (note ?? null) : null,
+    doneAt: status === 'done' ? new Date() : null,
+  };
+}
+
+const staleProject = () =>
+  new HttpError(409, 'STALE', 'Project sudah diubah orang lain. Muat ulang lalu coba lagi.');
+
+async function updateProject(
+  tx: Tx,
+  p: ProjectAccess['project'],
+  fields: Partial<typeof projects.$inferInsert>,
+) {
+  const [updated] = await tx
+    .update(projects)
+    .set({ ...fields, updatedAt: new Date(Math.max(Date.now(), p.updatedAt.getTime() + 1)) })
+    .where(
+      and(
+        eq(projects.id, p.id),
+        sql`date_trunc('milliseconds', ${projects.updatedAt}) = ${p.updatedAt.toISOString()}::timestamptz`,
+      ),
+    )
+    .returning({ id: projects.id });
+  if (!updated) throw staleProject();
+}
+
+async function recordProjectStatus(
+  tx: Tx,
+  c: Context<AppEnv>,
+  p: ProjectAccess['project'],
+  { status, note }: StatusChange,
+  recipients: string[],
+  name = p.name,
+) {
+  const a = authOf(c);
+  await tx.insert(projectStatusHistory).values({
+    projectId: p.id,
+    fromStatus: p.status,
+    toStatus: status,
+    changedBy: a.user.id,
+    note: note ?? null,
+  });
+  await audit(tx, {
+    actorId: a.user.id,
+    action: 'project.status_changed',
+    entityType: 'project',
+    entityId: p.id,
+    diff: { from: p.status, to: status, note },
+    ip: c.var.ip,
+    userAgent: userAgent(c),
+  });
+  return enqueueNotifications(tx, {
+    event: 'project.status_changed',
+    recipients,
+    actorId: a.user.id,
+    projectId: p.id,
+    entityType: 'project',
+    entityId: p.id,
+    title: `${name}: ${PROJECT_STATUS_LABEL[status]}`,
+    body: note ?? `${a.user.fullName} mengubah status project`,
+    url: `/project/${p.id}`,
+  });
 }
 
 export const projectRoutes = new Hono<AppEnv>()
@@ -386,16 +487,13 @@ export const projectRoutes = new Hono<AppEnv>()
     const a = authOf(c);
     const { db } = c.var.deps;
     const acc = await loadProjectAccess(db, a, c.req.param('id'));
-    assertCan(a, 'project.edit', acc.res);
     const body = await readJson(c, projectUpdateSchema);
     const p = acc.project;
-    if (new Date(body.expectedUpdatedAt).getTime() !== p.updatedAt.getTime()) {
-      throw new HttpError(
-        409,
-        'STALE',
-        'Project sudah diubah orang lain. Muat ulang lalu coba lagi.',
-      );
-    }
+    const { expectedUpdatedAt, clientName, statusChange, ...fields } = body;
+    const hasInfo = !!clientName || Object.keys(fields).length > 0;
+    if (hasInfo || !statusChange) assertCan(a, 'project.edit', acc.res);
+    if (statusChange) assertProjectTransition(a, acc, statusChange);
+    if (new Date(expectedUpdatedAt).getTime() !== p.updatedAt.getTime()) throw staleProject();
     if (body.rpoNumber && body.rpoNumber !== p.rpoNumber) {
       await assertRpoFree(db, body.rpoNumber, p.id);
     }
@@ -406,25 +504,33 @@ export const projectRoutes = new Hono<AppEnv>()
         endDate: 'Tanggal selesai tidak boleh sebelum tanggal mulai',
       });
     }
-    const { expectedUpdatedAt: _ignored, clientName, ...fields } = body;
-    await db.transaction(async (tx) => {
-      const patch: Partial<typeof projects.$inferInsert> = {};
-      if (clientName) patch.clientId = await upsertClient(tx, clientName);
-      for (const [k, v] of Object.entries(fields)) {
-        if (v !== undefined) (patch as Record<string, unknown>)[k] = v;
-      }
-      await tx.update(projects).set(patch).where(eq(projects.id, p.id));
-      await audit(tx, {
-        actorId: a.user.id,
-        action: 'project.updated',
-        entityType: 'project',
-        entityId: p.id,
-        diff: { ...fields, ...(clientName ? { clientName } : {}) },
-        ip: c.var.ip,
-        userAgent: userAgent(c),
+    const recipients = (await memberList(db, p.id)).map((m) => m.userId);
+    try {
+      const notified = await db.transaction(async (tx) => {
+        const patch: Partial<typeof projects.$inferInsert> = { ...fields };
+        if (clientName) patch.clientId = await upsertClient(tx, clientName);
+        await updateProject(tx, p, { ...patch, ...(statusChange && statusFields(statusChange)) });
+        if (hasInfo || !statusChange)
+          await audit(tx, {
+            actorId: a.user.id,
+            action: 'project.updated',
+            entityType: 'project',
+            entityId: p.id,
+            diff: { ...fields, ...(clientName ? { clientName } : {}) },
+            ip: c.var.ip,
+            userAgent: userAgent(c),
+          });
+        return statusChange
+          ? recordProjectStatus(tx, c, p, statusChange, recipients, fields.name)
+          : [];
       });
-    });
+      publishToUsers(notified, { type: 'notification' });
+    } catch (err) {
+      if (body.rpoNumber) await assertRpoFree(db, body.rpoNumber, p.id);
+      throw err;
+    }
     const fresh = await loadProjectAccess(db, a, p.id);
+    publishToUsers(recipients, { type: 'project', projectId: p.id });
     return c.json(await projectDetail(db, a, fresh));
   })
 
@@ -435,52 +541,11 @@ export const projectRoutes = new Hono<AppEnv>()
     const acc = await loadProjectAccess(db, a, c.req.param('id'));
     const body = await readJson(c, projectStatusSchema);
     const p = acc.project;
-    const check = checkProjectTransition(p.status, body.status, {
-      canEdit: canDo(a, 'project.edit', acc.res),
-      canClose: canDo(a, 'project.close', acc.res),
-      canCloseAll: a.permissions['project.close'] === 'all',
-    });
-    if (!check.ok) throw new HttpError(403, 'FORBIDDEN', check.message);
-    if (check.reasonRequired && !body.note) {
-      throw new HttpError(422, 'VALIDATION', 'Isi alasan', { note: 'Alasan wajib diisi' });
-    }
+    assertProjectTransition(a, acc, body);
     const recipients = (await memberList(db, p.id)).map((m) => m.userId);
     const notified = await db.transaction(async (tx) => {
-      await tx
-        .update(projects)
-        .set({
-          status: body.status,
-          onHoldReason: body.status === 'on_hold' ? (body.note ?? null) : null,
-          doneAt: body.status === 'done' ? new Date() : null,
-        })
-        .where(eq(projects.id, p.id));
-      await tx.insert(projectStatusHistory).values({
-        projectId: p.id,
-        fromStatus: p.status,
-        toStatus: body.status,
-        changedBy: a.user.id,
-        note: body.note ?? null,
-      });
-      await audit(tx, {
-        actorId: a.user.id,
-        action: 'project.status_changed',
-        entityType: 'project',
-        entityId: p.id,
-        diff: { from: p.status, to: body.status, note: body.note },
-        ip: c.var.ip,
-        userAgent: userAgent(c),
-      });
-      return enqueueNotifications(tx, {
-        event: 'project.status_changed',
-        recipients,
-        actorId: a.user.id,
-        projectId: p.id,
-        entityType: 'project',
-        entityId: p.id,
-        title: `${p.name}: ${PROJECT_STATUS_LABEL[body.status]}`,
-        body: body.note ?? `${a.user.fullName} mengubah status project`,
-        url: `/project/${p.id}`,
-      });
+      await updateProject(tx, p, statusFields(body));
+      return recordProjectStatus(tx, c, p, body, recipients);
     });
     publishToUsers(notified, { type: 'notification' });
     publishToUsers(recipients, { type: 'project', projectId: p.id });
@@ -599,6 +664,12 @@ export const projectRoutes = new Hono<AppEnv>()
         category: z.enum(WO_CATEGORIES).optional(),
         assignee: z.uuid().optional(),
         urgent: z.enum(['true']).optional(),
+        kind: z.uuid().optional(),
+        status: z.enum(WO_STATUSES).optional(),
+        help: z.enum(['true']).optional(),
+        activeDeadline: z.enum(['late', 'next7']).optional(),
+        dueFrom: z.iso.date().optional(),
+        dueTo: z.iso.date().optional(),
       }),
       c.req.query(),
     );
@@ -623,6 +694,24 @@ export const projectRoutes = new Hono<AppEnv>()
           query.category ? eq(woTypes.category, query.category) : undefined,
           query.assignee ? eq(workOrders.assigneeId, query.assignee) : undefined,
           query.urgent ? eq(workOrders.urgent, true) : undefined,
+          query.kind ? eq(workOrders.typeId, query.kind) : undefined,
+          query.status ? eq(workOrders.status, query.status) : undefined,
+          query.help
+            ? exists(
+                db
+                  .select({ id: helpRequests.id })
+                  .from(helpRequests)
+                  .where(
+                    and(eq(helpRequests.woId, workOrders.id), eq(helpRequests.status, 'open')),
+                  ),
+              )
+            : undefined,
+          query.activeDeadline
+            ? and(ne(workOrders.status, 'done'), ne(workOrders.status, 'canceled'))
+            : undefined,
+          query.activeDeadline === 'late' ? lt(workOrders.deadline, todayWib()) : undefined,
+          query.dueFrom ? gte(workOrders.deadline, query.dueFrom) : undefined,
+          query.dueTo ? lte(workOrders.deadline, query.dueTo) : undefined,
         ),
       );
     const ids = rows.map((w) => w.id);
@@ -694,7 +783,93 @@ export const projectRoutes = new Hono<AppEnv>()
         ),
       )
       .orderBy(desc(attachments.createdAt));
-    return c.json({ attachments: rows });
+    const links = await db
+      .select({
+        attachmentId: woReferences.attachmentId,
+        woId: workOrders.id,
+        numberLabel: workOrders.numberLabel,
+        title: workOrders.title,
+      })
+      .from(woReferences)
+      .innerJoin(workOrders, eq(workOrders.id, woReferences.woId))
+      .where(
+        and(
+          eq(woReferences.kind, 'attachment'),
+          eq(workOrders.projectId, acc.project.id),
+          isNull(workOrders.deletedAt),
+        ),
+      );
+    return c.json({
+      attachments: rows.map((f) => ({
+        ...f,
+        woLinks: links.filter((l) => l.attachmentId === f.id),
+      })),
+    });
+  })
+  .post('/:id/attachments/:attachmentId/link', async (c) => {
+    const a = authOf(c);
+    const { db } = c.var.deps;
+    const acc = await loadProjectAccess(db, a, c.req.param('id'));
+    assertCan(a, 'attachment.upload', acc.res);
+    const body = await readJson(c, z.object({ woId: z.uuid() }).strict());
+    const attachmentId = validate(z.uuid(), c.req.param('attachmentId'));
+    const result = await db.transaction(async (tx) => {
+      // Serialize attachment links while preserving the file's original owner.
+      const [file] = await tx
+        .select()
+        .from(attachments)
+        .where(and(eq(attachments.id, attachmentId), isNull(attachments.deletedAt)))
+        .for('update');
+      if (!file || !['project', 'wo', 'logbook'].includes(file.ownerType))
+        throw notFound('Dokumen tidak ditemukan');
+      const owner = await resolveOwner(
+        tx,
+        file.ownerType as 'project' | 'wo' | 'logbook',
+        file.ownerId,
+      );
+      if (owner?.projectId !== acc.project.id) throw notFound('Dokumen tidak ditemukan');
+      const [wo] = await tx
+        .select()
+        .from(workOrders)
+        .where(
+          and(
+            eq(workOrders.id, body.woId),
+            eq(workOrders.projectId, acc.project.id),
+            isNull(workOrders.deletedAt),
+          ),
+        );
+      if (!wo) throw notFound('WO tidak ditemukan di project ini');
+      const existing = await tx.query.woReferences.findFirst({
+        where: and(
+          eq(woReferences.woId, wo.id),
+          eq(woReferences.attachmentId, file.id),
+          eq(woReferences.kind, 'attachment'),
+        ),
+      });
+      if (existing || (file.ownerType === 'wo' && file.ownerId === wo.id)) return { linked: true };
+      await tx
+        .insert(woReferences)
+        .values({ woId: wo.id, attachmentId: file.id, kind: 'attachment', label: file.fileName });
+      await audit(tx, {
+        actorId: a.user.id,
+        action: 'attachment.linked',
+        entityType: 'project',
+        entityId: acc.project.id,
+        diff: { attachmentId: file.id, woId: wo.id },
+        ip: c.var.ip,
+        userAgent: userAgent(c),
+      });
+      return { linked: true };
+    });
+    const members = await db
+      .select({ id: projectMembers.userId })
+      .from(projectMembers)
+      .where(eq(projectMembers.projectId, acc.project.id));
+    publishToUsers(
+      members.map((m) => m.id),
+      { type: 'wo', woId: body.woId, projectId: acc.project.id },
+    );
+    return c.json(result);
   });
 
 /** Direktori ringkas untuk pemilih anggota & PIC, autocomplete klien, dan jenis WO aktif. */

@@ -1,6 +1,7 @@
 import {
   activateSchema,
   loginSchema,
+  passwordSchema,
   safeNextPath,
   tokenOnlySchema,
   verifyEmailCodeSchema,
@@ -16,6 +17,7 @@ import { authOf, isVerified, requireAuth, requireVerified } from '../auth/middle
 import { issueWhatsAppVerification, verifyWhatsAppCode } from '../auth/wa-verification';
 import { burnVerifyTime, hashSecret, verifySecret } from '../auth/password';
 import { passwordProblem } from '../auth/password-policy';
+import { issuePasswordReset, resetPassword } from '../auth/password-reset';
 import {
   clearSessionCookie,
   createSession,
@@ -79,6 +81,7 @@ export function meResponse(a: AuthContext) {
     locked: a.locked,
     /** Klien mengunci saat aplikasi dibuka ulang (sessionStorage kosong) — kecuali sesi baru. */
     sessionStartedAt: a.session.createdAt,
+    sessionExpiresAt: a.session.expiresAt,
   };
 }
 
@@ -125,6 +128,34 @@ export const authRoutes = new Hono<AppEnv>()
       mailEnabled: c.var.deps.mail.name !== 'null',
     }),
   )
+  .post('/forgot-password', async (c) => {
+    const { db, limits } = c.var.deps;
+    const { identifier } = await readJson(c, loginSchema.pick({ identifier: true }));
+    if (limits.emailSend.take(`reset:ip:${c.var.ip}`)) {
+      const user = await findLoginUser(db, identifier);
+      if (user?.status === 'active' && limits.emailSend.take(`reset:user:${user.id}`)) {
+        await issuePasswordReset(c.var.deps, user.id, {
+          actorId: null,
+          ip: c.var.ip,
+          userAgent: userAgent(c),
+        });
+      }
+    }
+    return c.json({ ok: true });
+  })
+  .post('/reset-password', async (c) => {
+    const { token, password } = await readJson(
+      c,
+      tokenOnlySchema.extend({ password: passwordSchema }),
+    );
+    await resetPassword(c.var.deps, token, password, {
+      actorId: null,
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+    clearSessionCookie(c, isSecureCookie(c.var.deps.env));
+    return c.json({ ok: true });
+  })
 
   /** FR-001: login email/username + password. */
   .post('/login', async (c) => {
@@ -205,21 +236,30 @@ export const authRoutes = new Hono<AppEnv>()
       return fail(user.id);
     }
 
-    await db
-      .update(users)
-      .set({ failedLoginCount: 0, failedLoginWindowStart: null, lockedUntil: null })
-      .where(eq(users.id, user.id));
-
     const secure = isSecureCookie(env);
-    const deviceRowId = body.deviceId
-      ? await registerDevice(db, user.id, body.deviceId, deviceLabel(ua), body.remember)
-      : null;
-    const { token } = await createSession(db, {
-      userId: user.id,
-      trusted: body.remember,
-      deviceRowId,
-      ip,
-      userAgent: ua,
+    const { token } = await db.transaction(async (tx) => {
+      const [confirmed] = await tx
+        .update(users)
+        .set({ failedLoginCount: 0, failedLoginWindowStart: null, lockedUntil: null })
+        .where(
+          and(
+            eq(users.id, user.id),
+            eq(users.status, 'active'),
+            eq(users.passwordHash, user.passwordHash!),
+          ),
+        )
+        .returning({ id: users.id });
+      if (!confirmed) throw invalidCredentials();
+      const deviceRowId = body.deviceId
+        ? await registerDevice(tx, user.id, body.deviceId, deviceLabel(ua), body.remember)
+        : null;
+      return createSession(tx, {
+        userId: user.id,
+        trusted: body.remember,
+        deviceRowId,
+        ip,
+        userAgent: ua,
+      });
     });
     setSessionCookie(c, token, body.remember, secure);
     if (body.deviceId) setDeviceCookie(c, body.deviceId, secure);

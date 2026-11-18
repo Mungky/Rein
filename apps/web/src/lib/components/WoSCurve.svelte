@@ -13,12 +13,24 @@
     category = '',
     assignee = '',
     urgent = false,
+    kind = '',
+    status = '',
+    help = false,
+    activeDeadline = '',
+    dueFrom = '',
+    dueTo = '',
     revision = '',
   }: {
     projectId: string;
     category?: string;
     assignee?: string;
     urgent?: boolean;
+    kind?: string;
+    status?: string;
+    help?: boolean;
+    activeDeadline?: string;
+    dueFrom?: string;
+    dueTo?: string;
     revision?: string;
   } = $props();
   let data = $state<Data | null>(null);
@@ -30,6 +42,12 @@
     if (category) query.set('category', category);
     if (assignee) query.set('assignee', assignee);
     if (urgent) query.set('urgent', 'true');
+    if (kind) query.set('kind', kind);
+    if (status) query.set('status', status);
+    if (help) query.set('help', 'true');
+    if (activeDeadline) query.set('activeDeadline', activeDeadline);
+    if (dueFrom) query.set('dueFrom', dueFrom);
+    if (dueTo) query.set('dueTo', dueTo);
     const id = projectId;
     void revision;
     void retry;

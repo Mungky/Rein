@@ -20,6 +20,20 @@ export const WO_STATUSES = [
   'canceled',
 ] as const;
 export type WoStatus = (typeof WO_STATUSES)[number];
+export const LOGBOOK_CATEGORIES = ['activity', 'document', 'issue'] as const;
+export type LogbookCategory = (typeof LOGBOOK_CATEGORIES)[number];
+export const LOGBOOK_CATEGORY_LABEL: Record<LogbookCategory, string> = {
+  activity: 'Aktivitas',
+  document: 'Dokumen',
+  issue: 'Kendala',
+};
+export const MATERIAL_STATUSES = ['in_stock', 'not_available', 'po'] as const;
+export type MaterialStatus = (typeof MATERIAL_STATUSES)[number];
+export const MATERIAL_STATUS_LABEL: Record<MaterialStatus, string> = {
+  in_stock: 'In stock',
+  not_available: 'Not available',
+  po: 'PO',
+};
 export const WO_STATUS_LABEL: Record<WoStatus, string> = {
   backlog: 'Backlog',
   todo: 'Belum Mulai',

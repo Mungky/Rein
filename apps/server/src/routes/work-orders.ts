@@ -19,8 +19,8 @@ import {
   woUpdateSchema,
   type WoStatus,
 } from '@rein/shared';
-import { and, asc, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
-import { Hono } from 'hono';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { audit } from '../audit';
 import { authOf, requireVerified } from '../auth/middleware';
@@ -33,14 +33,18 @@ import {
   projectMembers,
   projects,
   progressEvents,
+  projectMaterials,
+  workOrderMaterials,
   users,
   woReferences,
   woTypes,
   woWatchers,
   workOrders,
   type WorkOrder,
+  type LogbookEntry,
 } from '../db/schema';
 import { forbidden, HttpError, notFound, readJson, validate } from '../lib/http';
+import { activityPeriod, activityPeriodQuery } from '../lib/activity-period';
 import { userAgent } from '../lib/ip';
 import { publishToUsers } from '../notify/bus';
 import { longDate, shortDate } from '../lib/format';
@@ -52,6 +56,19 @@ type Db = Deps['db'];
 const hashOf = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const stale = () =>
   new HttpError(409, 'STALE', 'WO sudah diubah orang lain. Muat ulang lalu coba lagi.');
+const LOGBOOK_EDIT_MS = 24 * 60 * 60_000;
+
+function canEditLogbook(
+  a: AuthContext,
+  entry: Pick<LogbookEntry, 'kind' | 'createdAt'>,
+  authorId: string,
+) {
+  return (
+    (entry.kind === 'note' || entry.kind === 'comment') &&
+    canDo(a, 'logbook.edit.own', { ownerIds: [authorId] }) &&
+    Date.now() - entry.createdAt.getTime() <= LOGBOOK_EDIT_MS
+  );
+}
 
 async function loadWo(db: Db, a: AuthContext, woId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(woId)) throw notFound('WO tidak ditemukan');
@@ -385,6 +402,18 @@ export const woRoutes = new Hono<AppEnv>()
       .innerJoin(users, eq(users.id, woWatchers.userId))
       .where(eq(woWatchers.woId, wo.id));
     const refs = await db.select().from(woReferences).where(eq(woReferences.woId, wo.id));
+    const linkedFiles = db
+      .select({ id: woReferences.attachmentId })
+      .from(woReferences)
+      .where(and(eq(woReferences.woId, wo.id), eq(woReferences.kind, 'attachment')));
+    const liveWos = db
+      .select({ id: workOrders.id })
+      .from(workOrders)
+      .where(and(eq(workOrders.projectId, wo.projectId), isNull(workOrders.deletedAt)));
+    const liveLogs = db
+      .select({ id: logbookEntries.id })
+      .from(logbookEntries)
+      .where(and(inArray(logbookEntries.woId, liveWos), isNull(logbookEntries.deletedAt)));
     const files = await db
       .select({
         id: attachments.id,
@@ -396,9 +425,16 @@ export const woRoutes = new Hono<AppEnv>()
       .from(attachments)
       .where(
         and(
-          eq(attachments.ownerType, 'wo'),
-          eq(attachments.ownerId, wo.id),
+          or(
+            and(eq(attachments.ownerType, 'wo'), eq(attachments.ownerId, wo.id)),
+            inArray(attachments.id, linkedFiles),
+          ),
           isNull(attachments.deletedAt),
+          or(
+            and(eq(attachments.ownerType, 'project'), eq(attachments.ownerId, wo.projectId)),
+            and(eq(attachments.ownerType, 'wo'), inArray(attachments.ownerId, liveWos)),
+            and(eq(attachments.ownerType, 'logbook'), inArray(attachments.ownerId, liveLogs)),
+          ),
         ),
       )
       .orderBy(asc(attachments.createdAt));
@@ -408,7 +444,20 @@ export const woRoutes = new Hono<AppEnv>()
     const actor = actorOf(a, wo, acc);
     const logbookExists = await hasLogbook(db, wo.id);
     const writeLogbook = canDo(a, 'logbook.create', acc.res);
+    const materials = await db
+      .select({ material: projectMaterials })
+      .from(workOrderMaterials)
+      .innerJoin(projectMaterials, eq(projectMaterials.id, workOrderMaterials.materialId))
+      .where(
+        and(
+          eq(workOrderMaterials.woId, wo.id),
+          eq(projectMaterials.projectId, wo.projectId),
+          isNull(projectMaterials.deletedAt),
+        ),
+      )
+      .orderBy(asc(projectMaterials.partNo), asc(projectMaterials.id));
     return c.json({
+      materials: materials.map((r) => r.material),
       ...shapeRow(row!, todayWib()),
       detail: wo.detailJson?.text ?? '',
       canceledReason: wo.canceledReason,
@@ -430,12 +479,24 @@ export const woRoutes = new Hono<AppEnv>()
       references: refs,
       attachments: files,
       help: help ? { id: help.id, requestedBy: help.requestedBy, createdAt: help.createdAt } : null,
+      statusHint:
+        wo.status === 'in_progress' && !logbookExists
+          ? 'Tulis minimal satu Logbook hasil pekerjaan agar WO bisa dikirim ke Review.'
+          : wo.status === 'review'
+            ? 'Selesai hanya dapat disetujui pembuat WO atau pengguna dengan izin edit semua WO.'
+            : wo.status === 'todo' || wo.status === 'backlog'
+              ? 'Alur WO: Dikerjakan → tulis Logbook → Review → Selesai.'
+              : null,
       can: {
-        editAny: actor.canEditAny,
+        editCore: actor.canEditAny && wo.status !== 'done' && wo.status !== 'canceled',
         editDetail: actor.canEditAny || actor.isAssignee,
         editWeight: canDo(a, 'wo.weight.edit', acc.res),
         delete: canDo(a, 'wo.delete', acc.res),
         writeLogbook,
+        updateProgress:
+          (actor.canEditAny || actor.isAssignee) &&
+          wo.status !== 'done' &&
+          wo.status !== 'canceled',
         upload: canDo(a, 'attachment.upload', acc.res),
         requestHelp: writeLogbook,
         resolveHelp:
@@ -506,7 +567,7 @@ export const woRoutes = new Hono<AppEnv>()
     }
     if (body.typeId !== undefined && body.typeId !== wo.typeId) {
       const t = await db.query.woTypes.findFirst({ where: eq(woTypes.id, body.typeId) });
-      if (!t) throw new HttpError(422, 'VALIDATION', 'Jenis WO tidak valid');
+      if (!t?.active) throw new HttpError(422, 'VALIDATION', 'Pilih jenis WO yang aktif');
       patch.typeId = t.id;
       changes.push(`jenis → ${t.name}`);
     }
@@ -527,7 +588,18 @@ export const woRoutes = new Hono<AppEnv>()
     const label = wo.numberLabel ?? woNumberLabel(wo.seq);
     const title = patch.title ?? wo.title;
     const notified = await db.transaction(async (tx) => {
-      await tx.update(workOrders).set(patch).where(eq(workOrders.id, wo.id));
+      const [updated] = await tx
+        .update(workOrders)
+        .set({ ...patch, updatedAt: new Date(Math.max(Date.now(), wo.updatedAt.getTime() + 1)) })
+        .where(
+          and(
+            eq(workOrders.id, wo.id),
+            isNull(workOrders.deletedAt),
+            sql`date_trunc('milliseconds', ${workOrders.updatedAt}) = ${wo.updatedAt.toISOString()}::timestamptz`,
+          ),
+        )
+        .returning({ id: workOrders.id });
+      if (!updated) throw stale();
       await systemEntry(tx, wo.id, a.user.id, `${a.user.fullName} mengubah ${changes.join(', ')}`);
       await audit(tx, {
         actorId: a.user.id,
@@ -607,14 +679,48 @@ export const woRoutes = new Hono<AppEnv>()
     const { db } = c.var.deps;
     const { wo, acc } = await loadWo(db, a, c.req.param('id'));
     const body = await readJson(c, woStatusSchema);
-    if (
-      body.expectedUpdatedAt &&
-      new Date(body.expectedUpdatedAt).getTime() !== wo.updatedAt.getTime()
-    ) {
-      throw stale();
-    }
+    const requestHash = hashOf({
+      kind: 'status',
+      woId: wo.id,
+      status: body.status,
+      reason: body.reason,
+    });
     const notified = await db.transaction(async (tx) => {
-      return changeStatus(tx, a, wo, acc, body.status, body.reason, c.var.ip, userAgent(c));
+      const [current] = await tx
+        .select()
+        .from(workOrders)
+        .where(eq(workOrders.id, wo.id))
+        .for('update');
+      if (!current || current.deletedAt) throw notFound('WO tidak ditemukan');
+      if (body.clientId) {
+        const repeated = await tx.query.logbookEntries.findFirst({
+          where: and(
+            eq(logbookEntries.authorId, a.user.id),
+            eq(logbookEntries.clientUuid, body.clientId),
+          ),
+        });
+        if (repeated) {
+          if (repeated.requestHash !== requestHash || repeated.woId !== wo.id)
+            throw new HttpError(409, 'CLIENT_ID_REUSED', 'ID perubahan sudah dipakai');
+          return [];
+        }
+      }
+      if (
+        body.expectedUpdatedAt &&
+        new Date(body.expectedUpdatedAt).getTime() !== current.updatedAt.getTime()
+      )
+        throw stale();
+      return changeStatus(
+        tx,
+        a,
+        current,
+        acc,
+        body.status,
+        body.reason,
+        c.var.ip,
+        userAgent(c),
+        body.clientId ? { clientUuid: body.clientId, requestHash } : undefined,
+      );
     });
     publishToUsers(notified, { type: 'notification' });
     publishToUsers(await watchersOf(db, wo.id), {
@@ -668,12 +774,25 @@ export const woRoutes = new Hono<AppEnv>()
     const a = authOf(c);
     const { db } = c.var.deps;
     const { wo } = await loadWo(db, a, c.req.param('id'));
-    const before = c.req.query('before');
+    const query = validate(
+      activityPeriodQuery.extend({
+        view: z.literal('notes').optional(),
+        entry: z.uuid().optional(),
+        before: z.string().optional(),
+      }),
+      c.req.query(),
+    );
+    const notes = query.view === 'notes';
+    const cursor = query.before
+      ? validate(notes ? z.uuid() : z.iso.datetime({ offset: true }), query.before)
+      : undefined;
+    const range = notes && !query.entry ? activityPeriod(query) : null;
     const rows = await db
       .select({
         id: logbookEntries.id,
         kind: logbookEntries.kind,
         body: logbookEntries.body,
+        category: logbookEntries.category,
         progressFrom: logbookEntries.progressFrom,
         progressTo: logbookEntries.progressTo,
         statusFrom: logbookEntries.statusFrom,
@@ -692,10 +811,20 @@ export const woRoutes = new Hono<AppEnv>()
         and(
           eq(logbookEntries.woId, wo.id),
           isNull(logbookEntries.deletedAt),
-          before ? lt(logbookEntries.createdAt, new Date(before)) : undefined,
+          notes ? inArray(logbookEntries.kind, ['note', 'comment']) : undefined,
+          range ? gte(logbookEntries.createdAt, range.from) : undefined,
+          range ? lt(logbookEntries.createdAt, range.to) : undefined,
+          notes && query.entry ? eq(logbookEntries.id, query.entry) : undefined,
+          cursor && notes
+            ? sql`(${logbookEntries.createdAt}, ${logbookEntries.id}) < (
+              select created_at, id from logbook_entries where id = ${cursor} and wo_id = ${wo.id}
+            )`
+            : cursor
+              ? lt(logbookEntries.createdAt, new Date(cursor))
+              : undefined,
         ),
       )
-      .orderBy(desc(logbookEntries.createdAt))
+      .orderBy(desc(logbookEntries.createdAt), desc(logbookEntries.id))
       .limit(21);
     const page = rows.slice(0, 20);
     const ids = page.map((r) => r.id);
@@ -721,6 +850,7 @@ export const woRoutes = new Hono<AppEnv>()
     return c.json({
       entries: page.map(({ author, ...e }) => ({
         ...e,
+        canEdit: canEditLogbook(a, e, author.id),
         author: {
           id: author.id,
           fullName: author.fullName,
@@ -728,11 +858,19 @@ export const woRoutes = new Hono<AppEnv>()
         },
         attachments: files.filter((f) => f.ownerId === e.id).map(({ ownerId: _o, ...f }) => f),
       })),
-      nextCursor: rows.length > 20 ? page[page.length - 1]!.createdAt.toISOString() : null,
+      nextCursor:
+        rows.length > 20
+          ? notes
+            ? page[page.length - 1]!.id
+            : page[page.length - 1]!.createdAt.toISOString()
+          : null,
     });
   })
 
-  /** Catatan logbook + lampiran. Status/progres WO diatur terpisah. Idempoten per penulis. */
+  .patch('/:id/logbook/:entryId', (c) => mutateLogbook(c, false))
+  .delete('/:id/logbook/:entryId', (c) => mutateLogbook(c, true))
+
+  /** Catatan + progres opsional disimpan atomik; status catatan terpisah dari status WO. */
   .post('/:id/logbook', async (c) => {
     const a = authOf(c);
     const { db } = c.var.deps;
@@ -740,7 +878,8 @@ export const woRoutes = new Hono<AppEnv>()
     assertCan(a, 'logbook.create', acc.res, 'Anda bukan anggota project ini');
     const body = await readJson(c, logbookCreateSchema);
     if (body.attachmentIds.length) assertCan(a, 'attachment.upload', acc.res);
-    const digest = hashOf(body);
+    const { expectedUpdatedAt: _version, ...content } = body;
+    const digest = hashOf(content);
     const dup = await db.query.logbookEntries.findFirst({
       where: and(
         eq(logbookEntries.authorId, a.user.id),
@@ -748,7 +887,7 @@ export const woRoutes = new Hono<AppEnv>()
       ),
     });
     if (dup) {
-      if (dup.requestHash !== digest) {
+      if (dup.requestHash !== digest || dup.woId !== wo.id || dup.kind === 'system') {
         throw new HttpError(409, 'CLIENT_ID_REUSED', 'ID logbook sudah dipakai untuk catatan lain');
       }
       return c.json({ id: dup.id, duplicate: true });
@@ -757,6 +896,46 @@ export const woRoutes = new Hono<AppEnv>()
     const kind = actor.isAssignee || wo.createdBy === a.user.id ? 'note' : 'comment';
 
     const result = await db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(workOrders)
+        .where(eq(workOrders.id, wo.id))
+        .for('update');
+      if (!current || current.deletedAt) throw notFound('WO tidak ditemukan');
+      const repeated = await tx.query.logbookEntries.findFirst({
+        where: and(
+          eq(logbookEntries.authorId, a.user.id),
+          eq(logbookEntries.clientUuid, body.clientId),
+        ),
+      });
+      if (repeated) {
+        if (
+          repeated.requestHash !== digest ||
+          repeated.woId !== wo.id ||
+          repeated.kind === 'system'
+        )
+          throw new HttpError(
+            409,
+            'CLIENT_ID_REUSED',
+            'ID logbook sudah dipakai untuk catatan lain',
+          );
+        return { id: repeated.id, notified: [], duplicate: true };
+      }
+      if (body.progress !== undefined) {
+        const currentActor = actorOf(a, current, acc);
+        if (!currentActor.isAssignee && !currentActor.canEditAny)
+          throw forbidden(
+            'Hanya PIC atau pengguna dengan izin edit semua WO yang bisa memperbarui progres',
+          );
+        if (current.status === 'done' || current.status === 'canceled')
+          throw new HttpError(
+            422,
+            'WO_CLOSED',
+            'Progres WO selesai atau dibatalkan tidak dapat diubah',
+          );
+        if (new Date(body.expectedUpdatedAt!).getTime() !== current.updatedAt.getTime())
+          throw stale();
+      }
       const [entry] = await tx
         .insert(logbookEntries)
         .values({
@@ -764,6 +943,9 @@ export const woRoutes = new Hono<AppEnv>()
           authorId: a.user.id,
           kind,
           body: body.body,
+          category: body.category ?? null,
+          progressFrom: body.progress !== undefined ? current.progress : null,
+          progressTo: body.progress ?? null,
           clientUuid: body.clientId,
           requestHash: digest,
           clientCreatedAt: body.clientCreatedAt ? new Date(body.clientCreatedAt) : null,
@@ -775,12 +957,31 @@ export const woRoutes = new Hono<AppEnv>()
         action: 'logbook.created',
         entityType: 'logbook',
         entityId: entry!.id,
-        diff: { woId: wo.id, attachments: body.attachmentIds.length },
+        diff: {
+          woId: wo.id,
+          attachments: body.attachmentIds.length,
+          category: body.category,
+          progressFrom: body.progress !== undefined ? current.progress : undefined,
+          progressTo: body.progress,
+        },
         ip: c.var.ip,
         userAgent: userAgent(c),
       });
       const notified: string[] = [];
-      await tx.update(workOrders).set({ updatedAt: new Date() }).where(eq(workOrders.id, wo.id));
+      await tx
+        .update(workOrders)
+        .set({
+          updatedAt: new Date(),
+          ...(body.progress !== undefined ? { progress: body.progress } : {}),
+        })
+        .where(eq(workOrders.id, wo.id));
+      if (body.progress !== undefined)
+        await tx.insert(progressEvents).values({
+          woId: wo.id,
+          progress: body.progress,
+          status: current.status,
+          sourceEntryId: entry!.id,
+        });
       notified.push(
         ...(await enqueueNotifications(tx, {
           event: 'logbook.created',
@@ -794,7 +995,7 @@ export const woRoutes = new Hono<AppEnv>()
           url: `/w/${wo.id}`,
         })),
       );
-      return { id: entry!.id, notified };
+      return { id: entry!.id, notified, duplicate: false };
     });
     publishToUsers(result.notified, { type: 'notification' });
     publishToUsers(await watchersOf(db, wo.id), {
@@ -802,7 +1003,7 @@ export const woRoutes = new Hono<AppEnv>()
       woId: wo.id,
       projectId: wo.projectId,
     });
-    return c.json({ id: result.id }, 201);
+    return c.json({ id: result.id, duplicate: result.duplicate }, result.duplicate ? 200 : 201);
   })
 
   /** FR-050: Butuh bantuan. Satu permintaan `open` per WO (permintaan kedua menambah entri). */
@@ -956,13 +1157,85 @@ export const woRoutes = new Hono<AppEnv>()
       return out;
     });
     publishToUsers(notified, { type: 'notification' });
-    publishToUsers(await watchersOf(db, wo.id), {
+    const watching = await watchersOf(db, wo.id);
+    if (body.resolve && open) watching.push(open.requestedBy);
+    publishToUsers(watching, {
       type: 'wo',
       woId: wo.id,
       projectId: wo.projectId,
     });
     return c.json({ ok: true }, 201);
   });
+
+const logbookVersion = z.object({ expectedEditedAt: z.iso.datetime({ offset: true }).nullable() });
+const logbookEdit = logbookVersion.extend({
+  body: z.string().trim().max(5000, 'Catatan maksimal 5.000 karakter'),
+});
+
+async function mutateLogbook(c: Context<AppEnv>, remove: boolean) {
+  const a = authOf(c);
+  const { db } = c.var.deps;
+  const { wo } = await loadWo(db, a, c.req.param('id') ?? '');
+  const entryId = c.req.param('entryId') ?? '';
+  if (!z.uuid().safeParse(entryId).success) throw notFound('Entri Logbook tidak ditemukan');
+  const { expectedEditedAt, body } = remove
+    ? { ...(await readJson(c, logbookVersion)), body: undefined }
+    : await readJson(c, logbookEdit);
+  await db.transaction(async (tx) => {
+    const [entry] = await tx
+      .select()
+      .from(logbookEntries)
+      .where(
+        and(
+          eq(logbookEntries.id, entryId),
+          eq(logbookEntries.woId, wo.id),
+          isNull(logbookEntries.deletedAt),
+        ),
+      )
+      .for('update');
+    if (!entry) throw notFound('Entri Logbook tidak ditemukan');
+    if (!canEditLogbook(a, entry, entry.authorId))
+      throw forbidden('Hanya penulis dengan izin yang dapat mengubah catatan dalam 24 jam');
+    if ((entry.editedAt?.toISOString() ?? null) !== expectedEditedAt)
+      throw new HttpError(
+        409,
+        'STALE',
+        'Catatan sudah berubah. Buka kembali entri untuk meninjau perubahan.',
+      );
+    if (body === '') {
+      const file = await tx.query.attachments.findFirst({
+        where: and(
+          eq(attachments.ownerType, 'logbook'),
+          eq(attachments.ownerId, entry.id),
+          isNull(attachments.deletedAt),
+        ),
+      });
+      if (!file && entry.progressTo === null)
+        throw new HttpError(422, 'VALIDATION', 'Isi catatan sebelum menyimpan');
+    }
+    if (!remove && body === entry.body) return;
+    const now = new Date(Math.max(Date.now(), (entry.editedAt?.getTime() ?? 0) + 1));
+    await tx
+      .update(logbookEntries)
+      .set(remove ? { deletedAt: now } : { body, editedAt: now })
+      .where(eq(logbookEntries.id, entry.id));
+    await audit(tx, {
+      actorId: a.user.id,
+      action: remove ? 'logbook.deleted' : 'logbook.updated',
+      entityType: 'logbook',
+      entityId: entry.id,
+      diff: { woId: wo.id, before: entry.body, ...(body !== undefined ? { after: body } : {}) },
+      ip: c.var.ip,
+      userAgent: userAgent(c),
+    });
+  });
+  publishToUsers([a.user.id, ...(await watchersOf(db, wo.id))], {
+    type: 'wo',
+    woId: wo.id,
+    projectId: wo.projectId,
+  });
+  return c.json({ ok: true });
+}
 
 /** Ubah status + efek samping (PRD §4.5): progres, entri system, progress_events, notifikasi. */
 async function changeStatus(
@@ -974,10 +1247,10 @@ async function changeStatus(
   reason: string | undefined,
   ip: string,
   ua: string | null,
-  opts: { entryId?: string; hasLogbook?: boolean; progress?: number } = {},
+  offlineReceipt?: { clientUuid: string; requestHash: string },
 ): Promise<string[]> {
   const check = checkWoTransition(wo.status, to, actorOf(a, wo, acc), {
-    hasLogbook: opts.hasLogbook ?? (await hasLogbook(tx, wo.id)),
+    hasLogbook: await hasLogbook(tx, wo.id),
   });
   if (!check.ok) {
     throw new HttpError(check.code === 'LOGBOOK_REQUIRED' ? 422 : 403, check.code, check.message);
@@ -985,12 +1258,13 @@ async function changeStatus(
   if (check.reasonRequired && !reason) {
     throw new HttpError(422, 'VALIDATION', 'Alasan wajib diisi', { reason: 'Alasan wajib diisi' });
   }
-  const progress = to === 'done' ? 100 : (opts.progress ?? wo.progress);
+  const progress = to === 'done' ? 100 : wo.progress;
   await tx
     .update(workOrders)
     .set({
       status: to,
       progress,
+      updatedAt: new Date(Math.max(Date.now(), wo.updatedAt.getTime() + 1)),
       completedAt: to === 'done' ? new Date() : null,
       canceledReason: to === 'canceled' ? (reason ?? null) : null,
     })
@@ -999,13 +1273,16 @@ async function changeStatus(
     woId: wo.id,
     progress,
     status: to,
-    sourceEntryId: opts.entryId ?? null,
   });
   const verb =
     wo.status === 'review' && to === 'in_progress'
       ? `Dikembalikan: ${reason}`
       : `${a.user.fullName} mengubah status ${WO_STATUS_LABEL[wo.status]} → ${WO_STATUS_LABEL[to]}${reason ? ` (${reason})` : ''}`;
-  await systemEntry(tx, wo.id, a.user.id, verb, { statusFrom: wo.status, statusTo: to });
+  await systemEntry(tx, wo.id, a.user.id, verb, {
+    statusFrom: wo.status,
+    statusTo: to,
+    ...offlineReceipt,
+  });
   await audit(tx, {
     actorId: a.user.id,
     action: 'wo.status_changed',

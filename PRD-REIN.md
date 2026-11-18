@@ -16,6 +16,8 @@
 ## 1. Ringkasan, tujuan, non-goals
 
 ### 1.1 Ringkasan
+> **Revisi 1.9 (18 Nov 2026, permintaan pengguna):** Material dapat dihapus (soft delete, dengan aksi Batalkan), serta dihubungkan/dilepas ke beberapa WO dalam project yang sama. Material terhubung ditampilkan pada detail WO. Izin pengelolaan tetap `wo.create`. Input manual, impor, edit, dan pemulihan mencegah duplikat berdasarkan kombinasi Part No., Description, Material, Spesifikasi, dan Satuan yang dinormalisasi (huruf kecil, spasi dirapikan); jumlah/status/tanggal/note bukan identitas baru. Impor melewati duplikat dan melaporkan jumlahnya. Duplikat lama tidak digabung atau dihapus otomatis agar catatan dan hubungan tidak hilang. Perubahan bersamaan diserialkan per project. Revisi ini menggantikan perilaku impor ulang yang menambahkan baris pada revisi 1.8.
+
 REIN melacak setiap project fabrikasi (mixing tank, storage tank, reaktor, panel, line otomasi) mulai **PO diterima** sampai **Selesai**. Status Selesai ditentukan manual oleh pengguna yang memiliki izin `project.close`; tidak mensyaratkan punch list habis, tanggal serah terima, ataupun lampiran BAST.
 
 Pelunasan terjadi setelah itu dan **berada di luar REIN**.
@@ -23,6 +25,8 @@ Pelunasan terjadi setelah itu dan **berada di luar REIN**.
 Hierarki konten: **Project → Work Order (WO) → Logbook entry → Attachment**. Attachment juga bisa melekat langsung di Project atau di WO.
 
 > **Revisi 1.1 (15 Nov 2026):** project **tidak punya tahapan baku**. Proses berjalan **paralel** dan menjadi **kategori Jenis WO**. Project hanya punya status **Berjalan / Ditunda / Selesai** (§4.4). Progres dirangkum **per kategori** (§8.4).
+>
+> **Revisi 1.8 (18 Nov 2026, permintaan pengguna):** Logbook menerima progres WO (0–100%) dan status catatan Aktivitas/Dokumen/Kendala, keduanya opsional. Progres hanya boleh diubah PIC dengan `wo.edit.own` atau pemegang `wo.edit.any`, dicatat atomik bersama `progress_events`, dan tidak mengubah status WO. Tab Material menyediakan daftar per project (Part No., Description, Material, Size or Specification, QTY angka + satuan, status In stock/Not available/PO, tanggal diterima, Note), input manual, edit, dan impor `.xlsx` dengan pratinjau. Pengelolaan Material mengikuti izin `wo.create` pada project; membaca mengikuti `project.view`. Ini pelacakan kebutuhan project, tanpa mutasi stok lintas project atau data keuangan. Tab Lampiran menjadi Dokumen; kategori tidak ditampilkan/dipilih. Tombol Attach menghubungkan file ke satu atau beberapa WO dalam project yang sama tanpa memindahkan atau menghapus file asal. Aturan transisi WO §4.5 tetap berlaku; syarat Logbook sebelum Review ditampilkan. Revisi ini menggantikan pembatasan Logbook pada revisi 1.6/FR-040 AC2 dan larangan daftar material pada §1.3.
 >
 > **Revisi 1.7 (17 Nov 2026, permintaan pengguna):** self-host di `staff.remula.online` memakai **database baru** dan **penyimpanan server** (`LocalDriver`, volume permanen `app-uploads`, path `/app/uploads`). Akses file tetap diperiksa server. **Gmail API/email ditunda** (`MAIL_PROVIDER=null`); WhatsApp menjadi kanal aktif. Google Cloud, Gmail, dan Login Google bukan syarat deployment tahap ini. Compose produksi berada di root repository (`docker-compose.yml`, Coolify Base Directory `/`, branch `main`). Backup harus mencakup PostgreSQL dan volume lampiran serta salinan di luar server. Revisi ini menggantikan kewajiban GCS/Gmail dan lokasi Compose pada §7/§11; lihat `docs/SELFHOST-COOLIFY.md`.
 >
@@ -226,7 +230,7 @@ Format AC: *Given / When / Then* atau poin yang bisa diuji. Prioritas: **P0** = 
 - **FR-040 (P0) Tulis entri.**
   - Isi entri: teks (plain text + baris baru; tautan otomatis; `@mention` anggota project [P1]), dan lampiran (≤ 10 per entri).
   - AC1: Entri tersimpan dengan `author_id` dan `created_at` server (bukan waktu klien). Untuk entri yang dikirim dari antrean offline, waktu klien disimpan di `client_created_at`.
-  - AC2: Pembuatan logbook tidak menerima progres/status dan tidak mengubah `work_orders.progress` atau status WO. Payload lama berisi progres/status ditolak 422. Perubahan status WO tetap melalui endpoint terpisah dan menulis `progress_events` untuk S-Curve.
+  - AC2 (revisi 1.8): progres integer 0–100 dan status catatan (`activity`, `document`, `issue`) opsional. Progres memerlukan izin edit WO dan versi `expectedUpdatedAt`; konflik ditolak 409. Progres, snapshot Logbook, audit, dan `progress_events` disimpan atomik. Status WO tetap melalui endpoint terpisah. WO selesai/dibatalkan tidak menerima pembaruan progres. Catatan/lampiran tanpa progres tetap dapat dikirim anggota.
   - AC3: Mengubah status WO menjadi `Selesai` melalui properti status membuat progres 100. Histori progres/status lama tetap dipertahankan.
   - AC4: Entri bisa diedit/dihapus oleh penulis ≤ 24 jam (`logbook.edit.own`). Edit menyimpan riwayat (`edited_at`) dan menampilkan label "diedit".
 - **FR-041 (P0) Jenis entri:** `note` (catatan biasa), `comment` (balasan/komentar, mis. dari manager), `system` (perubahan field otomatis), `help_request`, `help_resolved`.

@@ -4,7 +4,9 @@ build
 .svelte-kit
 coverage
 .lighthouseci
+.data
 pnpm-lock.yaml
 apps/server/drizzle/meta
 design
+docs/audit-frontend-2026-11-18/
 *.md

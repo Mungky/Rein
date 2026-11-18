@@ -77,7 +77,7 @@ export const preferenceRoutes = new Hono<AppEnv>()
       ),
     });
     if (taken) throw new HttpError(409, 'EMAIL_TAKEN', 'Email sudah terdaftar pada akun lain');
-    await db.transaction(async (tx) => {
+    const canceled = await db.transaction(async (tx) => {
       await tx.select().from(users).where(eq(users.id, a.user.id)).for('update');
       const existing = await tx.query.userContacts.findFirst({
         where: and(
@@ -86,7 +86,6 @@ export const preferenceRoutes = new Hono<AppEnv>()
           eq(userContacts.value, email),
         ),
       });
-      if (existing?.verifiedAt) return;
       await tx
         .update(verificationCodes)
         .set({ expiresAt: new Date() })
@@ -100,6 +99,17 @@ export const preferenceRoutes = new Hono<AppEnv>()
         .update(userContacts)
         .set({ pending: false })
         .where(and(eq(userContacts.userId, a.user.id), eq(userContacts.kind, 'email')));
+      if (existing?.verifiedAt && existing.isPrimary) {
+        await audit(tx, {
+          actorId: a.user.id,
+          action: 'contact.email_change_canceled',
+          entityType: 'user',
+          entityId: a.user.id,
+          ip: c.var.ip,
+          userAgent: userAgent(c),
+        });
+        return true;
+      }
       const primary = await tx.query.userContacts.findFirst({
         where: and(
           eq(userContacts.userId, a.user.id),
@@ -110,7 +120,7 @@ export const preferenceRoutes = new Hono<AppEnv>()
       if (existing)
         await tx
           .update(userContacts)
-          .set({ pending: true })
+          .set({ pending: true, verifiedAt: null })
           .where(eq(userContacts.id, existing.id));
       else
         await tx.insert(userContacts).values({
@@ -129,8 +139,9 @@ export const preferenceRoutes = new Hono<AppEnv>()
         ip: c.var.ip,
         userAgent: userAgent(c),
       });
+      return false;
     });
-    return c.json({ ok: true });
+    return c.json({ ok: true, canceled });
   });
 
 async function saveChannels(c: Context<AppEnv>) {

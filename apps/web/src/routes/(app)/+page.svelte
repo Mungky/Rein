@@ -19,7 +19,7 @@
   async function load() {
     error = '';
     try {
-      home = await api<HomeData>('/api/home');
+      home = await api<HomeData>('/api/home', { account: session.me?.user.id });
     } catch (err) {
       error = err instanceof ApiError ? err.message : 'Beranda gagal dimuat.';
     } finally {
@@ -52,6 +52,11 @@
   }
   onMount(() => {
     void load();
+    const refreshed = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === '/api/home') void load();
+    };
+    window.addEventListener('rein:cache-updated', refreshed);
+    return () => window.removeEventListener('rein:cache-updated', refreshed);
   });
   onDestroy(
     onLive((e) => {

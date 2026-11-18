@@ -134,6 +134,10 @@
     }
   }
   @media (max-width: 767px) {
+    .btn {
+      min-width: 44px;
+      min-height: 44px;
+    }
     .btn.md {
       height: 44px;
       font-size: 14px;

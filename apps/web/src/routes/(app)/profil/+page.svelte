@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { PASSWORD_MIN } from '@rein/shared';
+  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { resolve } from '$app/paths';
   import { page } from '$app/state';
@@ -11,6 +13,7 @@
   import UserNotificationSettings from '$lib/components/UserNotificationSettings.svelte';
   import Input from '$lib/components/Input.svelte';
   import { compressImage } from '$lib/image';
+  import { stamp } from '$lib/format';
   import { hasGlobal, loadMe, logout, session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
   import { uploadAttachment } from '$lib/upload';
@@ -18,6 +21,76 @@
   /** Profil & keamanan (Figma D/09, M/09). */
   let confirmOpen = $state(false);
   let busy = $state(false);
+  let passwordOpen = $state(false);
+  let passwords = $state({ currentPassword: '', password: '', confirmation: '' });
+  let passwordError = $state('');
+  type Device = {
+    id: string;
+    label: string;
+    lastSeenAt: string;
+    current: boolean;
+    hasPin: boolean;
+  };
+  let devices = $state<Device[] | null>(null);
+  let devicesError = $state('');
+  let selectedDevice = $state<Device | null>(null);
+  let deviceOpen = $state(false);
+
+  async function loadDevices() {
+    devicesError = '';
+    try {
+      devices = (await api<{ devices: Device[] }>('/api/me/devices')).devices;
+    } catch (err) {
+      devicesError = err instanceof ApiError ? err.message : 'Gagal memuat perangkat';
+    }
+  }
+  onMount(() => void loadDevices());
+
+  async function revokeDevice() {
+    if (!selectedDevice || busy) return;
+    busy = true;
+    try {
+      const { signedOut } = await api<{ signedOut: boolean }>(
+        `/api/me/devices/${selectedDevice.id}`,
+        {
+          method: 'DELETE',
+        },
+      );
+      deviceOpen = false;
+      toast('Perangkat dicabut');
+      if (signedOut) {
+        await logout();
+        await goto(resolve('/masuk'));
+      } else await loadDevices();
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Perangkat gagal dicabut', { tone: 'danger' });
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function savePassword(e: SubmitEvent) {
+    e.preventDefault();
+    if (passwords.password !== passwords.confirmation) {
+      passwordError = 'Konfirmasi password belum sama.';
+      return;
+    }
+    busy = true;
+    passwordError = '';
+    try {
+      await api('/api/me/password', {
+        body: { currentPassword: passwords.currentPassword, password: passwords.password },
+      });
+      passwordOpen = false;
+      await logout();
+      toast('Password diganti. Silakan masuk kembali.');
+      await goto(resolve('/masuk'));
+    } catch (err) {
+      passwordError = err instanceof ApiError ? err.message : 'Password gagal disimpan';
+    } finally {
+      busy = false;
+    }
+  }
   let nickname = $state(session.me?.user.nickname ?? '');
   let savingName = $state(false);
   let nameError = $state<string | null>(null);
@@ -180,6 +253,17 @@
         </div>
         <div class="group">
           <div class="setting-row">
+            <Icon name="lock" size={18} />
+            <div class="row-copy"><h3>Password</h3></div>
+            <Button
+              onclick={() => {
+                passwords = { currentPassword: '', password: '', confirmation: '' };
+                passwordError = '';
+                passwordOpen = true;
+              }}>Ganti password</Button
+            >
+          </div>
+          <div class="setting-row">
             <Icon name="key" size={18} />
             <div class="row-copy">
               <h3>PIN masuk cepat</h3>
@@ -204,8 +288,37 @@
             <Button onclick={() => (confirmOpen = true)}>Keluar semua</Button>
           </div>
         </div>
+        <h3>Perangkat tepercaya</h3>
+        <div class="group">
+          {#if devicesError}
+            <p role="alert">{devicesError}</p>
+            <Button onclick={loadDevices}>Coba lagi</Button>
+          {:else if !devices}
+            <p role="status">Memuat perangkat…</p>
+          {:else if !devices.length}
+            <p>Belum ada perangkat tepercaya.</p>
+          {:else}
+            {#each devices as device (device.id)}
+              <div class="setting-row">
+                <Icon name="shield" size={18} />
+                <div class="row-copy">
+                  <h3>{device.label}{device.current ? ' · Perangkat ini' : ''}</h3>
+                  <p>
+                    Terakhir aktif {stamp(device.lastSeenAt)}{device.hasPin ? ' · PIN aktif' : ''}
+                  </p>
+                </div>
+                <Button
+                  onclick={() => {
+                    selectedDevice = device;
+                    deviceOpen = true;
+                  }}>Cabut</Button
+                >
+              </div>
+            {/each}
+          {/if}
+        </div>
       </section>
-      {#if hasGlobal('admin.roles') || hasGlobal('admin.users')}
+      {#if hasGlobal('admin.roles') || hasGlobal('admin.users') || hasGlobal('admin.wo_types')}
         <section class="mobile-admin" aria-labelledby="admin-title">
           <div class="section-heading"><h2 id="admin-title">Administrasi</h2></div>
           <div class="admin-links">
@@ -217,6 +330,10 @@
               >{/if}
             {#if hasGlobal('admin.roles')}<Button href={resolve('/admin/role')} icon="shield"
                 >Role & izin</Button
+              >{/if}
+            {#if hasGlobal('admin.wo_types')}<Button
+                href={resolve('/admin/jenis-wo')}
+                icon="logbook">Jenis WO</Button
               >{/if}
           </div>
         </section>
@@ -233,7 +350,59 @@
   {/snippet}
 </Modal>
 
+<Modal bind:open={passwordOpen} title="Ganti password" width={440}>
+  <form class="password-form" id="password-form" onsubmit={savePassword}>
+    {#if passwordError}<p role="alert">{passwordError}</p>{/if}
+    <Input
+      label="Password lama"
+      type="password"
+      autocomplete="current-password"
+      bind:value={passwords.currentPassword}
+      maxlength={200}
+      required
+    />
+    <Input
+      label="Password baru"
+      type="password"
+      autocomplete="new-password"
+      bind:value={passwords.password}
+      minlength={PASSWORD_MIN}
+      maxlength={200}
+      required
+    />
+    <Input
+      label="Ulangi password baru"
+      type="password"
+      autocomplete="new-password"
+      bind:value={passwords.confirmation}
+      required
+    />
+    <p class="hint">Anda perlu masuk kembali di semua perangkat.</p>
+  </form>
+  {#snippet footer()}
+    <Button onclick={() => (passwordOpen = false)}>Batal</Button>
+    <Button variant="primary" type="submit" form="password-form" loading={busy}
+      >Simpan password</Button
+    >
+  {/snippet}
+</Modal>
+
+<Modal bind:open={deviceOpen} title="Cabut perangkat?" width={440}>
+  <p>
+    Sesi dan PIN di {selectedDevice?.label ?? 'perangkat ini'} akan dicabut. Perangkat perlu masuk kembali
+    dengan password.
+  </p>
+  {#snippet footer()}
+    <Button onclick={() => (deviceOpen = false)}>Batal</Button>
+    <Button variant="danger" loading={busy} onclick={revokeDevice}>Cabut perangkat</Button>
+  {/snippet}
+</Modal>
+
 <style>
+  .password-form {
+    display: grid;
+    gap: 12px;
+  }
   .settings-layout {
     display: flex;
     min-height: 100%;

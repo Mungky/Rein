@@ -50,10 +50,12 @@
   const nav = $derived<NavItem[]>([
     { href: resolve('/'), label: 'Beranda', icon: 'home', badge },
     { href: resolve('/project'), label: 'Project', icon: 'folder' },
+    { href: resolve('/aktivitas'), label: 'Aktivitas', icon: 'clock' },
   ]);
   const bottom = $derived<NavItem[]>([
     { href: resolve('/'), label: 'Beranda', icon: 'home', badge },
     { href: resolve('/project'), label: 'Project', icon: 'folder' },
+    { href: resolve('/aktivitas'), label: 'Aktivitas', icon: 'clock' },
     { href: resolve('/profil'), label: 'Profil', icon: 'user' },
   ]);
   const adminItems = $derived<NavItem[]>(

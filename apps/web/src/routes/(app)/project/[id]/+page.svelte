@@ -4,10 +4,12 @@
     checkProjectTransition,
     PROJECT_STATUS_LABEL,
     PROJECT_STATUSES,
+    projectCreateSchema,
     WO_CATEGORY_META,
     WO_STATUS_LABEL,
+    WO_STATUSES,
+    todayWib,
     woReasonRequired,
-    type AttachmentCategory,
     type ProjectStatus,
     type WoCategory,
     type WoStatus,
@@ -15,8 +17,10 @@
   import { onDestroy } from 'svelte';
   import { goto, invalidate } from '$app/navigation';
   import { resolve } from '$app/paths';
+  import { page } from '$app/state';
   import { api, ApiError } from '$lib/api';
-  import { fileUrl } from '$lib/attach';
+  import { fileUrl, isPreviewImage, thumbUrl, uploadPreparedFile } from '$lib/attach';
+  import PhotoLightbox from '$lib/components/PhotoLightbox.svelte';
   import { setChrome } from '$lib/chrome.svelte';
   import Avatar from '$lib/components/Avatar.svelte';
   import Button from '$lib/components/Button.svelte';
@@ -29,23 +33,135 @@
   import Modal from '$lib/components/Modal.svelte';
   import Progress from '$lib/components/Progress.svelte';
   import ProjectMediaModal from '$lib/components/ProjectMediaModal.svelte';
+  import ProjectMembersModal from '$lib/components/ProjectMembersModal.svelte';
+  import ProjectMaterials from '$lib/components/ProjectMaterials.svelte';
   import Segmented from '$lib/components/Segmented.svelte';
-  import Toggle from '$lib/components/Toggle.svelte';
   import WoCreateModal from '$lib/components/WoCreateModal.svelte';
   import WoTable from '$lib/components/WoTable.svelte';
   import WoTimeline from '$lib/components/WoTimeline.svelte';
   import WoSCurve from '$lib/components/WoSCurve.svelte';
   import { formatBytes, shortDate } from '$lib/format';
   import { onLive } from '$lib/live.svelte';
+  import { submitWoStatus } from '$lib/offline';
   import { toast } from '$lib/toast.svelte';
   import type { WoRow } from '$lib/types';
-  import { uploadAttachment } from '$lib/upload';
+  import { sortWorklist, type WorklistGroup, type WorklistSort } from '$lib/worklist';
 
   /** Detail project (Figma D/04c–05, M/04–05; FR-021–026, FR-070–071). */
   let { data } = $props();
   const p = $derived(data.project);
-  let mediaOpen = $state(false);
+  let mediaKind = $state<'logo' | 'banner' | null>(null);
+  let memberOpen = $state(false);
   let rows = $derived<WoRow[]>(data.workOrders);
+  let infoOpen = $state(false);
+  let infoSaving = $state(false);
+  let infoVersion = '';
+  let initialInfo = '';
+  let infoErrors = $state<Record<string, string>>({});
+  let infoMessage = $state('');
+  let info = $state({
+    name: '',
+    clientName: '',
+    rpoNumber: '',
+    location: '',
+    startDate: '',
+    endDate: '',
+    description: '',
+  });
+  let initialStatus = $state<ProjectStatus>('active');
+  let nextStatus = $state<ProjectStatus>('active');
+  let note = $state('');
+  const statusActor = $derived({
+    canEdit: !!p.can.edit,
+    canClose: !!p.can.close,
+    canCloseAll: !!p.can.reopen,
+  });
+  const statusTargets = $derived(
+    PROJECT_STATUSES.filter((s) => checkProjectTransition(p.status, s, statusActor).ok),
+  );
+  const editStatusTargets = $derived(
+    PROJECT_STATUSES.filter((s) => checkProjectTransition(initialStatus, s, statusActor).ok),
+  );
+  const statusChange = $derived(nextStatus !== initialStatus);
+  const transition = $derived(checkProjectTransition(initialStatus, nextStatus, statusActor));
+  const needsReason = $derived(statusChange && transition.ok && transition.reasonRequired);
+
+  function openInfo() {
+    info = {
+      name: p.name,
+      clientName: p.client.name,
+      rpoNumber: p.rpoNumber,
+      location: p.location ?? '',
+      startDate: p.startDate,
+      endDate: p.endDate,
+      description: p.description ?? '',
+    };
+    initialInfo = JSON.stringify(info);
+    infoVersion = p.updatedAt;
+    initialStatus = p.status;
+    nextStatus = p.status;
+    note = '';
+    infoErrors = {};
+    infoMessage = '';
+    infoOpen = true;
+  }
+
+  async function saveInfo(e: SubmitEvent) {
+    e.preventDefault();
+    if (infoSaving) return;
+    infoErrors = {};
+    infoMessage = '';
+    let fields = {};
+    const changed = p.can.edit && JSON.stringify(info) !== initialInfo;
+    if (changed) {
+      const parsed = projectCreateSchema.safeParse(info);
+      if (!parsed.success) {
+        infoErrors = Object.fromEntries(
+          parsed.error.issues.map((issue) => [String(issue.path[0]), issue.message]),
+        );
+        return;
+      }
+      fields = {
+        ...parsed.data,
+        location: parsed.data.location || null,
+        description: parsed.data.description || null,
+      };
+    }
+    if (needsReason && !note.trim()) {
+      infoErrors = { note: 'Alasan wajib diisi' };
+      return;
+    }
+    if (!changed && !statusChange) {
+      infoOpen = false;
+      return;
+    }
+    infoSaving = true;
+    try {
+      await api(`/api/projects/${p.id}`, {
+        method: 'PATCH',
+        body: {
+          ...fields,
+          ...(statusChange
+            ? { statusChange: { status: nextStatus, note: note.trim() || undefined } }
+            : {}),
+          expectedUpdatedAt: infoVersion,
+        },
+      });
+      infoOpen = false;
+      toast(
+        statusChange && !changed
+          ? `Status project: ${PROJECT_STATUS_LABEL[nextStatus]}`
+          : 'Info project diperbarui',
+      );
+      await invalidate('app:project');
+      await invalidate('app:projects');
+    } catch (err) {
+      if (err instanceof ApiError && Object.keys(err.fields).length) infoErrors = err.fields;
+      else infoMessage = err instanceof ApiError ? err.message : 'Gagal menyimpan info project.';
+    } finally {
+      infoSaving = false;
+    }
+  }
 
   $effect(() => {
     setChrome({
@@ -84,16 +200,47 @@
       // abaikan
     }
   });
-  let tab = $state<'worklist' | 'members' | 'files'>('worklist');
+  let tab = $state<'worklist' | 'files' | 'materials'>('worklist');
+  $effect(() => {
+    const source = page.url.searchParams.get('tab');
+    tab = source === 'files' || source === 'materials' ? source : 'worklist';
+  });
   let cat = $state<WoCategory | ''>('');
   let onlyUrgent = $state(false);
   let pic = $state('');
+  let kind = $state('');
+  let status = $state<WoStatus | ''>('');
+  let onlyHelp = $state(false);
+  let deadline = $state<'' | 'late' | 'next7' | 'range'>('');
+  let from = $state('');
+  let to = $state('');
+  let groupBy = $state<WorklistGroup>('status');
+  let sort = $state<WorklistSort>('deadline');
+  const kinds = $derived(
+    [...new Map(rows.map((w) => [w.type.id, w.type])).values()].sort((a, b) =>
+      a.name.localeCompare(b.name, 'id'),
+    ),
+  );
+  const today = todayWib();
+  const nextWeek = new Date(Date.parse(today) + 7 * 86_400_000).toISOString().slice(0, 10);
+  const dueFrom = $derived(deadline === 'range' ? from : deadline === 'next7' ? today : '');
+  const dueTo = $derived(deadline === 'range' ? to : deadline === 'next7' ? nextWeek : '');
   const filtered = $derived(
-    rows.filter(
-      (w) =>
-        (!cat || w.type.category === cat) &&
-        (!onlyUrgent || w.urgent) &&
-        (!pic || w.assignee.id === pic),
+    sortWorklist(
+      rows.filter(
+        (w) =>
+          (!cat || w.type.category === cat) &&
+          (!onlyUrgent || w.urgent) &&
+          (!pic || w.assignee.id === pic) &&
+          (!kind || w.type.id === kind) &&
+          (!status || w.status === status) &&
+          (!onlyHelp || w.helpOpen) &&
+          (deadline !== 'late' || w.overdue) &&
+          (deadline !== 'next7' || (w.status !== 'done' && w.status !== 'canceled')) &&
+          (!dueFrom || w.deadline >= dueFrom) &&
+          (!dueTo || w.deadline <= dueTo),
+      ),
+      sort,
     ),
   );
 
@@ -128,11 +275,13 @@
   }
   async function move(w: WoRow, to: WoStatus, why?: string) {
     const before = rows;
-    rows = rows.map((x) => (x.id === w.id ? { ...x, status: to } : x));
+    if (navigator.onLine) rows = rows.map((x) => (x.id === w.id ? { ...x, status: to } : x));
     try {
-      await api(`/api/work-orders/${w.id}/status`, {
-        body: { status: to, expectedUpdatedAt: w.updatedAt, ...(why ? { reason: why } : {}) },
-      });
+      if (await submitWoStatus(w, data.actor.userId, to, why)) {
+        rows = before;
+        toast('Perubahan status disimpan di antrean');
+        return;
+      }
       toast(`${w.numberLabel} → ${WO_STATUS_LABEL[to]}`);
       await invalidate('app:project');
     } catch (err) {
@@ -151,125 +300,50 @@
   // ---------------------------------------------------------------- Buat WO
   let createOpen = $state(false);
 
-  // ---------------------------------------------------------------- Status project
-  let statusOpen = $state(false);
-  let nextStatus = $state<ProjectStatus>('on_hold');
-  let note = $state('');
-  let busy = $state(false);
-  const statusTargets = $derived(
-    PROJECT_STATUSES.filter(
-      (status) =>
-        checkProjectTransition(p.status, status, {
-          canEdit: p.can.edit ?? false,
-          canClose: p.can.close ?? false,
-          canCloseAll: p.can.reopen ?? false,
-        }).ok,
-    ),
-  );
-  function openStatus() {
-    nextStatus = statusTargets[0] ?? p.status;
-    note = '';
-    statusOpen = true;
-  }
-  async function saveStatus(e?: SubmitEvent) {
-    e?.preventDefault();
-    busy = true;
-    try {
-      await api(`/api/projects/${p.id}/status`, {
-        body: { status: nextStatus, ...(note.trim() ? { note: note.trim() } : {}) },
-      });
-      statusOpen = false;
-      toast(`Status project: ${PROJECT_STATUS_LABEL[nextStatus]}`);
-      await invalidate('app:project');
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Gagal', { tone: 'danger' });
-    } finally {
-      busy = false;
-    }
-  }
-
-  // ---------------------------------------------------------------- Anggota
-  interface DirUser {
-    id: string;
-    fullName: string;
-    roleName: string;
-    avatarUrl: string | null;
-  }
-  let memberOpen = $state(false);
-  let dir = $state<DirUser[]>([]);
-  let q = $state('');
-  let m = $state({ userId: '', projectRole: 'Anggota', isProjectManager: false });
-  $effect(() => {
-    if (!memberOpen) return;
-    const term = q;
-    const t = setTimeout(async () => {
-      dir = (await api<{ users: DirUser[] }>(`/api/directory/users?q=${encodeURIComponent(term)}`))
-        .users;
-    }, 200);
-    return () => clearTimeout(t);
-  });
-  const candidates = $derived(dir.filter((u) => !p.members.some((x) => x.userId === u.id)));
-  async function addMember(e?: SubmitEvent) {
-    e?.preventDefault();
-    if (!m.userId) return;
-    busy = true;
-    try {
-      await api(`/api/projects/${p.id}/members`, { method: 'PUT', body: m });
-      memberOpen = false;
-      m = { userId: '', projectRole: 'Anggota', isProjectManager: false };
-      toast('Anggota ditambahkan');
-      await invalidate('app:project');
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Gagal', { tone: 'danger' });
-    } finally {
-      busy = false;
-    }
-  }
-  async function removeMember(userId: string) {
-    try {
-      await api(`/api/projects/${p.id}/members/${userId}`, { method: 'DELETE', body: {} });
-      await invalidate('app:project');
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Gagal', { tone: 'danger' });
-    }
-  }
-
   // ---------------------------------------------------------------- Lampiran project
   interface PFile {
     id: string;
     fileName: string;
+    mime: string;
+    hasThumb: boolean;
     sizeBytes: number;
     category: string;
     createdAt: string;
     uploadedBy: string;
     ownerType: 'project' | 'wo' | 'logbook';
     ownerId: string;
+    woLinks: Array<{ woId: string; numberLabel: string; title: string }>;
   }
-  let pfiles = $state<PFile[] | null>(null);
+  let filesResult = $state<{ projectId: string; attachments: PFile[] } | null>(null);
+  const pfiles = $derived(filesResult?.projectId === p.id ? filesResult.attachments : null);
+  let pfilesError = $state('');
   async function loadFiles() {
+    const projectId = p.id;
+    pfilesError = '';
     try {
-      pfiles = (await api<{ attachments: PFile[] }>(`/api/projects/${p.id}/attachments`))
-        .attachments;
+      const result = await api<{ attachments: PFile[] }>(`/api/projects/${projectId}/attachments`);
+      if (p.id === projectId) filesResult = { projectId, attachments: result.attachments };
     } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Lampiran gagal dimuat', { tone: 'danger' });
+      if (p.id === projectId)
+        pfilesError = err instanceof ApiError ? err.message : 'Dokumen gagal dimuat';
     }
   }
   $effect(() => {
     if (tab === 'files' && p.updatedAt) void loadFiles();
   });
-  let upCat = $state<AttachmentCategory>('general');
   let picker = $state<HTMLInputElement>();
   let uploadingFile = $state(false);
+  let uploadPercent = $state<number | null>(null);
+  let documentPhoto = $state<PFile | null>(null);
+  let photoOpen = $state(false);
   async function uploadProjectFile(file: File) {
     uploadingFile = true;
+    uploadPercent = null;
     try {
-      await uploadAttachment({
-        ownerType: 'project',
-        ownerId: p.id,
-        category: upCat,
-        file: { blob: file, name: file.name },
+      await uploadPreparedFile(file, { ownerType: 'project', ownerId: p.id }, (fraction) => {
+        uploadPercent = Math.round(fraction * 100);
       });
-      toast('Lampiran diunggah');
+      toast('Dokumen diunggah');
       await loadFiles();
       await invalidate('app:project');
     } catch (err) {
@@ -278,17 +352,28 @@
       uploadingFile = false;
     }
   }
-  const CAT_LABEL: Record<AttachmentCategory, string> = {
-    general: 'Umum',
-    po_client: 'PO klien',
-    contract: 'Kontrak',
-    bast: 'BAST',
-    qc_doc: 'Dokumen QC',
-    photo: 'Foto',
-    drawing: 'Gambar',
-    purchase_doc: 'Dokumen pembelian',
-  };
-  const catLabel = (c: string) => CAT_LABEL[c as AttachmentCategory] ?? c;
+  let attachFile = $state<PFile | null>(null);
+  let attachOpen = $state(false);
+  let attachWoId = $state('');
+  let attaching = $state(false);
+  let attachError = $state('');
+  async function linkDocument() {
+    if (!attachFile || !attachWoId || attaching) return;
+    attaching = true;
+    attachError = '';
+    try {
+      await api(`/api/projects/${p.id}/attachments/${attachFile.id}/link`, {
+        body: { woId: attachWoId },
+      });
+      toast('Dokumen dihubungkan ke WO');
+      attachOpen = false;
+      await loadFiles();
+    } catch (err) {
+      attachError = err instanceof ApiError ? err.message : 'Dokumen gagal dihubungkan';
+    } finally {
+      attaching = false;
+    }
+  }
   const initials = $derived(
     p.client.name
       .split(/\s+/)
@@ -301,17 +386,46 @@
 
 <svelte:head><title>{p.name} · REIN</title></svelte:head>
 
-<div class="banner">
-  {#if p.bannerUrl}<img src={p.bannerUrl} alt={'Banner ' + p.name} />{/if}
-</div>
+{#snippet banner()}
+  {#if p.bannerUrl}<img src={p.bannerUrl} alt={p.can.edit ? '' : 'Banner ' + p.name} />{/if}
+{/snippet}
+{#snippet logo()}
+  {#if p.logoUrl}
+    <img src={p.logoUrl} alt={p.can.edit ? '' : 'Foto/logo ' + p.client.name} />
+  {:else}
+    {initials}
+  {/if}
+{/snippet}
+
+{#if p.can.edit}
+  <button
+    type="button"
+    class="banner media-edit"
+    onclick={() => (mediaKind = 'banner')}
+    aria-haspopup="dialog"
+  >
+    {@render banner()}
+    <span class="banner-edit"><Icon name="camera" size={14} />Ubah banner</span>
+  </button>
+{:else}
+  <div class="banner">{@render banner()}</div>
+{/if}
 <header class="ph">
   <div class="ph-top">
-    <span class="clogo"
-      >{#if p.logoUrl}<img
-          src={p.logoUrl}
-          alt={'Foto/logo ' + p.client.name}
-        />{:else}{initials}{/if}</span
-    >
+    {#if p.can.edit}
+      <button
+        type="button"
+        class="clogo media-edit"
+        onclick={() => (mediaKind = 'logo')}
+        aria-label="Ubah foto/logo"
+        aria-haspopup="dialog"
+      >
+        {@render logo()}
+        <span class="logo-edit"><Icon name="camera" size={12} /></span>
+      </button>
+    {:else}
+      <span class="clogo">{@render logo()}</span>
+    {/if}
     <div class="ttl">
       <h1>{p.name}</h1>
       <div class="meta">
@@ -332,11 +446,12 @@
       <Progress value={p.progress} width={180} />
     </div>
     <div class="acts">
-      {#if p.can.edit}<Button icon="image" onclick={() => (mediaOpen = true)}>Foto & banner</Button
-        >{/if}
-      {#if statusTargets.length}
-        <Button icon="refresh" onclick={openStatus}>Status</Button>
+      {#if p.can.edit || statusTargets.length}
+        <Button icon="edit" aria-haspopup="dialog" onclick={openInfo}>Edit info</Button>
       {/if}
+      <Button icon="users" aria-haspopup="dialog" onclick={() => (memberOpen = true)}>
+        {p.can.manageMembers ? 'Kelola anggota' : 'Anggota'}
+      </Button>
       {#if p.can.createWo}
         <Button variant="primary" icon="plus" onclick={() => (createOpen = true)}>Buat WO</Button>
       {/if}
@@ -345,6 +460,7 @@
   {#if p.status === 'on_hold' && p.onHoldReason}
     <p class="hold"><Icon name="clock" size={14} />Ditunda: {p.onHoldReason}</p>
   {/if}
+  {#if p.description}<p class="muted">{p.description}</p>{/if}
   {#if p.categories.length}<CategoryBar categories={p.categories} />{/if}
 </header>
 
@@ -357,15 +473,15 @@
   >
   <button
     role="tab"
-    class:on={tab === 'members'}
-    aria-selected={tab === 'members'}
-    onclick={() => (tab = 'members')}>Anggota<em>{p.members.length}</em></button
+    class:on={tab === 'files'}
+    aria-selected={tab === 'files'}
+    onclick={() => (tab = 'files')}>Dokumen<em>{pfiles?.length ?? ''}</em></button
   >
   <button
     role="tab"
-    class:on={tab === 'files'}
-    aria-selected={tab === 'files'}
-    onclick={() => (tab = 'files')}>Lampiran<em>{pfiles?.length ?? ''}</em></button
+    class:on={tab === 'materials'}
+    aria-selected={tab === 'materials'}
+    onclick={() => (tab = 'materials')}>Material</button
   >
 </div>
 
@@ -406,11 +522,56 @@
           {view === 'kanban'
             ? 'Seret kartu untuk mengubah status'
             : view === 'table'
-              ? 'Kelompok: Status'
+              ? ''
               : view === 'scurve'
                 ? 'Rencana vs aktual'
                 : 'Jadwal Work Order'}
         </span>
+      </div>
+      <div class="toolbar filters">
+        <select class="chip" aria-label="Filter jenis WO" bind:value={kind}>
+          <option value="">Semua jenis</option>
+          {#each kinds as type (type.id)}<option value={type.id}>{type.name}</option>{/each}
+        </select>
+        <select class="chip" aria-label="Filter status WO" bind:value={status}>
+          <option value="">Semua status</option>
+          {#each WO_STATUSES as item (item)}<option value={item}>{WO_STATUS_LABEL[item]}</option
+            >{/each}
+        </select>
+        <select class="chip" aria-label="Filter deadline" bind:value={deadline}>
+          <option value="">Semua deadline</option>
+          <option value="late">Terlambat</option>
+          <option value="next7">7 hari ke depan</option>
+          <option value="range">Rentang tanggal</option>
+        </select>
+        {#if deadline === 'range'}
+          <Input label="Deadline dari" type="date" bind:value={from} max={to || undefined} />
+          <Input label="Deadline sampai" type="date" bind:value={to} min={from || undefined} />
+        {/if}
+        <button
+          class="chip"
+          class:on={onlyHelp}
+          aria-pressed={onlyHelp}
+          onclick={() => (onlyHelp = !onlyHelp)}
+        >
+          <Icon name="flag" size={12} />Butuh bantuan
+        </button>
+        {#if view === 'table'}
+          <select class="chip" aria-label="Kelompok worklist" bind:value={groupBy}>
+            <option value="status">Grup: Status</option>
+            <option value="category">Grup: Kategori</option>
+            <option value="type">Grup: Jenis</option>
+            <option value="pic">Grup: PIC</option>
+            <option value="none">Tanpa grup</option>
+          </select>
+        {/if}
+        {#if view !== 'scurve'}
+          <select class="chip" aria-label="Urutkan worklist" bind:value={sort}>
+            <option value="deadline">Urut: Deadline</option>
+            <option value="number">Urut: Nomor WO</option>
+            <option value="updated">Urut: Terakhir diubah</option>
+          </select>
+        {/if}
       </div>
       {#if !rows.length}
         <div class="box">
@@ -430,7 +591,7 @@
           Tidak ada WO yang cocok dengan filter.
         </p>
       {:else if view === 'table'}
-        <WoTable rows={filtered} />
+        <WoTable rows={filtered} group={groupBy} />
       {:else if view === 'timeline'}
         <WoTimeline rows={filtered} />
       {:else if view === 'scurve'}
@@ -439,10 +600,16 @@
           category={cat}
           assignee={pic}
           urgent={onlyUrgent}
+          {kind}
+          {status}
+          help={onlyHelp}
+          activeDeadline={deadline === 'late' || deadline === 'next7' ? deadline : ''}
+          {dueFrom}
+          {dueTo}
           revision={p.updatedAt + rows.map((w) => w.updatedAt).join('')}
         />
       {:else}
-        <Kanban rows={filtered} {canDrag} {onmove} />
+        <Kanban rows={filtered} showCanceled={status === 'canceled'} {canDrag} {onmove} />
       {/if}
     </div>
     {#if view === 'table' || view === 'kanban'}<aside class="side">
@@ -458,40 +625,12 @@
         </ul>
       </aside>{/if}
   </div>
-{:else if tab === 'members'}
-  <div class="pane">
-    {#if p.can.manageMembers}
-      <div><Button icon="plus" onclick={() => (memberOpen = true)}>Tambah anggota</Button></div>
-    {/if}
-    <ul class="list">
-      {#each p.members as mm (mm.userId)}
-        <li>
-          <Avatar name={mm.fullName} src={mm.avatarUrl} size={32} />
-          <span class="f">
-            <b>{mm.fullName}</b>
-            <small>
-              {mm.roleName} · {mm.projectRole}{mm.isProjectManager ? ' · Pengelola' : ''}
-            </small>
-          </span>
-          {#if p.can.manageMembers}
-            <Button
-              variant="ghost"
-              icon="x"
-              aria-label={`Keluarkan ${mm.fullName}`}
-              onclick={() => removeMember(mm.userId)}
-            />
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  </div>
+{:else if tab === 'materials'}
+  {#key p.id}<ProjectMaterials projectId={p.id} workOrders={rows} />{/key}
 {:else}
-  <div class="pane">
+  <div class="pane documents">
     {#if p.can.upload}
       <div class="up">
-        <select aria-label="Kategori lampiran" bind:value={upCat}>
-          {#each Object.entries(CAT_LABEL) as [k, l] (k)}<option value={k}>{l}</option>{/each}
-        </select>
         <input
           bind:this={picker}
           type="file"
@@ -503,33 +642,181 @@
           }}
         />
         <Button icon="upload" loading={uploadingFile} onclick={() => picker?.click()}>
-          Unggah lampiran
+          Unggah dokumen
         </Button>
+        {#if uploadingFile}<span role="status"
+            >{uploadPercent === null ? 'Menyiapkan dokumen…' : `Mengunggah ${uploadPercent}%`}</span
+          >{/if}
       </div>
     {/if}
-    <ul class="list">
-      {#each pfiles ?? [] as f (f.id)}
-        <li>
-          <span class="fi"><Icon name="file" /></span>
-          <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- /files/* disajikan server -->
-          <a class="f" href={fileUrl(f.id)} target="_blank" rel="noopener">
-            <b>{f.fileName}</b>
-            <small>
-              {f.ownerType === 'wo'
-                ? 'Work Order'
-                : f.ownerType === 'logbook'
-                  ? 'Logbook'
-                  : 'Project'} · {catLabel(f.category)} · {f.uploadedBy} · {shortDate(f.createdAt)} ·
-              {formatBytes(f.sizeBytes)}
-            </small>
-          </a>
-        </li>
-      {:else}
-        <li class="faint">Belum ada lampiran project, WO, atau logbook.</li>
-      {/each}
-    </ul>
+    {#if pfilesError}
+      <div class="up">
+        <p role="alert">{pfilesError}</p>
+        <Button onclick={loadFiles}>Coba lagi</Button>
+      </div>
+    {:else if !pfiles}
+      <p role="status" class="faint">Memuat dokumen…</p>
+    {:else if !pfiles.length}
+      <p class="faint">Belum ada dokumen project, WO, atau Logbook.</p>
+    {:else}
+      <ul class="document-grid">
+        {#each pfiles as f (f.id)}
+          {@const source = rows.find((row) => f.ownerType === 'wo' && row.id === f.ownerId)}
+          <li>
+            <div class="document-heading">
+              {#if thumbUrl(f, data.actor.userId)}<img
+                  class="fi"
+                  src={thumbUrl(f, data.actor.userId)}
+                  alt=""
+                  loading="lazy"
+                />{:else}
+                <span class="fi"><Icon name="file" /></span>
+              {/if}
+              {#snippet fileLabel()}
+                <b title={f.fileName}>{f.fileName}</b>
+                <small>
+                  {f.ownerType === 'wo'
+                    ? 'Work Order'
+                    : f.ownerType === 'logbook'
+                      ? 'Logbook'
+                      : 'Project'} · {formatBytes(f.sizeBytes)} · {shortDate(f.createdAt)} · {f.uploadedBy}
+                </small>
+              {/snippet}
+              {#if isPreviewImage(f.mime)}
+                <button
+                  class="document-name"
+                  type="button"
+                  onclick={() => {
+                    documentPhoto = f;
+                    photoOpen = true;
+                  }}>{@render fileLabel()}</button
+                >
+              {:else}
+                <a
+                  class="document-name"
+                  href={fileUrl(f.id)}
+                  target={f.mime === 'application/pdf' ? '_blank' : undefined}
+                  rel="external noopener"
+                >
+                  {@render fileLabel()}
+                </a>
+              {/if}
+            </div>
+            {#if source || f.woLinks.length || (p.can.upload && rows.length)}
+              <div class="document-footer">
+                <div class="doc-links">
+                  {#if source}<a href={resolve('/(app)/w/[id]', { id: source.id })}
+                      >{source.numberLabel}</a
+                    >{/if}
+                  {#each f.woLinks.filter((link) => link.woId !== source?.id) as link (link.woId)}<a
+                      href={resolve('/(app)/w/[id]', { id: link.woId })}
+                      title={link.title}>{link.numberLabel}</a
+                    >{/each}
+                </div>
+                {#if p.can.upload && rows.length}<Button
+                    size="sm"
+                    variant="ghost"
+                    icon="paperclip"
+                    onclick={() => {
+                      attachFile = f;
+                      attachWoId = '';
+                      attachError = '';
+                      attachOpen = true;
+                    }}>Hubungkan ke WO</Button
+                  >{/if}
+              </div>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </div>
 {/if}
+
+<PhotoLightbox bind:open={photoOpen} photo={documentPhoto} />
+
+<Modal bind:open={infoOpen} title="Edit info project" width={560}>
+  <form id="project-info" class="g" onsubmit={saveInfo} novalidate>
+    {#if infoMessage}<p role="alert">{infoMessage}</p>{/if}
+    <Field label="Status project" id="info-status">
+      <select
+        id="info-status"
+        bind:value={nextStatus}
+        disabled={!editStatusTargets.length || infoSaving}
+      >
+        <option value={initialStatus}>{PROJECT_STATUS_LABEL[initialStatus]}</option>
+        {#each editStatusTargets as target (target)}
+          <option value={target}>{PROJECT_STATUS_LABEL[target]}</option>
+        {/each}
+      </select>
+    </Field>
+    {#if statusChange}
+      <Field
+        label={needsReason ? 'Alasan perubahan status' : 'Catatan status (opsional)'}
+        id="info-note"
+        error={infoErrors.note}
+      >
+        <textarea
+          id="info-note"
+          bind:value={note}
+          rows="2"
+          maxlength="300"
+          required={needsReason}
+          disabled={infoSaving}></textarea>
+      </Field>
+    {/if}
+    {#if p.can.edit}
+      <Input
+        label="Nama project"
+        bind:value={info.name}
+        error={infoErrors.name}
+        required
+        maxlength={160}
+      />
+      <Input
+        label="Nama klien"
+        bind:value={info.clientName}
+        error={infoErrors.clientName}
+        required
+        maxlength={120}
+      />
+      <Input
+        label="No RPO"
+        bind:value={info.rpoNumber}
+        error={infoErrors.rpoNumber}
+        required
+        maxlength={40}
+      />
+      <Input
+        label="Lokasi"
+        bind:value={info.location}
+        error={infoErrors.location}
+        maxlength={160}
+      />
+      <Input
+        label="Tanggal mulai"
+        type="date"
+        bind:value={info.startDate}
+        error={infoErrors.startDate}
+        required
+      />
+      <Input
+        label="Tanggal selesai"
+        type="date"
+        bind:value={info.endDate}
+        error={infoErrors.endDate}
+        required
+      />
+      <Field label="Deskripsi" id="info-desc" error={infoErrors.description}>
+        <textarea id="info-desc" bind:value={info.description} rows="3" maxlength={500}></textarea>
+      </Field>
+    {/if}
+  </form>
+  {#snippet footer()}
+    <Button onclick={() => (infoOpen = false)}>Batal</Button>
+    <Button variant="primary" type="submit" form="project-info" loading={infoSaving}>Simpan</Button>
+  {/snippet}
+</Modal>
 
 <WoCreateModal
   bind:open={createOpen}
@@ -539,6 +826,24 @@
   canUpload={p.can.upload}
   oncreated={(id) => goto(resolve('/(app)/w/[id]', { id }))}
 />
+
+<Modal bind:open={attachOpen} title="Hubungkan dokumen ke WO" width={500}>
+  <p>{attachFile?.fileName}</p>
+  <Field label="Work Order" id="attach-wo"
+    ><select id="attach-wo" bind:value={attachWoId} disabled={attaching}>
+      <option value="">Pilih WO di project ini</option>
+      {#each rows.filter((r) => !attachFile?.woLinks.some((l) => l.woId === r.id) && !(attachFile?.ownerType === 'wo' && attachFile.ownerId === r.id)) as row (row.id)}<option
+          value={row.id}>{row.numberLabel} — {row.title}</option
+        >{/each}
+    </select></Field
+  >
+  <p class="muted">Dokumen tetap tersimpan di asalnya dan akan tampil di WO yang dipilih.</p>
+  {#if attachError}<p role="alert">{attachError}</p>{/if}
+  {#snippet footer()}<Button disabled={attaching} onclick={() => (attachOpen = false)}>Batal</Button
+    ><Button variant="primary" loading={attaching} disabled={!attachWoId} onclick={linkDocument}
+      >Hubungkan</Button
+    >{/snippet}
+</Modal>
 
 <Modal bind:open={reasonOpen} title="Alasan perubahan status" width={440}>
   <form id="mv-f" onsubmit={confirmMove}>
@@ -552,69 +857,93 @@
   {/snippet}
 </Modal>
 
-<Modal bind:open={statusOpen} title="Ubah status project" width={460}>
-  <form id="st-f" class="g" onsubmit={saveStatus}>
-    <Field label="Status" id="st-s">
-      <select id="st-s" bind:value={nextStatus}>
-        {#each statusTargets as s (s)}
-          <option value={s}>
-            {PROJECT_STATUS_LABEL[s]}
-          </option>
-        {/each}
-      </select>
-    </Field>
-    <Field
-      label="Catatan / alasan"
-      id="st-n"
-      hint="Wajib saat menunda atau membuka kembali project."
-    >
-      <textarea id="st-n" bind:value={note} rows="3" maxlength="300"></textarea>
-    </Field>
-  </form>
-  {#snippet footer()}
-    <Button onclick={() => (statusOpen = false)}>Batal</Button>
-    <Button variant="primary" type="submit" form="st-f" loading={busy}>Simpan</Button>
-  {/snippet}
-</Modal>
+{#if memberOpen}
+  {#key p.id}
+    <ProjectMembersModal
+      project={p}
+      onclose={() => (memberOpen = false)}
+      onchange={() => invalidate('app:project')}
+    />
+  {/key}
+{/if}
 
-<Modal bind:open={memberOpen} title="Tambah anggota" width={480}>
-  <form id="mb-f" class="g" onsubmit={addMember}>
-    <Input label="Cari pengguna" bind:value={q} placeholder="Nama atau username" />
-    <ul class="pick">
-      {#each candidates as u (u.id)}
-        <li>
-          <label>
-            <input type="radio" name="mb-u" value={u.id} bind:group={m.userId} />
-            <Avatar name={u.fullName} src={u.avatarUrl} size={24} />
-            <span>{u.fullName}<small class="faint"> · {u.roleName}</small></span>
-          </label>
-        </li>
-      {/each}
-    </ul>
-    <Input label="Peran di project" bind:value={m.projectRole} maxlength={40} />
-    <Toggle bind:checked={m.isProjectManager} label="Pengelola project" showLabel />
-  </form>
-  {#snippet footer()}
-    <Button onclick={() => (memberOpen = false)}>Batal</Button>
-    <Button variant="primary" type="submit" form="mb-f" loading={busy} disabled={!m.userId}>
-      Tambahkan
-    </Button>
-  {/snippet}
-</Modal>
-
-{#if mediaOpen && p.can.edit}
-  <ProjectMediaModal
-    project={p}
-    onclose={() => (mediaOpen = false)}
-    onsaved={async () => {
-      mediaOpen = false;
-      await invalidate('app:project');
-      await invalidate('app:projects');
-    }}
-  />
+{#if mediaKind && p.can.edit}
+  {#key p.id}
+    <ProjectMediaModal
+      project={p}
+      kind={mediaKind}
+      onclose={() => (mediaKind = null)}
+      onsaved={async () => {
+        mediaKind = null;
+        await invalidate('app:project');
+        await invalidate('app:projects');
+      }}
+    />
+  {/key}
 {/if}
 
 <style>
+  .doc-links {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .doc-links a {
+    color: var(--color-text-secondary);
+    font: var(--text-caption);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+  }
+  .pane.documents {
+    max-width: none;
+  }
+  .document-grid {
+    display: grid;
+    align-items: start;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    gap: 8px;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .document-grid li {
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-surface);
+  }
+  .document-heading,
+  .document-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .document-name {
+    display: grid;
+    flex: 1;
+    gap: 2px;
+    min-width: 0;
+    text-align: start;
+    color: var(--color-text-primary);
+    padding: 2px 0;
+  }
+  .document-name b {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .document-name small {
+    color: var(--color-text-secondary);
+    font: var(--text-caption);
+  }
+  .document-footer {
+    justify-content: space-between;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
   .layout.wide {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -622,6 +951,8 @@
     padding: 24px;
   }
   .banner {
+    display: block;
+    width: 100%;
     overflow: hidden;
     height: 72px;
     background: linear-gradient(100deg, var(--color-accent-subtle), var(--color-bg-subtle));
@@ -640,6 +971,7 @@
     flex-wrap: wrap;
   }
   .clogo {
+    position: relative;
     overflow: hidden;
     flex: none;
     display: grid;
@@ -664,6 +996,39 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+  .media-edit {
+    position: relative;
+    cursor: pointer;
+  }
+  .media-edit:focus-visible {
+    outline: 2px solid var(--color-accent-default);
+    outline-offset: -2px;
+  }
+  .banner-edit,
+  .logo-edit {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    color: var(--color-text-primary);
+  }
+  .banner-edit {
+    inset: 10px 12px auto auto;
+    padding: 4px 8px;
+    border-radius: var(--radius-md);
+    font: var(--text-caption);
+  }
+  .logo-edit {
+    inset: auto 2px 2px auto;
+    padding: 2px;
+    border-radius: var(--radius-sm);
+  }
+  .media-edit:is(:hover, :focus-visible) :is(.banner-edit, .logo-edit) {
+    background: var(--color-accent-subtle);
+    color: var(--color-accent-default);
   }
   .meta {
     display: flex;
@@ -815,11 +1180,9 @@
     padding: 16px 24px 32px;
     max-width: 720px;
   }
-  .list li {
-    padding: 8px 0;
-    border-bottom: 1px solid var(--color-border-default);
-  }
   .fi {
+    flex-shrink: 0;
+    object-fit: cover;
     display: grid;
     place-items: center;
     width: 32px;
@@ -833,34 +1196,10 @@
     gap: 8px;
     align-items: center;
   }
-  .up select {
-    height: 28px;
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-md);
-    background: var(--color-bg-surface);
-    color: var(--color-text-primary);
-  }
   .g {
     display: flex;
     flex-direction: column;
     gap: 12px;
-  }
-  .pick {
-    max-height: 220px;
-    overflow: auto;
-    gap: 2px;
-  }
-  .pick label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 6px;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-  }
-  .pick label:hover {
-    background: var(--color-bg-hover);
   }
   @media (max-width: 1023px) {
     .layout {

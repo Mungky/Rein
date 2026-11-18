@@ -1,5 +1,11 @@
 /** Bentuk respons API yang dipakai halaman (cermin dari apps/server/src/routes). */
-import type { ProjectStatus, WoCategory, WoStatus } from '@rein/shared';
+import type {
+  LogbookCategory,
+  MaterialInput,
+  ProjectStatus,
+  WoCategory,
+  WoStatus,
+} from '@rein/shared';
 
 export interface Person {
   id: string;
@@ -102,6 +108,8 @@ export interface FileItem {
 }
 
 export interface WoDetail extends WoRow {
+  materials: Array<MaterialInput & { id: string }>;
+  statusHint: string | null;
   detail: string;
   canceledReason: string | null;
   completedAt: string | null;
@@ -119,11 +127,12 @@ export interface WoDetail extends WoRow {
   attachments: FileItem[];
   help: { id: string; requestedBy: string; createdAt: string } | null;
   can: {
-    editAny: boolean;
+    editCore: boolean;
     editDetail: boolean;
     editWeight: boolean;
     delete: boolean;
     writeLogbook: boolean;
+    updateProgress: boolean;
     upload: boolean;
     requestHelp: boolean;
     resolveHelp: boolean;
@@ -132,6 +141,7 @@ export interface WoDetail extends WoRow {
 }
 
 export interface LogEntry {
+  category: LogbookCategory | null;
   id: string;
   kind: 'note' | 'comment' | 'system' | 'help_request' | 'help_resolved';
   body: string;
@@ -141,8 +151,15 @@ export interface LogEntry {
   statusTo: WoStatus | null;
   createdAt: string;
   editedAt: string | null;
+  canEdit: boolean;
   author: Person;
   attachments: FileItem[];
+}
+
+export interface MaterialRow extends MaterialInput {
+  id: string;
+  updatedAt: string;
+  woLinks: Array<{ woId: string; numberLabel: string; title: string }>;
 }
 
 export interface HomeData {

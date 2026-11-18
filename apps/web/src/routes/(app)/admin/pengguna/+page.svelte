@@ -22,6 +22,7 @@
     roleId: string;
     email: string | null;
     emailVerified: boolean;
+    whatsapp: string | null;
     lastActiveAt: string | null;
     canManage: boolean;
   }
@@ -47,6 +48,35 @@
   let settingsOpen = $state(false);
   let activationLink = $state('');
   let linkOpen = $state(false);
+  type SecurityAction = 'verify-whatsapp' | 'reset-pin' | 'reset-password';
+  const securityLabels: Record<SecurityAction, string> = {
+    'verify-whatsapp': 'Verifikasi WhatsApp',
+    'reset-pin': 'Reset PIN',
+    'reset-password': 'Kirim tautan reset password',
+  };
+  let securityAction = $state<SecurityAction | ''>('');
+  let securityOpen = $state(false);
+  let securityError = $state('');
+  let phone = $state('');
+
+  async function confirmSecurity(e: SubmitEvent) {
+    e.preventDefault();
+    if (!selectedUser || !securityAction || saving) return;
+    saving = true;
+    securityError = '';
+    try {
+      await api(`/api/admin/users/${selectedUser.id}/${securityAction}`, {
+        body: securityAction === 'verify-whatsapp' ? { phone } : {},
+      });
+      toast(`${securityLabels[securityAction]} berhasil`);
+      securityOpen = false;
+      await load();
+    } catch (err) {
+      securityError = err instanceof ApiError ? err.message : 'Tindakan gagal. Coba lagi.';
+    } finally {
+      saving = false;
+    }
+  }
 
   function openRole(row: Row) {
     roleUser = row;
@@ -231,6 +261,18 @@
               {#if r.id !== session.me?.user.id}
                 <Button variant="ghost" onclick={() => openRole(r)}>Ubah role</Button>
               {/if}
+              {#if r.status !== 'disabled'}
+                <Button
+                  variant="ghost"
+                  onclick={() => {
+                    selectedUser = r;
+                    phone = r.whatsapp ?? '';
+                    securityAction = '';
+                    securityError = '';
+                    securityOpen = true;
+                  }}>Keamanan</Button
+                >
+              {/if}
               {#if r.status === 'invited'}
                 <Button variant="ghost" onclick={() => act(r, 'resend-invite')}>Kirim ulang</Button>
               {/if}
@@ -246,6 +288,43 @@
     </div>
   {/if}
 {/if}
+
+<Modal bind:open={securityOpen} title={'Keamanan — ' + (selectedUser?.fullName ?? '')} width={460}>
+  <form id="admin-security" class="grid" onsubmit={confirmSecurity}>
+    <div class="field">
+      <label for="security-action">Tindakan</label>
+      <select id="security-action" bind:value={securityAction} required>
+        <option value="" disabled>Pilih tindakan</option>
+        <option value="verify-whatsapp">{securityLabels['verify-whatsapp']}</option>
+        {#if selectedUser?.status === 'active'}
+          <option value="reset-pin">{securityLabels['reset-pin']}</option>
+          {#if selectedUser.emailVerified}<option value="reset-password"
+              >{securityLabels['reset-password']}</option
+            >{/if}
+        {/if}
+      </select>
+    </div>
+    {#if securityAction === 'verify-whatsapp'}
+      <Input label="Nomor WhatsApp pengguna" type="tel" bind:value={phone} required />
+      <p>Pastikan pengguna menguasai nomor ini. Nomor ini akan menjadi kontak WhatsApp aktif.</p>
+    {:else if securityAction === 'reset-pin'}
+      <p>PIN masuk cepat akan dihapus dari semua perangkat pengguna ini.</p>
+    {:else if securityAction === 'reset-password'}
+      <p>Tautan sekali pakai akan dikirim ke {selectedUser?.email}. Tautan berlaku 30 menit.</p>
+    {/if}
+    {#if securityError}<p role="alert">{securityError}</p>{/if}
+  </form>
+  {#snippet footer()}
+    <Button onclick={() => (securityOpen = false)}>Batal</Button>
+    <Button
+      variant="primary"
+      type="submit"
+      form="admin-security"
+      disabled={!securityAction}
+      loading={saving}>Konfirmasi</Button
+    >
+  {/snippet}
+</Modal>
 
 <Modal bind:open={inviteOpen} title="Undang pengguna" width={520}>
   <form id="invite" class="grid" onsubmit={invite} novalidate>

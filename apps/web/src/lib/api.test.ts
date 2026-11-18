@@ -4,6 +4,30 @@ import { api, ApiError } from './api';
 afterEach(() => vi.unstubAllGlobals());
 
 describe('batas kirim API', () => {
+  it('menghentikan request setelah 15 detik dengan pesan untuk mencoba lagi', async () => {
+    const timer = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_path, { signal }: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          }),
+      ),
+    );
+    try {
+      const result = api('/api/work-orders/id/logbook', { body: {} });
+      timer.abort();
+      expect(timeout).toHaveBeenCalledWith(15_000);
+      await expect(result).rejects.toMatchObject({
+        code: 'TIMEOUT',
+        message: expect.stringContaining('Coba lagi'),
+      });
+    } finally {
+      timeout.mockRestore();
+    }
+  });
   it('mempertahankan pesan server dan waktu tunggu Retry-After', async () => {
     vi.stubGlobal(
       'fetch',

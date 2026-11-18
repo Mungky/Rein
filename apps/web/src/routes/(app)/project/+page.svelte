@@ -65,15 +65,34 @@
   let users = $state<DirUser[]>([]);
   let picked = $state<Record<string, { role: string; pm: boolean }>>({});
   let uq = $state('');
+  let directoryRetry = $state(0);
+  let directoryLoading = $state(false);
+  let directoryError = $state('');
+  const candidates = $derived(users.filter((u) => u.id !== session.me?.user.id));
   $effect(() => {
     if (!open || step !== 2) return;
     const term = uq;
+    void directoryRetry;
+    const request = new AbortController();
+    directoryLoading = true;
+    directoryError = '';
     const t = setTimeout(async () => {
-      users = (
-        await api<{ users: DirUser[] }>(`/api/directory/users?q=${encodeURIComponent(term)}`)
-      ).users;
+      try {
+        const result = await api<{ users: DirUser[] }>(
+          `/api/directory/users?q=${encodeURIComponent(term)}`,
+          { signal: request.signal },
+        );
+        if (!request.signal.aborted) users = result.users;
+      } catch {
+        if (!request.signal.aborted) directoryError = 'Daftar calon anggota gagal dimuat.';
+      } finally {
+        if (!request.signal.aborted) directoryLoading = false;
+      }
     }, 200);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      request.abort();
+    };
   });
 
   function next(e?: SubmitEvent) {
@@ -137,6 +156,8 @@
     logo = banner = null;
     f = { ...EMPTY };
     picked = {};
+    uq = '';
+    users = [];
     errors = {};
     step = 1;
     open = true;
@@ -258,26 +279,35 @@
         Anda otomatis menjadi pengelola project. Pilih anggota lain (bisa ditambah nanti).
       </p>
       <Input label="Cari pengguna" bind:value={uq} placeholder="Nama atau username" />
-      <ul class="pick">
-        {#each users.filter((u) => u.id !== session.me?.user.id) as u (u.id)}
-          <li class:on={!!picked[u.id]}>
-            <label>
-              <input type="checkbox" checked={!!picked[u.id]} onchange={() => toggle(u)} />
-              <Avatar name={u.fullName} src={u.avatarUrl} size={24} />
-              <span class="nm2">{u.fullName}<small class="faint"> · {u.roleName}</small></span>
-            </label>
-            {#if picked[u.id]}
-              <input
-                class="role"
-                aria-label={`Peran ${u.fullName}`}
-                bind:value={picked[u.id]!.role}
-                maxlength="40"
-              />
-              <Toggle bind:checked={picked[u.id]!.pm} label="Pengelola" />
-            {/if}
-          </li>
-        {/each}
-      </ul>
+      {#if directoryLoading}
+        <p role="status">Memuat calon anggota…</p>
+      {:else if directoryError}
+        <p role="alert">{directoryError}</p>
+        <Button onclick={() => directoryRetry++}>Coba lagi</Button>
+      {:else if !candidates.length}
+        <p role="status">Tidak ada calon anggota yang cocok.</p>
+      {:else}
+        <ul class="pick">
+          {#each candidates as u (u.id)}
+            <li class:on={!!picked[u.id]}>
+              <label>
+                <input type="checkbox" checked={!!picked[u.id]} onchange={() => toggle(u)} />
+                <Avatar name={u.fullName} src={u.avatarUrl} size={24} />
+                <span class="nm2">{u.fullName}<small class="faint"> · {u.roleName}</small></span>
+              </label>
+              {#if picked[u.id]}
+                <input
+                  class="role"
+                  aria-label={`Peran ${u.fullName}`}
+                  bind:value={picked[u.id]!.role}
+                  maxlength="40"
+                />
+                <Toggle bind:checked={picked[u.id]!.pm} label="Pengelola" />
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </div>
   {/if}
   {#snippet footer()}

@@ -51,6 +51,16 @@ export function mountSpa(app: Hono<AppEnv>, distDir: string): void {
     await next();
     if (c.res.ok) c.res.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
   });
+  app.use('/service-worker.js', async (c, next) => {
+    await next();
+    if (c.res.ok) {
+      c.res.headers.set('Cache-Control', 'no-cache');
+      c.res.headers.set(
+        'Content-Security-Policy',
+        "default-src 'none'; script-src 'self'; connect-src 'self' https://storage.googleapis.com",
+      );
+    }
+  });
   app.use('*', async (c, next) => {
     await next();
     // onFound dipanggil sesudah Response dibuat; pasang header pada respons final, termasuk HTML terkompresi.

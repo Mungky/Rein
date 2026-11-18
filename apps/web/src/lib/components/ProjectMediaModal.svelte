@@ -12,42 +12,42 @@
 
   let {
     project,
+    kind,
     onclose,
     onsaved,
-  }: { project: ProjectDetail; onclose: () => void; onsaved: () => Promise<void> } = $props();
-  const initial = untrack(() => ({ id: project.id, updatedAt: project.updatedAt }));
-  let logo = $state<ImageResult | null>(null);
-  let banner = $state<ImageResult | null>(null);
-  let removeLogo = $state(false);
-  let removeBanner = $state(false);
-  let logoProcessing = $state(false);
-  let bannerProcessing = $state(false);
+  }: {
+    project: ProjectDetail;
+    kind: 'logo' | 'banner';
+    onclose: () => void;
+    onsaved: () => Promise<void>;
+  } = $props();
+  const { id, updatedAt } = untrack(() => project);
+  const currentUrl = $derived(kind === 'logo' ? project.logoUrl : project.bannerUrl);
+  const label = $derived(kind === 'logo' ? 'Foto/logo' : 'Banner');
+  let image = $state<ImageResult | null>(null);
+  let removed = $state(false);
+  let processing = $state(false);
   let saving = $state(false);
   let error = $state('');
-  const processing = $derived(logoProcessing || bannerProcessing);
-  const changed = $derived(
-    !!logo ||
-      !!banner ||
-      (removeLogo && !!project.logoUrl) ||
-      (removeBanner && !!project.bannerUrl),
-  );
+  const changed = $derived(!!image || (removed && !!currentUrl));
 
   async function save() {
     if (!changed || processing || saving) return;
     saving = true;
     error = '';
     try {
-      const media = await uploadProjectImages(session.me!.user.id, logo, banner);
-      await api(`/api/projects/${initial.id}/media`, {
+      const media = removed
+        ? { [kind === 'logo' ? 'logoAttachmentId' : 'bannerAttachmentId']: null }
+        : await uploadProjectImages(
+            session.me!.user.id,
+            kind === 'logo' ? image : null,
+            kind === 'banner' ? image : null,
+          );
+      await api(`/api/projects/${id}/media`, {
         method: 'PUT',
-        body: {
-          expectedUpdatedAt: initial.updatedAt,
-          ...media,
-          ...(removeLogo && project.logoUrl ? { logoAttachmentId: null } : {}),
-          ...(removeBanner && project.bannerUrl ? { bannerAttachmentId: null } : {}),
-        },
+        body: { expectedUpdatedAt: updatedAt, ...media },
       });
-      toast('Foto/logo dan banner project diperbarui.');
+      toast(`${label} project diperbarui`);
       await onsaved();
     } catch (err) {
       error = err instanceof ApiError ? err.message : 'Gagal menyimpan gambar. Coba lagi.';
@@ -57,28 +57,15 @@
   }
 </script>
 
-<Modal open title="Foto/logo & banner project" width={600} {onclose}>
-  <div class="fields">
-    <ProjectImagePicker
-      kind="logo"
-      currentUrl={project.logoUrl}
-      bind:image={logo}
-      bind:removed={removeLogo}
-      bind:busy={logoProcessing}
-      disabled={saving}
-    />
-    <ProjectImagePicker
-      kind="banner"
-      currentUrl={project.bannerUrl}
-      bind:image={banner}
-      bind:removed={removeBanner}
-      bind:busy={bannerProcessing}
-      disabled={saving}
-    />
-  </div>
-  <p class="hint">
-    Mengganti atau menghapus gambar mengikuti izin Edit info, foto/logo, banner & status project.
-  </p>
+<Modal open title={`Ubah ${label.toLowerCase()} project`} width={560} {onclose}>
+  <ProjectImagePicker
+    {kind}
+    {currentUrl}
+    bind:image
+    bind:removed
+    bind:busy={processing}
+    disabled={saving}
+  />
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#snippet footer()}
     <Button onclick={onclose} disabled={saving}>Batal</Button>
@@ -89,15 +76,6 @@
 </Modal>
 
 <style>
-  .fields {
-    display: grid;
-    gap: 24px;
-  }
-  .hint {
-    color: var(--color-text-secondary);
-    font: var(--text-caption);
-    margin: 16px 0 0;
-  }
   .error {
     color: var(--color-danger-default);
   }

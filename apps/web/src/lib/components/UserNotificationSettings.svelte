@@ -63,8 +63,10 @@
   async function saveEmail(e: SubmitEvent) {
     e.preventDefault();
     await action(async () => {
-      await api('/api/me/email', { body: { email } });
-      if (settings?.mailEnabled) {
+      const { canceled } = await api<{ canceled: boolean }>('/api/me/email', { body: { email } });
+      if (canceled) {
+        toast('Perubahan email dibatalkan');
+      } else if (settings?.mailEnabled) {
         await api('/api/auth/verify-email/resend', { body: {} });
         toast('Email disimpan. Periksa kode verifikasinya.');
       } else toast('Email disimpan. Layanan pengiriman email belum aktif.');

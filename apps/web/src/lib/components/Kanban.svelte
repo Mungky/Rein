@@ -19,14 +19,18 @@
    */
   interface Props {
     rows: WoRow[];
+    showCanceled?: boolean;
     canDrag?: (w: WoRow, to: WoStatus) => boolean;
     onmove?: (w: WoRow, to: WoStatus) => void;
   }
-  let { rows, canDrag = () => true, onmove }: Props = $props();
+  let { rows, showCanceled = false, canDrag = () => true, onmove }: Props = $props();
 
   const COLS: WoStatus[] = ['backlog', 'todo', 'in_progress', 'review', 'done'];
   const columns = $derived(
-    COLS.map((s) => ({ status: s, items: rows.filter((r) => r.status === s) })),
+    [...COLS, ...(showCanceled ? ['canceled' as const] : [])].map((s) => ({
+      status: s,
+      items: rows.filter((r) => r.status === s),
+    })),
   );
 
   let drag = $state<{

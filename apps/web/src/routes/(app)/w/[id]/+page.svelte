@@ -1,11 +1,23 @@
 <script lang="ts">
-  import { WO_STATUS_LABEL, woReasonRequired, type WoStatus } from '@rein/shared';
-  import { onDestroy } from 'svelte';
-  import { invalidate } from '$app/navigation';
+  import {
+    LOGBOOK_CATEGORY_LABEL,
+    MATERIAL_STATUS_LABEL,
+    WO_STATUS_LABEL,
+    WO_CATEGORIES,
+    WO_CATEGORY_META,
+    todayWib,
+    woReasonRequired,
+    type LogbookCategory,
+    type WoStatus,
+  } from '@rein/shared';
+  import { onDestroy, onMount } from 'svelte';
+  import { SvelteURLSearchParams } from 'svelte/reactivity';
+  import { goto, invalidate } from '$app/navigation';
   import { resolve } from '$app/paths';
   import { api, ApiError } from '$lib/api';
-  import { fileUrl, thumbUrl, type Staged } from '$lib/attach';
+  import { fileUrl, isPreviewImage, thumbUrl, type Staged } from '$lib/attach';
   import { setChrome } from '$lib/chrome.svelte';
+  import ActivityList from '$lib/components/ActivityList.svelte';
   import Avatar from '$lib/components/Avatar.svelte';
   import Button from '$lib/components/Button.svelte';
   import Checkbox from '$lib/components/Checkbox.svelte';
@@ -14,25 +26,66 @@
   import Icon from '$lib/components/Icon.svelte';
   import Input from '$lib/components/Input.svelte';
   import Modal from '$lib/components/Modal.svelte';
+  import PeriodPicker, { type Period } from '$lib/components/PeriodPicker.svelte';
+  import PhotoLightbox from '$lib/components/PhotoLightbox.svelte';
   import Progress from '$lib/components/Progress.svelte';
   import StagedFiles from '$lib/components/StagedFiles.svelte';
   import StatusIcon from '$lib/components/StatusIcon.svelte';
   import Tag from '$lib/components/Tag.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
-  import { formatBytes, shortDate, stamp } from '$lib/format';
+  import { dayLabel, formatBytes, shortDate, stamp } from '$lib/format';
   import { onLive } from '$lib/live.svelte';
+  import { logbookText } from '$lib/logbook-text';
+  import { enqueueOffline, submitWoStatus } from '$lib/offline';
   import { session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
-  import type { LogEntry, Member } from '$lib/types';
+  import type { FileItem, LogEntry, Member, WoType } from '$lib/types';
+  import { woEditFields, woEditPatch } from '$lib/wo-edit';
 
   /** Detail WO + Logbook (Figma D/07a, M/07; FR-031–034, FR-040–042, FR-050–051). */
   let { data } = $props();
   const wo = $derived(data.wo);
+  const currentWoId = $derived(data.wo.id);
   let entries = $state<LogEntry[]>([]);
   let cursor = $state<string | null>(null);
+  let moreBusy = $state(false);
+  let moreError = $state('');
+  let columns = $state<1 | 2>(1);
+  const woUrl = $derived(resolve('/(app)/w/[id]', { id: wo.id }));
+  const filterQuery = $derived.by(() => {
+    const query = new SvelteURLSearchParams(data.logQuery);
+    query.delete('view');
+    query.delete('entry');
+    return query.toString();
+  });
+  onMount(() => {
+    try {
+      if (localStorage.getItem('rein:logbook-columns') === '2') columns = 2;
+    } catch {
+      /* Storage opsional. */
+    }
+  });
+
+  function setColumns(value: 1 | 2) {
+    columns = value;
+    try {
+      localStorage.setItem('rein:logbook-columns', String(value));
+    } catch {
+      /* Storage opsional. */
+    }
+  }
+
+  function setLogPeriod(period: Period, date: string) {
+    const query = new SvelteURLSearchParams();
+    if (period !== 'week') query.set('period', period);
+    if (date !== todayWib()) query.set('date', date);
+    // eslint-disable-next-line svelte/no-navigation-without-resolve -- woUrl berasal dari resolve()
+    void goto(query.size ? `${woUrl}?${query}` : woUrl, { noScroll: true, keepFocus: true });
+  }
   $effect(() => {
     entries = data.log.entries;
     cursor = data.log.nextCursor;
+    moreError = '';
   });
 
   $effect(() => {
@@ -47,7 +100,11 @@
   });
 
   const off = onLive((e) => {
-    if (e.type === 'wo' && e.woId === wo.id) void invalidate('app:wo');
+    if (
+      (e.type === 'wo' && e.woId === wo.id) ||
+      (e.type === 'project' && e.projectId === wo.project.id)
+    )
+      void invalidate('app:wo');
   });
   onDestroy(off);
 
@@ -59,7 +116,63 @@
   let body = $state('');
   let files = $state<Staged[]>([]);
   let posting = $state(false);
-  const uploading = $derived(files.some((f) => !f.id && !f.error));
+  let progress = $state<number | undefined>(undefined);
+  let category = $state<LogbookCategory | ''>('');
+  let postId = crypto.randomUUID();
+  let postError = $state('');
+  let retryPost = $state<ReturnType<typeof postPayload> | null>(null);
+  let photo = $state<FileItem | null>(null);
+  let photoOpen = $state(false);
+  let entryOpen = $state(false);
+  let activeEntry = $state<LogEntry | null>(null);
+  let entryBody = $state('');
+  let entryDeleting = $state(false);
+  let entryBusy = $state(false);
+  let entryError = $state('');
+
+  function openEntry(entry: LogEntry, remove: boolean) {
+    activeEntry = entry;
+    entryBody = entry.body;
+    entryDeleting = remove;
+    entryError = '';
+    entryOpen = true;
+  }
+
+  async function saveEntry(e: SubmitEvent) {
+    e.preventDefault();
+    if (!activeEntry || entryBusy) return;
+    entryBusy = true;
+    entryError = '';
+    try {
+      await api(`/api/work-orders/${wo.id}/logbook/${activeEntry.id}`, {
+        method: entryDeleting ? 'DELETE' : 'PATCH',
+        body: {
+          expectedEditedAt: activeEntry.editedAt,
+          ...(entryDeleting ? {} : { body: entryBody }),
+        },
+      });
+      entryOpen = false;
+      toast(entryDeleting ? 'Catatan dihapus' : 'Catatan diperbarui');
+      await invalidate('app:wo');
+    } catch (err) {
+      entryError = err instanceof ApiError ? err.message : 'Perubahan catatan gagal disimpan.';
+    } finally {
+      entryBusy = false;
+    }
+  }
+  const uploading = $derived(files.some((f) => !f.id && !f.error && !f.offlineFile));
+  const hasFiles = $derived(files.some((f) => f.id || f.offlineFile));
+
+  $effect(() => {
+    void currentWoId;
+    body = '';
+    files = [];
+    progress = undefined;
+    category = '';
+    retryPost = null;
+    postError = '';
+    postId = crypto.randomUUID();
+  });
 
   // ---------------------------------------------------------------- modals
   let reasonOpen = $state(false);
@@ -72,9 +185,17 @@
   let replyResolve = $state(true);
   let editOpen = $state(false);
   let members = $state<Member[]>([]);
+  let editTypes = $state<WoType[]>([]);
+  let editError = $state('');
+  let editLoading = $state(false);
+  let editLoadFailed = $state(false);
+  let editBaseline: ReturnType<typeof snapshotEdit> | undefined;
+  let originalType = $state<WoType | null>(null);
   let edit = $state({
     title: '',
+    typeId: '',
     assigneeId: '',
+    plannedStart: '',
     deadline: '',
     urgent: false,
     weight: '',
@@ -91,25 +212,58 @@
     toast(err instanceof ApiError ? err.message : 'Terjadi kesalahan', { tone: 'danger' });
   }
 
+  function postPayload() {
+    return {
+      clientId: postId,
+      body: body.trim(),
+      attachmentIds: files.filter((f) => f.id).map((f) => f.id!),
+      ...(progress !== undefined ? { progress, expectedUpdatedAt: wo.updatedAt } : {}),
+      ...(category ? { category } : {}),
+    };
+  }
+
   async function post() {
     if (posting || uploading) return;
-    if (!body.trim() && !files.some((f) => f.id)) return;
+    if (!body.trim() && !hasFiles && progress === undefined) return;
+    const payload = retryPost ? $state.snapshot(retryPost) : postPayload();
+    const woId = wo.id;
+    postError = '';
     posting = true;
     try {
-      await api(`/api/work-orders/${wo.id}/logbook`, {
-        body: {
-          clientId: crypto.randomUUID(),
-          body: body.trim(),
-          attachmentIds: files.filter((f) => f.id).map((f) => f.id!),
-          clientCreatedAt: new Date().toISOString(),
-        },
-      });
+      const pendingFiles = files.flatMap((f) => (f.offlineFile ? [f.offlineFile] : []));
+      if (!navigator.onLine || pendingFiles.length) {
+        const createdAt = new Date().toISOString();
+        await enqueueOffline({
+          account: userId,
+          id: payload.clientId,
+          woId,
+          title: wo.title,
+          createdAt,
+          state: 'pending',
+          kind: 'logbook',
+          files: pendingFiles,
+          body: retryPost ? payload : { ...payload, clientCreatedAt: createdAt },
+        });
+        toast('Logbook disimpan di antrean');
+      } else await api(`/api/work-orders/${woId}/logbook`, { account: userId, body: payload });
+      if (wo.id !== woId) return;
+      retryPost = null;
       body = '';
+      for (const f of files) if (f.preview) URL.revokeObjectURL(f.preview);
       files = [];
+      progress = undefined;
+      category = '';
+      postId = crypto.randomUUID();
       reasonFor = null;
-      await invalidate('app:wo');
+      if (navigator.onLine) void invalidate('app:wo');
     } catch (err) {
-      fail(err);
+      if (wo.id !== woId) return;
+      if (err instanceof ApiError) {
+        if (!err.code.startsWith('OFFLINE_'))
+          retryPost = err.status === 0 || err.status >= 500 ? payload : null;
+        postError = err.message;
+        if (err.code === 'STALE') void invalidate('app:wo');
+      } else postError = 'Pengiriman Logbook gagal. Coba lagi.';
     } finally {
       posting = false;
     }
@@ -123,9 +277,10 @@
       return;
     }
     try {
-      await api(`/api/work-orders/${wo.id}/status`, {
-        body: { status: to, expectedUpdatedAt: wo.updatedAt, ...(why ? { reason: why } : {}) },
-      });
+      if (await submitWoStatus(wo, userId, to, why)) {
+        toast('Perubahan status disimpan di antrean');
+        return;
+      }
       toast(`Status: ${WO_STATUS_LABEL[to]}`);
       await invalidate('app:wo');
     } catch (err) {
@@ -192,35 +347,53 @@
     }
   }
 
-  async function openEdit() {
-    edit = {
-      title: wo.title,
-      assigneeId: wo.assignee.id,
-      deadline: wo.deadline,
-      urgent: wo.urgent,
-      weight: wo.weight == null ? '' : String(wo.weight),
-      detail: wo.detail,
-    };
+  function snapshotEdit() {
+    return { id: wo.id, updatedAt: wo.updatedAt, can: wo.can, fields: woEditFields(wo) };
+  }
+
+  function openEdit() {
+    editBaseline = snapshotEdit();
+    edit = { ...editBaseline.fields };
+    originalType = wo.type;
+    members = [];
+    editTypes = [];
+    editLoading = false;
+    editError = '';
+    editLoadFailed = false;
     editOpen = true;
-    if (!members.length) {
-      members = (await api<{ members: Member[] }>(`/api/projects/${wo.project.id}`)).members;
+    if (wo.can.editCore) void loadEditOptions();
+  }
+
+  async function loadEditOptions() {
+    const snapshot = editBaseline;
+    editLoading = true;
+    editLoadFailed = false;
+    try {
+      const [project, directory] = await Promise.all([
+        api<{ members: Member[] }>(`/api/projects/${wo.project.id}`),
+        api<{ woTypes: WoType[] }>('/api/directory/wo-types'),
+      ]);
+      if (snapshot !== editBaseline) return;
+      members = project.members;
+      editTypes = directory.woTypes.filter((type) => type.active !== false);
+    } catch {
+      if (snapshot === editBaseline) editLoadFailed = true;
+    } finally {
+      if (snapshot === editBaseline) editLoading = false;
     }
   }
 
   async function saveEdit(e?: SubmitEvent) {
     e?.preventDefault();
+    if (!editBaseline || editBaseline.id !== wo.id || busy) return;
+    editError = '';
+    if (editBaseline.can.editCore && edit.deadline < edit.plannedStart) {
+      editError = 'Deadline tidak boleh sebelum tanggal mulai.';
+      return;
+    }
     busy = true;
     try {
-      const patch: Record<string, unknown> = { expectedUpdatedAt: wo.updatedAt };
-      if (edit.title.trim() !== wo.title) patch.title = edit.title.trim();
-      if (edit.assigneeId !== wo.assignee.id) patch.assigneeId = edit.assigneeId;
-      if (edit.deadline !== wo.deadline) patch.deadline = edit.deadline;
-      if (edit.urgent !== wo.urgent) patch.urgent = edit.urgent;
-      if (edit.detail !== wo.detail) patch.detail = edit.detail;
-      if (wo.can.editWeight) {
-        const w = edit.weight.trim() === '' ? null : Number(edit.weight.replace(',', '.'));
-        if (w !== wo.weight) patch.weight = w;
-      }
+      const patch = woEditPatch(editBaseline, edit);
       if (Object.keys(patch).length > 1) {
         await api(`/api/work-orders/${wo.id}`, { method: 'PATCH', body: patch });
         toast('WO diperbarui');
@@ -228,19 +401,38 @@
       editOpen = false;
       await invalidate('app:wo');
     } catch (err) {
-      fail(err);
+      if (err instanceof ApiError && err.code === 'STALE') {
+        editError =
+          'WO sudah diubah orang lain. Salin isian Anda, lalu buka kembali Edit WO untuk meninjau versi terbaru.';
+        void invalidate('app:wo');
+      } else {
+        editError = err instanceof ApiError ? err.message : 'Perubahan gagal disimpan.';
+      }
     } finally {
       busy = false;
     }
   }
 
   async function more() {
-    if (!cursor) return;
-    const r = await api<{ entries: LogEntry[]; nextCursor: string | null }>(
-      `/api/work-orders/${wo.id}/logbook?before=${encodeURIComponent(cursor)}`,
-    );
-    entries = [...entries, ...r.entries];
-    cursor = r.nextCursor;
+    if (!cursor || moreBusy) return;
+    const firstPage = data.log;
+    const query = new SvelteURLSearchParams(data.logQuery);
+    query.set('before', cursor);
+    moreBusy = true;
+    moreError = '';
+    try {
+      const result = await api<{ entries: LogEntry[]; nextCursor: string | null }>(
+        `/api/work-orders/${wo.id}/logbook?${query}`,
+      );
+      if (data.log !== firstPage) return;
+      entries = [...entries, ...result.entries];
+      cursor = result.nextCursor;
+    } catch (err) {
+      if (data.log === firstPage)
+        moreError = err instanceof ApiError ? err.message : 'Catatan lama gagal dimuat.';
+    } finally {
+      moreBusy = false;
+    }
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -249,14 +441,6 @@
       void post();
     }
   }
-
-  const PILL: Record<LogEntry['kind'], string | null> = {
-    note: null,
-    comment: 'Komentar',
-    system: 'Sistem',
-    help_request: 'Butuh bantuan',
-    help_resolved: 'Bantuan selesai',
-  };
 </script>
 
 <svelte:head><title>{wo.numberLabel} — {wo.title} · REIN</title></svelte:head>
@@ -288,59 +472,170 @@
       </div>
     {/if}
 
-    <div class="sep"></div>
-    <div class="sec-h">
-      <Icon name="logbook" />
-      <h2>Logbook</h2>
-      <span class="faint">{entries.length}{cursor ? '+' : ''} entri</span>
-    </div>
-
-    {#if wo.can.writeLogbook}
-      <div class="composer">
-        <textarea
-          aria-label="Tulis logbook"
-          placeholder="Tulis pekerjaan, kendala, atau catatan… (Ctrl+Enter untuk kirim)"
-          bind:value={body}
-          {onkeydown}
-          rows="3"></textarea>
-        <div class="row">
-          {#if wo.can.upload}<StagedFiles {userId} bind:items={files} compact camera />{/if}
-          <span class="sp"></span>
-          <Button
-            variant="primary"
-            onclick={post}
-            loading={posting}
-            disabled={uploading || (!body.trim() && !files.some((f) => f.id))}>Kirim</Button
-          >
-        </div>
+    {#if wo.materials.length}
+      <div class="sec-h">
+        <Icon name="file" />
+        <h2>Material WO</h2>
+        <span class="faint">{wo.materials.length} item</span>
       </div>
+      <ul class="wo-materials">
+        {#each wo.materials as material (material.id)}
+          <li>
+            <div>
+              <b>{material.partNo ? `${material.partNo} · ` : ''}{material.description}</b><small
+                >{material.material} · {material.specification}</small
+              >
+            </div>
+            <span>{material.quantity.toLocaleString('id-ID')} {material.unit}</span><span
+              class="faint">{MATERIAL_STATUS_LABEL[material.status]}</span
+            >
+          </li>
+        {/each}
+      </ul>
     {/if}
-
-    <div class="entries">
-      {#each entries as e (e.id)}
-        <div class="entry" class:sys={e.kind === 'system'}>
-          <Avatar name={e.author.fullName} src={e.author.avatarUrl} size={24} />
-          <div class="eb">
-            <div class="eh">
-              <b>{e.author.fullName}</b>
-              <span class="faint">· {stamp(e.createdAt)}</span>
-              {#if PILL[e.kind]}<span class="pill {e.kind}">{PILL[e.kind]}</span>{/if}
-              {#if e.progressTo != null && e.progressTo !== e.progressFrom}
-                <span class="pill">Progres {e.progressFrom ?? 0}% → {e.progressTo}%</span>
-              {/if}
-              {#if e.statusTo && e.statusTo !== e.statusFrom}
-                <span class="pill">→ {WO_STATUS_LABEL[e.statusTo]}</span>
+    <nav class="wo-tabs" aria-label="Catatan dan aktivitas WO">
+      <!-- eslint-disable svelte/no-navigation-without-resolve -- woUrl berasal dari resolve() -->
+      <a
+        href={filterQuery ? `${woUrl}?${filterQuery}` : woUrl}
+        aria-current={data.tab === 'logbook' ? 'page' : undefined}
+      >
+        <Icon name="logbook" size={16} />Logbook
+      </a>
+      <a
+        href={`${woUrl}?tab=activity${filterQuery ? `&${filterQuery}` : ''}`}
+        aria-current={data.tab === 'activity' ? 'page' : undefined}
+      >
+        <Icon name="clock" size={16} />Aktivitas
+      </a>
+      <!-- eslint-enable svelte/no-navigation-without-resolve -->
+    </nav>
+    {#if data.tab === 'activity'}
+      <ActivityList woId={wo.id} />
+    {:else}
+      <div class="log-layout">
+        {#if wo.can.writeLogbook && !data.entry}
+          <div class="composer">
+            <textarea
+              aria-label="Tulis logbook"
+              placeholder="Tulis pekerjaan, kendala, atau catatan… (Ctrl+Enter untuk kirim)"
+              bind:value={body}
+              readonly={posting || !!retryPost}
+              {onkeydown}
+              rows="3"></textarea>
+            <div class="row">
+              {#if wo.can.upload}<StagedFiles
+                  {userId}
+                  bind:items={files}
+                  compact
+                  camera
+                  offline
+                  disabled={posting || !!retryPost}
+                />{/if}
+              <span class="sp"></span>
+              <Button
+                variant="primary"
+                onclick={post}
+                loading={posting}
+                disabled={uploading ||
+                  (!body.trim() && !hasFiles && progress === undefined) ||
+                  (progress !== undefined &&
+                    (!Number.isInteger(progress) || progress < 0 || progress > 100))}
+                >{retryPost ? 'Coba lagi' : 'Kirim'}</Button
+              >
+            </div>
+            <div class="log-options">
+              <label
+                >Status catatan (opsional)
+                <select bind:value={category} disabled={posting || !!retryPost}>
+                  <option value="">Tanpa status</option>
+                  {#each Object.entries(LOGBOOK_CATEGORY_LABEL) as [value, label] (value)}<option
+                      {value}>{label}</option
+                    >{/each}
+                </select>
+              </label>
+              {#if wo.can.updateProgress}
+                <label
+                  >Progres WO % (opsional)
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    placeholder={`Saat ini ${wo.progress}%`}
+                    bind:value={progress}
+                    disabled={posting || !!retryPost}
+                  />
+                </label>
               {/if}
             </div>
-            {#if e.body}<p>{e.body}</p>{/if}
-            {#if e.attachments.length}{@render thumbs(e.attachments)}{/if}
+            {#if postError}<p role="alert">{postError}</p>{/if}
           </div>
+        {/if}
+
+        <div class="log-tools">
+          {#if data.entry}
+            <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- woUrl berasal dari resolve() -->
+            <a href={woUrl}>Lihat Logbook minggu ini</a>
+          {:else}
+            <PeriodPicker period={data.period} date={data.date} onchange={setLogPeriod} />
+            <div class="log-columns" role="group" aria-label="Tata letak Logbook">
+              <Button aria-pressed={columns === 1} onclick={() => setColumns(1)}>1 kolom</Button>
+              <Button aria-pressed={columns === 2} onclick={() => setColumns(2)}>2 kolom</Button>
+            </div>
+          {/if}
         </div>
-      {:else}
-        <span class="faint">Belum ada entri. Tulis catatan pertama di atas.</span>
-      {/each}
-      {#if cursor}<Button variant="ghost" onclick={more}>Muat lebih lama</Button>{/if}
-    </div>
+        <div class="entries" class:two={columns === 2 && !data.entry}>
+          {#each entries as e, i (e.id)}
+            {@const day = todayWib(new Date(e.createdAt))}
+            {#if i === 0 || todayWib(new Date(entries[i - 1]!.createdAt)) !== day}
+              <h2 class="log-day">{dayLabel(e.createdAt)}</h2>
+            {/if}
+            <article class="entry">
+              <Avatar name={e.author.fullName} src={e.author.avatarUrl} size={24} />
+              <div class="eb">
+                <div class="eh">
+                  <b>{e.author.fullName}</b>
+                  <span class="faint">· {stamp(e.createdAt)}</span>
+                  {#if e.editedAt}<span class="faint" title={stamp(e.editedAt)}>· diedit</span>{/if}
+                  {#if e.kind === 'comment'}<span class="pill">Komentar</span>{/if}
+                  {#if e.category}<span class="pill">{LOGBOOK_CATEGORY_LABEL[e.category]}</span
+                    >{/if}
+                  {#if e.progressTo != null}
+                    <span class="pill">Progres {e.progressFrom ?? 0}% → {e.progressTo}%</span>
+                  {/if}
+                </div>
+                {#if e.body}<p>
+                    {#each logbookText(e.body) as part, i (i)}{#if part.href}<a
+                          href={part.href}
+                          target="_blank"
+                          rel="external noopener noreferrer">{part.text}</a
+                        >{:else}{part.text}{/if}{/each}
+                  </p>{/if}
+                {#if e.attachments.length}{@render thumbs(e.attachments)}{/if}
+                {#if e.canEdit}
+                  <div class="entry-actions">
+                    <Button variant="ghost" onclick={() => openEntry(e, false)}>Edit catatan</Button
+                    >
+                    <Button variant="ghost" onclick={() => openEntry(e, true)}>Hapus catatan</Button
+                    >
+                  </div>
+                {/if}
+              </div>
+            </article>
+          {:else}
+            <p class="muted">
+              {data.entry
+                ? 'Catatan ini sudah tidak tersedia.'
+                : 'Belum ada catatan pada periode ini.'}
+            </p>
+          {/each}
+        </div>
+        {#if moreError}<p role="alert">{moreError}</p>{/if}
+        {#if cursor}<Button variant="ghost" loading={moreBusy} onclick={more}
+            >Muat lebih lama</Button
+          >{/if}
+      </div>
+    {/if}
   </div>
 
   <aside class="props">
@@ -367,6 +662,7 @@
         {/if}
       </span>
     </div>
+    {#if wo.statusHint}<p class="status-hint">{wo.statusHint}</p>{/if}
     <div class="prop">
       <span>PIC</span>
       <span class="v"
@@ -397,7 +693,7 @@
         ></span
       >
     </div>
-    {#if wo.can.editDetail}
+    {#if wo.can.editCore || wo.can.editDetail || wo.can.editWeight}
       <Button icon="edit" onclick={openEdit}>Edit WO</Button>
     {/if}
 
@@ -438,29 +734,70 @@
   </aside>
 </div>
 
+{#snippet thumbContent(f: FileItem)}
+  {#if thumbUrl(f, userId)}
+    <img src={thumbUrl(f, userId)} alt="" width="112" height="84" loading="lazy" decoding="async" />
+  {:else}
+    <span class="im"><Icon name={isPreviewImage(f.mime) ? 'camera' : 'file'} size={20} /></span>
+  {/if}
+  <span class="tn">{f.fileName}<small>{formatBytes(f.sizeBytes)}</small></span>
+{/snippet}
+
 {#snippet thumbs(list: typeof wo.attachments)}
   <div class="thumbs">
     {#each list as f (f.id)}
-      <!-- eslint-disable svelte/no-navigation-without-resolve -- /files/* disajikan server, bukan route SPA -->
-      <a class="thumb" href={fileUrl(f.id)} target="_blank" rel="noopener">
-        {#if thumbUrl(f)}
-          <img
-            src={thumbUrl(f)}
-            alt={f.fileName}
-            width="112"
-            height="84"
-            loading="lazy"
-            decoding="async"
-          />
-        {:else}
-          <span class="im"><Icon name="file" size={20} /></span>
-        {/if}
-        <span class="tn">{f.fileName}<small>{formatBytes(f.sizeBytes)}</small></span>
-      </a>
-      <!-- eslint-enable svelte/no-navigation-without-resolve -->
+      {#if isPreviewImage(f.mime)}
+        <button
+          class="thumb"
+          type="button"
+          onclick={() => {
+            photo = f;
+            photoOpen = true;
+          }}>{@render thumbContent(f)}</button
+        >
+      {:else}
+        <a
+          class="thumb"
+          href={fileUrl(f.id)}
+          target={f.mime === 'application/pdf' ? '_blank' : undefined}
+          rel="external noopener"
+        >
+          {@render thumbContent(f)}
+        </a>
+      {/if}
     {/each}
   </div>
 {/snippet}
+
+<PhotoLightbox bind:open={photoOpen} {photo} />
+
+<Modal
+  bind:open={entryOpen}
+  title={entryDeleting ? 'Hapus catatan Logbook?' : 'Edit catatan Logbook'}
+  width={520}
+>
+  <form id="logbook-entry" class="grid" onsubmit={saveEntry}>
+    {#if entryError}<p role="alert">{entryError}</p>{/if}
+    {#if entryDeleting}
+      <p>Catatan dan lampirannya akan hilang dari Logbook. Riwayat progres WO tetap tercatat.</p>
+    {:else}
+      <Field label="Catatan" id="edit-logbook">
+        <textarea id="edit-logbook" rows="4" maxlength="5000" bind:value={entryBody}></textarea>
+      </Field>
+    {/if}
+  </form>
+  {#snippet footer()}
+    <Button onclick={() => (entryOpen = false)}>Batal</Button>
+    <Button
+      variant={entryDeleting ? 'danger' : 'primary'}
+      type="submit"
+      form="logbook-entry"
+      loading={entryBusy}
+    >
+      {entryDeleting ? 'Hapus' : 'Simpan'}
+    </Button>
+  {/snippet}
+</Modal>
 
 <Modal bind:open={reasonOpen} title="Alasan perubahan status" width={440}>
   <form id="reason-f" onsubmit={confirmReason}>
@@ -519,17 +856,49 @@
 
 <Modal bind:open={editOpen} title={`Edit ${wo.numberLabel}`} width={560}>
   <form id="edit-f" class="grid" onsubmit={saveEdit}>
-    <Input label="Nama WO" bind:value={edit.title} required maxlength={160} />
-    {#if wo.can.editAny}
+    {#if editError}<p role="alert">{editError}</p>{/if}
+    {#if wo.can.editCore}
+      <Input label="Nama WO" bind:value={edit.title} required maxlength={160} />
+      {#if editLoadFailed}
+        <p role="status">
+          Pilihan Jenis dan PIC gagal dimuat. <Button onclick={loadEditOptions}>Coba lagi</Button>
+        </p>
+      {/if}
+      <Field label="Jenis" id="e-type">
+        <select
+          id="e-type"
+          bind:value={edit.typeId}
+          disabled={editLoading || editLoadFailed}
+          required
+        >
+          {#if originalType && !editTypes.some((type) => type.id === originalType?.id)}
+            <option value={originalType.id}>{originalType.name}</option>
+          {/if}
+          {#each WO_CATEGORIES as category (category)}
+            {@const types = editTypes.filter((type) => type.category === category)}
+            {#if types.length}
+              <optgroup label={WO_CATEGORY_META[category].label}>
+                {#each types as type (type.id)}<option value={type.id}>{type.name}</option>{/each}
+              </optgroup>
+            {/if}
+          {/each}
+        </select>
+      </Field>
       <Field label="PIC" id="e-pic">
-        <select id="e-pic" bind:value={edit.assigneeId}>
+        <select
+          id="e-pic"
+          bind:value={edit.assigneeId}
+          disabled={editLoading || editLoadFailed}
+          required
+        >
           {#each members as m (m.userId)}<option value={m.userId}
               >{m.fullName} · {m.projectRole}</option
             >{/each}
           {#if !members.length}<option value={wo.assignee.id}>{wo.assignee.fullName}</option>{/if}
         </select>
       </Field>
-      <Input label="Deadline" type="date" bind:value={edit.deadline} />
+      <Input label="Mulai (rencana)" type="date" bind:value={edit.plannedStart} required />
+      <Input label="Deadline" type="date" bind:value={edit.deadline} required />
       <Toggle bind:checked={edit.urgent} label="Urgent" showLabel />
     {/if}
     {#if wo.can.editWeight}
@@ -540,9 +909,11 @@
         hint="Kosongkan = otomatis"
       />
     {/if}
-    <Field label="Detail" id="e-det">
-      <textarea id="e-det" bind:value={edit.detail} rows="4" maxlength="5000"></textarea>
-    </Field>
+    {#if wo.can.editDetail}
+      <Field label="Detail" id="e-det">
+        <textarea id="e-det" bind:value={edit.detail} rows="4" maxlength="5000"></textarea>
+      </Field>
+    {/if}
   </form>
   {#snippet footer()}
     <Button onclick={() => (editOpen = false)}>Batal</Button>
@@ -551,6 +922,63 @@
 </Modal>
 
 <style>
+  .entry-actions {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .wo-materials {
+    list-style: none;
+    padding: 0;
+    margin: 12px 0;
+  }
+  .wo-materials li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--color-border-default);
+  }
+  .wo-materials li div {
+    flex: 1;
+    min-width: 160px;
+    overflow-wrap: anywhere;
+  }
+  .wo-materials small {
+    display: block;
+    margin-top: 4px;
+    color: var(--color-text-secondary);
+  }
+  .log-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 0 12px 12px;
+  }
+  .log-options label {
+    display: grid;
+    gap: 6px;
+    font: var(--text-caption);
+    color: var(--color-text-secondary);
+    flex: 1;
+    min-width: 150px;
+  }
+  .log-options input,
+  .log-options select {
+    width: 100%;
+    height: 36px;
+    padding: 0 8px;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+  }
+  .status-hint {
+    font: var(--text-caption);
+    color: var(--color-text-secondary);
+    line-height: 1.6;
+    margin: 0 0 14px;
+  }
   .wo {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 300px;
@@ -644,13 +1072,70 @@
     flex: 1;
   }
   .entries {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .wo-tabs {
     display: flex;
-    flex-direction: column;
-    gap: 20px;
+    gap: 16px;
+    margin: 20px 0 14px;
+    border-bottom: 1px solid var(--color-border-default);
+  }
+  .wo-tabs a {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 4px;
+    border-bottom: 2px solid transparent;
+    color: var(--color-text-secondary);
+    text-decoration: none;
+  }
+  .wo-tabs a[aria-current] {
+    border-color: var(--color-accent-default);
+    color: var(--color-text-primary);
+  }
+  .log-layout {
+    container: logbook / inline-size;
+  }
+  .log-tools {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 12px 0;
+  }
+  .log-columns {
+    display: none;
+    gap: 4px;
+  }
+  .log-columns :global([aria-pressed='true']) {
+    border-color: var(--color-accent-default);
+    background: var(--color-accent-subtle);
+  }
+  .log-day {
+    grid-column: 1 / -1;
+    margin: 6px 0 0;
+    font: var(--text-label);
+    color: var(--color-text-secondary);
+  }
+  @container logbook (min-width: 620px) {
+    .log-columns {
+      display: flex;
+    }
+    .entries.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
   .entry {
     display: flex;
     gap: 10px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
     animation: fade 0.25s var(--ease);
   }
   .eb {
@@ -675,9 +1160,6 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .entry.sys p {
-    color: var(--color-text-secondary);
-  }
   .pill {
     display: inline-flex;
     align-items: center;
@@ -688,14 +1170,6 @@
     color: var(--color-text-secondary);
     font: var(--text-micro);
   }
-  .pill.help_request {
-    background: var(--color-danger-subtle);
-    color: var(--color-danger-default);
-  }
-  .pill.help_resolved {
-    background: var(--color-success-subtle);
-    color: var(--color-success-default);
-  }
   .thumbs {
     display: flex;
     flex-wrap: wrap;
@@ -703,6 +1177,7 @@
   }
   .thumb {
     width: 112px;
+    text-align: start;
     border: 1px solid var(--color-border-default);
     border-radius: var(--radius-md);
     overflow: hidden;

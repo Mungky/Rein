@@ -1,6 +1,6 @@
 <script lang="ts">
   import { MAX_ATTACHMENT_BYTES, MAX_FILES_PER_ENTRY } from '@rein/shared';
-  import { stageFile, type Staged } from '$lib/attach';
+  import { uploadPreparedFile, type Staged } from '$lib/attach';
   import { formatBytes } from '$lib/format';
   import { ApiError } from '$lib/api';
   import Icon from './Icon.svelte';
@@ -15,6 +15,8 @@
     max?: number;
     camera?: boolean;
     compact?: boolean;
+    disabled?: boolean;
+    offline?: boolean;
   }
   let {
     userId,
@@ -22,15 +24,21 @@
     max = MAX_FILES_PER_ENTRY,
     camera = false,
     compact = false,
+    disabled = false,
+    offline = false,
   }: Props = $props();
 
   let input: HTMLInputElement;
   let cam: HTMLInputElement | undefined = $state();
   let over = $state(false);
+  let skipped = $state<string[]>([]);
 
   function add(files: FileList | File[]) {
-    for (const file of Array.from(files)) {
-      if (items.length >= max) break;
+    if (disabled) return;
+    const selected = Array.from(files);
+    const slots = Math.max(0, max - items.length);
+    skipped = selected.slice(slots).map((f) => f.name);
+    for (const file of selected.slice(0, slots)) {
       const it: Staged = {
         key: crypto.randomUUID(),
         name: file.name,
@@ -38,17 +46,25 @@
         preview: null,
         progress: 0,
         id: null,
-        error: file.size > MAX_ATTACHMENT_BYTES ? 'Melebihi 50 MB' : null,
+        error: file.size > MAX_ATTACHMENT_BYTES ? 'Melebihi 50 MiB' : null,
       };
       items = [...items, it];
       if (it.error) continue;
       const set = (patch: Partial<Staged>) => {
         items = items.map((x) => (x.key === it.key ? { ...x, ...patch } : x));
       };
-      stageFile(file, userId, (f) => set({ progress: f }))
+      if (offline && !navigator.onLine) {
+        set({ offlineFile: file });
+        continue;
+      }
+      uploadPreparedFile(file, { ownerType: 'user', ownerId: userId }, (f) => set({ progress: f }))
         .then((r) => set({ id: r.id, preview: r.preview, progress: 1 }))
         .catch((err: unknown) =>
-          set({ error: err instanceof ApiError ? err.message : 'Gagal mengunggah' }),
+          set(
+            offline && err instanceof ApiError && err.code === 'NETWORK'
+              ? { offlineFile: file }
+              : { error: err instanceof ApiError ? err.message : 'Gagal mengunggah' },
+          ),
         );
     }
   }
@@ -71,6 +87,7 @@
     <div
       class="drop"
       class:over
+      aria-disabled={disabled}
       role="button"
       tabindex="0"
       ondragover={(e) => {
@@ -79,8 +96,8 @@
       }}
       ondragleave={() => (over = false)}
       {ondrop}
-      onclick={() => input.click()}
-      onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && input.click()}
+      onclick={() => !disabled && input.click()}
+      onkeydown={(e) => !disabled && (e.key === 'Enter' || e.key === ' ') && input.click()}
     >
       <Icon name="upload" />
       <span><b>Pilih file</b> atau seret ke sini · foto dikompres otomatis · maks 50 MB/file</span>
@@ -90,6 +107,7 @@
     bind:this={input}
     type="file"
     multiple
+    {disabled}
     hidden
     onchange={(e) => {
       const t = e.currentTarget;
@@ -103,6 +121,7 @@
       type="file"
       accept="image/*"
       capture="environment"
+      {disabled}
       hidden
       onchange={(e) => {
         const t = e.currentTarget;
@@ -113,16 +132,33 @@
   {/if}
   {#if compact}
     <div class="acts">
-      <button type="button" class="ib" onclick={() => input.click()} aria-label="Lampirkan file">
+      <button
+        type="button"
+        class="ib"
+        onclick={() => input.click()}
+        aria-label="Lampirkan file"
+        {disabled}
+      >
         <Icon name="paperclip" />
       </button>
       {#if camera}
-        <button type="button" class="ib" onclick={() => cam?.click()} aria-label="Ambil foto">
+        <button
+          type="button"
+          class="ib"
+          onclick={() => cam?.click()}
+          aria-label="Ambil foto"
+          {disabled}
+        >
           <Icon name="camera" />
         </button>
       {/if}
-      <span class="faint">Maks. 50 MB/file</span>
+      <span class="faint">Maks. {max} file · 50 MiB/file</span>
     </div>
+  {/if}
+  {#if skipped.length}
+    <p class="file-message" role="alert">
+      Batas {max} lampiran. Dilewati ({skipped.length}): {skipped.join(', ')}.
+    </p>
   {/if}
   {#if items.length}
     <ul>
@@ -134,15 +170,18 @@
           <span class="nm">
             <b>{it.name}</b>
             <small>
-              {#if it.error}{it.error}{:else if !it.id}Mengunggah {Math.round(
-                  it.progress * 100,
-                )}%{:else}{formatBytes(it.size)}{/if}
+              {#if it.error}Gagal · {it.error}{:else if it.offlineFile}Siap diantrekan · {formatBytes(
+                  it.size,
+                )}{:else if !it.id}Mengunggah {Math.round(it.progress * 100)}%{:else}Siap dikirim · {formatBytes(
+                  it.size,
+                )}{/if}
             </small>
           </span>
           <button
             type="button"
             class="ib"
             onclick={() => remove(it.key)}
+            {disabled}
             aria-label="Hapus lampiran"
           >
             <Icon name="x" size={14} />
@@ -190,6 +229,11 @@
   .acts {
     display: flex;
     gap: 2px;
+  }
+  .file-message {
+    width: 100%;
+    overflow-wrap: anywhere;
+    font: var(--text-caption);
   }
   ul {
     display: flex;
@@ -249,5 +293,11 @@
   }
   .ib:hover {
     background: var(--color-bg-hover);
+  }
+  @media (max-width: 767px) {
+    .ib {
+      width: 44px;
+      height: 44px;
+    }
   }
 </style>

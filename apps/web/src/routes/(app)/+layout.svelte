@@ -6,6 +6,7 @@
   import { api } from '$lib/api';
   import { chrome, resetChrome } from '$lib/chrome.svelte';
   import AppShell from '$lib/components/AppShell.svelte';
+  import OfflineBanner from '$lib/components/OfflineBanner.svelte';
   import { live, setUnread, startLive, stopLive } from '$lib/live.svelte';
   import type { NavItem } from '$lib/nav';
   import { hasGlobal, logout, session } from '$lib/session.svelte';
@@ -16,6 +17,7 @@
     '/': 'Beranda',
     '/tugas': 'Tugas saya',
     '/project': 'Project',
+    '/aktivitas': 'Aktivitas',
     '/notifikasi': 'Notifikasi',
     '/profil': 'Profil & keamanan',
     '/admin/pengguna': 'Pengguna',
@@ -41,6 +43,9 @@
       : []),
     ...(hasGlobal('admin.roles')
       ? [{ href: resolve('/admin/role'), label: 'Role & izin', icon: 'shield' as const }]
+      : []),
+    ...(hasGlobal('admin.wo_types')
+      ? [{ href: resolve('/admin/jenis-wo'), label: 'Jenis WO', icon: 'logbook' as const }]
       : []),
   ]);
 
@@ -84,6 +89,7 @@
     unread={live.unread}
     {onlogout}
   >
+    <OfflineBanner account={session.me.user.id} />
     {@render children()}
   </AppShell>
 {/if}

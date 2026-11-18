@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { WO_STATUS_LABEL, type WoStatus } from '@rein/shared';
   import { resolve } from '$app/paths';
   import { shortDate } from '$lib/format';
+  import { dur } from '$lib/motion';
   import type { WoRow } from '$lib/types';
+  import { groupWorklist, type WorklistGroup } from '$lib/worklist';
   import { flip } from 'svelte/animate';
   import Avatar from './Avatar.svelte';
   import Icon from './Icon.svelte';
@@ -16,18 +17,10 @@
    */
   interface Props {
     rows: WoRow[];
-    group?: boolean;
+    group?: WorklistGroup | false;
   }
-  let { rows, group = true }: Props = $props();
-
-  const ORDER: WoStatus[] = ['in_progress', 'review', 'todo', 'backlog', 'done', 'canceled'];
-  const groups = $derived(
-    group
-      ? ORDER.map((s) => ({ status: s, items: rows.filter((r) => r.status === s) })).filter(
-          (g) => g.items.length,
-        )
-      : [{ status: null as WoStatus | null, items: rows }],
-  );
+  let { rows, group = 'status' }: Props = $props();
+  const groups = $derived(groupWorklist(rows, group || 'none'));
   let closed = $state<Record<string, boolean>>({ done: true, canceled: true });
 </script>
 
@@ -39,20 +32,24 @@
     <span role="columnheader">Deadline</span>
     <span role="columnheader">Progres</span>
   </div>
-  {#each groups as g (g.status ?? 'all')}
-    {#if g.status}
+  {#each groups as g (g.id)}
+    {#if g.label}
       <button
         class="grp"
-        class:closed={closed[g.status]}
-        onclick={() => (closed[g.status!] = !closed[g.status!])}
-        aria-expanded={!closed[g.status]}
+        class:closed={closed[g.id]}
+        onclick={() => (closed[g.id] = !closed[g.id])}
+        aria-expanded={!closed[g.id]}
       >
         <Icon name="chevron-down" size={14} class="chev" />
-        <StatusIcon status={g.status} />
-        {WO_STATUS_LABEL[g.status]}<span class="n">{g.items.length}</span>
+        {#if g.status}<StatusIcon status={g.status} />{/if}
+        {g.label}<span class="n">{g.items.length}</span>
       </button>
     {/if}
-    <div class="rows" class:closed={g.status ? closed[g.status] : false}>
+    <div
+      class="rows"
+      class:closed={g.label && closed[g.id]}
+      inert={Boolean(g.label && closed[g.id])}
+    >
       <div>
         {#each g.items as w (w.id)}
           <a
@@ -60,7 +57,7 @@
             class:done={w.status === 'done' || w.status === 'canceled'}
             href={resolve('/(app)/w/[id]', { id: w.id })}
             role="row"
-            animate:flip={{ duration: 200 }}
+            animate:flip={{ duration: dur(200) }}
           >
             <span class="nm" role="cell">
               <StatusIcon status={w.status} />
@@ -93,6 +90,7 @@
 
 <style>
   .tbl {
+    container-type: inline-size;
     border: 1px solid var(--color-border-default);
     border-radius: var(--radius-lg);
     overflow: hidden;
@@ -101,7 +99,10 @@
   .thead,
   .wr {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 150px 120px 84px 120px;
+    grid-template-columns: minmax(0, 1fr) minmax(100px, 150px) minmax(72px, 120px) 84px minmax(
+        80px,
+        120px
+      );
     gap: 12px;
     align-items: center;
     padding: 0 16px;
@@ -221,6 +222,8 @@
       border-left: 0;
       border-right: 0;
     }
+  }
+  @container (max-width: 670px) {
     .thead {
       display: none;
     }
@@ -240,9 +243,14 @@
     .wr > :nth-child(4) {
       grid-area: due;
     }
-    .wr > :nth-child(3),
+    .wr > :nth-child(3) {
+      grid-area: pic;
+    }
     .wr > :nth-child(5) {
-      display: none;
+      grid-area: progress;
+    }
+    .wr {
+      grid-template-areas: 'nm nm' 'type due' 'pic progress';
     }
   }
 </style>
