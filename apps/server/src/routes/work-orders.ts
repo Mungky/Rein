@@ -473,7 +473,7 @@ export const woRoutes = new Hono<AppEnv>()
               ? 'Alur WO: Dikerjakan → tulis Logbook → Review → Selesai.'
               : null,
       can: {
-        editAny: actor.canEditAny,
+        editCore: actor.canEditAny && wo.status !== 'done' && wo.status !== 'canceled',
         editDetail: actor.canEditAny || actor.isAssignee,
         editWeight: canDo(a, 'wo.weight.edit', acc.res),
         delete: canDo(a, 'wo.delete', acc.res),
@@ -552,7 +552,7 @@ export const woRoutes = new Hono<AppEnv>()
     }
     if (body.typeId !== undefined && body.typeId !== wo.typeId) {
       const t = await db.query.woTypes.findFirst({ where: eq(woTypes.id, body.typeId) });
-      if (!t) throw new HttpError(422, 'VALIDATION', 'Jenis WO tidak valid');
+      if (!t?.active) throw new HttpError(422, 'VALIDATION', 'Pilih jenis WO yang aktif');
       patch.typeId = t.id;
       changes.push(`jenis → ${t.name}`);
     }
@@ -573,7 +573,18 @@ export const woRoutes = new Hono<AppEnv>()
     const label = wo.numberLabel ?? woNumberLabel(wo.seq);
     const title = patch.title ?? wo.title;
     const notified = await db.transaction(async (tx) => {
-      await tx.update(workOrders).set(patch).where(eq(workOrders.id, wo.id));
+      const [updated] = await tx
+        .update(workOrders)
+        .set({ ...patch, updatedAt: new Date(Math.max(Date.now(), wo.updatedAt.getTime() + 1)) })
+        .where(
+          and(
+            eq(workOrders.id, wo.id),
+            isNull(workOrders.deletedAt),
+            sql`date_trunc('milliseconds', ${workOrders.updatedAt}) = ${wo.updatedAt.toISOString()}::timestamptz`,
+          ),
+        )
+        .returning({ id: workOrders.id });
+      if (!updated) throw stale();
       await systemEntry(tx, wo.id, a.user.id, `${a.user.fullName} mengubah ${changes.join(', ')}`);
       await audit(tx, {
         actorId: a.user.id,

@@ -70,6 +70,70 @@ async function file(
   return id;
 }
 describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
+  it('menolak edit WO yang basi pada field berbeda dan field yang sama', async () => {
+    const f = await fixture();
+    const engineer = await createUser();
+    const { a: pic } = await login(f.app, engineer.username, engineer.password!);
+    await testDb().insert(projectMembers).values({
+      projectId: f.id,
+      userId: engineer.id,
+      projectRole: 'Engineer',
+      addedBy: f.manager.id,
+    });
+    const url = `/api/work-orders/${f.woId}`;
+    const created = await (await f.a.get(url)).json();
+    expect(
+      (await f.a.patch(url, { expectedUpdatedAt: created.updatedAt, assigneeId: engineer.id }))
+        .status,
+    ).toBe(200);
+    const before = await (await pic.get(url)).json();
+    expect(before.can).toMatchObject({ editCore: false, editDetail: true, editWeight: false });
+    expect(
+      (await pic.patch(url, { expectedUpdatedAt: before.updatedAt, title: 'Terlarang' })).status,
+    ).toBe(403);
+    expect(
+      (await pic.patch(url, { expectedUpdatedAt: before.updatedAt, detail: 'Detail PIC' })).status,
+    ).toBe(200);
+    for (const patch of [{ title: 'Judul Manager' }, { detail: 'Detail Manager' }]) {
+      const stale = await f.a.patch(url, { expectedUpdatedAt: before.updatedAt, ...patch });
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toMatchObject({ error: { code: 'STALE' } });
+    }
+    const current = await (await f.a.get(url)).json();
+    expect(current).toMatchObject({ title: before.title, detail: 'Detail PIC' });
+    const nextType = await testDb().query.woTypes.findFirst({
+      where: eq(woTypes.isPunchList, false),
+    });
+    expect(
+      (await f.a.patch(url, { expectedUpdatedAt: current.updatedAt, plannedStart: '2026-12-02' }))
+        .status,
+    ).toBe(422);
+    expect(
+      (
+        await f.a.patch(url, {
+          expectedUpdatedAt: current.updatedAt,
+          plannedStart: '2026-11-05',
+          typeId: nextType!.id,
+        })
+      ).status,
+    ).toBe(200);
+    expect(await (await f.a.get(url)).json()).toMatchObject({
+      plannedStart: '2026-11-05',
+      type: { id: nextType!.id },
+    });
+  });
+
+  it('hanya satu penulisan bersamaan dapat menggunakan versi WO yang sama', async () => {
+    const f = await fixture();
+    const url = `/api/work-orders/${f.woId}`;
+    const { updatedAt } = await (await f.a.get(url)).json();
+    const results = await Promise.all([
+      f.a.patch(url, { expectedUpdatedAt: updatedAt, detail: 'Simpanan pertama' }),
+      f.a.patch(url, { expectedUpdatedAt: updatedAt, detail: 'Simpanan kedua' }),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+  });
+
   it('progres Logbook opsional disimpan atomik, idempoten, tercatat dalam S-Curve dan status catatan terpisah', async () => {
     const f = await fixture();
     const before = await (await f.a.get(`/api/work-orders/${f.woId}`)).json();

@@ -3,6 +3,8 @@
     LOGBOOK_CATEGORY_LABEL,
     MATERIAL_STATUS_LABEL,
     WO_STATUS_LABEL,
+    WO_CATEGORIES,
+    WO_CATEGORY_META,
     woReasonRequired,
     type LogbookCategory,
     type WoStatus,
@@ -30,7 +32,8 @@
   import { onLive } from '$lib/live.svelte';
   import { session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
-  import type { LogEntry, Member } from '$lib/types';
+  import type { LogEntry, Member, WoType } from '$lib/types';
+  import { woEditFields, woEditPatch } from '$lib/wo-edit';
 
   /** Detail WO + Logbook (Figma D/07a, M/07; FR-031–034, FR-040–042, FR-050–051). */
   let { data } = $props();
@@ -86,9 +89,17 @@
   let replyResolve = $state(true);
   let editOpen = $state(false);
   let members = $state<Member[]>([]);
+  let editTypes = $state<WoType[]>([]);
+  let editError = $state('');
+  let editLoading = $state(false);
+  let editLoadFailed = $state(false);
+  let editBaseline: ReturnType<typeof snapshotEdit> | undefined;
+  let originalType = $state<WoType | null>(null);
   let edit = $state({
     title: '',
+    typeId: '',
     assigneeId: '',
+    plannedStart: '',
     deadline: '',
     urgent: false,
     weight: '',
@@ -210,35 +221,53 @@
     }
   }
 
-  async function openEdit() {
-    edit = {
-      title: wo.title,
-      assigneeId: wo.assignee.id,
-      deadline: wo.deadline,
-      urgent: wo.urgent,
-      weight: wo.weight == null ? '' : String(wo.weight),
-      detail: wo.detail,
-    };
+  function snapshotEdit() {
+    return { id: wo.id, updatedAt: wo.updatedAt, can: wo.can, fields: woEditFields(wo) };
+  }
+
+  function openEdit() {
+    editBaseline = snapshotEdit();
+    edit = { ...editBaseline.fields };
+    originalType = wo.type;
+    members = [];
+    editTypes = [];
+    editLoading = false;
+    editError = '';
+    editLoadFailed = false;
     editOpen = true;
-    if (!members.length) {
-      members = (await api<{ members: Member[] }>(`/api/projects/${wo.project.id}`)).members;
+    if (wo.can.editCore) void loadEditOptions();
+  }
+
+  async function loadEditOptions() {
+    const snapshot = editBaseline;
+    editLoading = true;
+    editLoadFailed = false;
+    try {
+      const [project, directory] = await Promise.all([
+        api<{ members: Member[] }>(`/api/projects/${wo.project.id}`),
+        api<{ woTypes: WoType[] }>('/api/directory/wo-types'),
+      ]);
+      if (snapshot !== editBaseline) return;
+      members = project.members;
+      editTypes = directory.woTypes.filter((type) => type.active !== false);
+    } catch {
+      if (snapshot === editBaseline) editLoadFailed = true;
+    } finally {
+      if (snapshot === editBaseline) editLoading = false;
     }
   }
 
   async function saveEdit(e?: SubmitEvent) {
     e?.preventDefault();
+    if (!editBaseline || editBaseline.id !== wo.id || busy) return;
+    editError = '';
+    if (editBaseline.can.editCore && edit.deadline < edit.plannedStart) {
+      editError = 'Deadline tidak boleh sebelum tanggal mulai.';
+      return;
+    }
     busy = true;
     try {
-      const patch: Record<string, unknown> = { expectedUpdatedAt: wo.updatedAt };
-      if (edit.title.trim() !== wo.title) patch.title = edit.title.trim();
-      if (edit.assigneeId !== wo.assignee.id) patch.assigneeId = edit.assigneeId;
-      if (edit.deadline !== wo.deadline) patch.deadline = edit.deadline;
-      if (edit.urgent !== wo.urgent) patch.urgent = edit.urgent;
-      if (edit.detail !== wo.detail) patch.detail = edit.detail;
-      if (wo.can.editWeight) {
-        const w = edit.weight.trim() === '' ? null : Number(edit.weight.replace(',', '.'));
-        if (w !== wo.weight) patch.weight = w;
-      }
+      const patch = woEditPatch(editBaseline, edit);
       if (Object.keys(patch).length > 1) {
         await api(`/api/work-orders/${wo.id}`, { method: 'PATCH', body: patch });
         toast('WO diperbarui');
@@ -246,7 +275,13 @@
       editOpen = false;
       await invalidate('app:wo');
     } catch (err) {
-      fail(err);
+      if (err instanceof ApiError && err.code === 'STALE') {
+        editError =
+          'WO sudah diubah orang lain. Salin isian Anda, lalu buka kembali Edit WO untuk meninjau versi terbaru.';
+        void invalidate('app:wo');
+      } else {
+        editError = err instanceof ApiError ? err.message : 'Perubahan gagal disimpan.';
+      }
     } finally {
       busy = false;
     }
@@ -466,7 +501,7 @@
         ></span
       >
     </div>
-    {#if wo.can.editDetail}
+    {#if wo.can.editCore || wo.can.editDetail || wo.can.editWeight}
       <Button icon="edit" onclick={openEdit}>Edit WO</Button>
     {/if}
 
@@ -588,17 +623,49 @@
 
 <Modal bind:open={editOpen} title={`Edit ${wo.numberLabel}`} width={560}>
   <form id="edit-f" class="grid" onsubmit={saveEdit}>
-    <Input label="Nama WO" bind:value={edit.title} required maxlength={160} />
-    {#if wo.can.editAny}
+    {#if editError}<p role="alert">{editError}</p>{/if}
+    {#if wo.can.editCore}
+      <Input label="Nama WO" bind:value={edit.title} required maxlength={160} />
+      {#if editLoadFailed}
+        <p role="status">
+          Pilihan Jenis dan PIC gagal dimuat. <Button onclick={loadEditOptions}>Coba lagi</Button>
+        </p>
+      {/if}
+      <Field label="Jenis" id="e-type">
+        <select
+          id="e-type"
+          bind:value={edit.typeId}
+          disabled={editLoading || editLoadFailed}
+          required
+        >
+          {#if originalType && !editTypes.some((type) => type.id === originalType?.id)}
+            <option value={originalType.id}>{originalType.name}</option>
+          {/if}
+          {#each WO_CATEGORIES as category (category)}
+            {@const types = editTypes.filter((type) => type.category === category)}
+            {#if types.length}
+              <optgroup label={WO_CATEGORY_META[category].label}>
+                {#each types as type (type.id)}<option value={type.id}>{type.name}</option>{/each}
+              </optgroup>
+            {/if}
+          {/each}
+        </select>
+      </Field>
       <Field label="PIC" id="e-pic">
-        <select id="e-pic" bind:value={edit.assigneeId}>
+        <select
+          id="e-pic"
+          bind:value={edit.assigneeId}
+          disabled={editLoading || editLoadFailed}
+          required
+        >
           {#each members as m (m.userId)}<option value={m.userId}
               >{m.fullName} · {m.projectRole}</option
             >{/each}
           {#if !members.length}<option value={wo.assignee.id}>{wo.assignee.fullName}</option>{/if}
         </select>
       </Field>
-      <Input label="Deadline" type="date" bind:value={edit.deadline} />
+      <Input label="Mulai (rencana)" type="date" bind:value={edit.plannedStart} required />
+      <Input label="Deadline" type="date" bind:value={edit.deadline} required />
       <Toggle bind:checked={edit.urgent} label="Urgent" showLabel />
     {/if}
     {#if wo.can.editWeight}
@@ -609,9 +676,11 @@
         hint="Kosongkan = otomatis"
       />
     {/if}
-    <Field label="Detail" id="e-det">
-      <textarea id="e-det" bind:value={edit.detail} rows="4" maxlength="5000"></textarea>
-    </Field>
+    {#if wo.can.editDetail}
+      <Field label="Detail" id="e-det">
+        <textarea id="e-det" bind:value={edit.detail} rows="4" maxlength="5000"></textarea>
+      </Field>
+    {/if}
   </form>
   {#snippet footer()}
     <Button onclick={() => (editOpen = false)}>Batal</Button>

@@ -127,7 +127,7 @@ export interface WoDetail extends WoRow {
   attachments: FileItem[];
   help: { id: string; requestedBy: string; createdAt: string } | null;
   can: {
-    editAny: boolean;
+    editCore: boolean;
     editDetail: boolean;
     editWeight: boolean;
     delete: boolean;
