@@ -6,6 +6,7 @@ import { isSecureCookie } from './env';
 import { HttpError } from './lib/http';
 import { clientIp } from './lib/ip';
 import { adminSettingsRoutes } from './routes/admin-settings';
+import { activityRoutes } from './routes/activity';
 import { adminUserRoutes } from './routes/admin-users';
 import { userAccessRoutes } from './routes/user-access';
 import { preferenceRoutes } from './routes/preferences';
@@ -96,6 +97,7 @@ export function createApp(deps: Deps) {
   app.route('/api/projects', projectWoRoutes);
   app.route('/api/work-orders', woRoutes);
   app.route('/api/home', homeRoutes);
+  app.route('/api/activity', activityRoutes);
   app.route('/api/notifications', notificationRoutes);
   app.route('/api/stream', streamRoutes);
   app.route('/files', fileRoutes);

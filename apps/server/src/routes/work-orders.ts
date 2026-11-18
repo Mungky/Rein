@@ -19,7 +19,7 @@ import {
   woUpdateSchema,
   type WoStatus,
 } from '@rein/shared';
-import { and, asc, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { audit } from '../audit';
@@ -44,6 +44,7 @@ import {
   type LogbookEntry,
 } from '../db/schema';
 import { forbidden, HttpError, notFound, readJson, validate } from '../lib/http';
+import { activityPeriod, activityPeriodQuery } from '../lib/activity-period';
 import { userAgent } from '../lib/ip';
 import { publishToUsers } from '../notify/bus';
 import { longDate, shortDate } from '../lib/format';
@@ -773,7 +774,19 @@ export const woRoutes = new Hono<AppEnv>()
     const a = authOf(c);
     const { db } = c.var.deps;
     const { wo } = await loadWo(db, a, c.req.param('id'));
-    const before = c.req.query('before');
+    const query = validate(
+      activityPeriodQuery.extend({
+        view: z.literal('notes').optional(),
+        entry: z.uuid().optional(),
+        before: z.string().optional(),
+      }),
+      c.req.query(),
+    );
+    const notes = query.view === 'notes';
+    const cursor = query.before
+      ? validate(notes ? z.uuid() : z.iso.datetime({ offset: true }), query.before)
+      : undefined;
+    const range = notes && !query.entry ? activityPeriod(query) : null;
     const rows = await db
       .select({
         id: logbookEntries.id,
@@ -798,10 +811,20 @@ export const woRoutes = new Hono<AppEnv>()
         and(
           eq(logbookEntries.woId, wo.id),
           isNull(logbookEntries.deletedAt),
-          before ? lt(logbookEntries.createdAt, new Date(before)) : undefined,
+          notes ? inArray(logbookEntries.kind, ['note', 'comment']) : undefined,
+          range ? gte(logbookEntries.createdAt, range.from) : undefined,
+          range ? lt(logbookEntries.createdAt, range.to) : undefined,
+          notes && query.entry ? eq(logbookEntries.id, query.entry) : undefined,
+          cursor && notes
+            ? sql`(${logbookEntries.createdAt}, ${logbookEntries.id}) < (
+              select created_at, id from logbook_entries where id = ${cursor} and wo_id = ${wo.id}
+            )`
+            : cursor
+              ? lt(logbookEntries.createdAt, new Date(cursor))
+              : undefined,
         ),
       )
-      .orderBy(desc(logbookEntries.createdAt))
+      .orderBy(desc(logbookEntries.createdAt), desc(logbookEntries.id))
       .limit(21);
     const page = rows.slice(0, 20);
     const ids = page.map((r) => r.id);
@@ -835,7 +858,12 @@ export const woRoutes = new Hono<AppEnv>()
         },
         attachments: files.filter((f) => f.ownerId === e.id).map(({ ownerId: _o, ...f }) => f),
       })),
-      nextCursor: rows.length > 20 ? page[page.length - 1]!.createdAt.toISOString() : null,
+      nextCursor:
+        rows.length > 20
+          ? notes
+            ? page[page.length - 1]!.id
+            : page[page.length - 1]!.createdAt.toISOString()
+          : null,
     });
   })
 

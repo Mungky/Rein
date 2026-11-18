@@ -121,7 +121,10 @@ worker.addEventListener('fetch', (event) => {
     );
   } else if (
     thumbRoute.test(url.pathname) ||
-    (!url.search && (url.pathname === '/api/home' || woRoute.test(url.pathname)))
+    (!url.search && (url.pathname === '/api/home' || woRoute.test(url.pathname))) ||
+    (woRoute.test(url.pathname) &&
+      url.pathname.endsWith('/logbook') &&
+      url.search === '?view=notes')
   ) {
     event.respondWith(privateResponse(event, url, thumbRoute.test(url.pathname)));
   }

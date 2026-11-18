@@ -19,6 +19,7 @@
   import Field from './Field.svelte';
   import Input from './Input.svelte';
   import Modal from './Modal.svelte';
+  import RowActions from './RowActions.svelte';
 
   let { projectId, workOrders }: { projectId: string; workOrders: WoRow[] } = $props();
   let rows = $state<MaterialRow[]>([]);
@@ -187,7 +188,7 @@
     try {
       const result = await api<{ inserted: number; skipped: number }>(
         `/api/projects/${projectId}/materials`,
-        { body: { rows: importRows } },
+        { body: { rows: importRows, source: 'excel' } },
       );
       previewOpen = false;
       toast(
@@ -316,7 +317,7 @@
             ><th>Part No.</th><th>Description</th><th>Material</th><th>Size or Specification</th><th
               >QTY</th
             ><th>Status</th><th>Diterima</th><th>Note</th><th>Work Order</th>{#if canManage}<th
-                >Aksi</th
+                class="action-column">Aksi</th
               >{/if}</tr
           ></thead
         >
@@ -341,33 +342,40 @@
                         >{/if}</span
                     >{:else}—{/each}
                 </div></td
-              >{#if canManage}<td
+              >{#if canManage}<td class="action-column"
                   ><div class="row-actions">
-                    <Button size="sm" variant="ghost" disabled={busy} onclick={() => edit(row)}
-                      >Ubah</Button
+                    <span class="desktop-edit"
+                      ><Button size="sm" variant="ghost" disabled={busy} onclick={() => edit(row)}
+                        >Ubah</Button
+                      ></span
                     >
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy ||
-                        !workOrders.some((w) => !row.woLinks.some((l) => l.woId === w.id))}
-                      onclick={() => {
-                        attachMaterial = row;
-                        attachWoId = '';
-                        actionError = '';
-                        attachOpen = true;
-                      }}>Attach</Button
-                    >
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onclick={() => {
-                        deleteMaterial = row;
-                        actionError = '';
-                        deleteOpen = true;
-                      }}>Hapus</Button
-                    >
+                    <RowActions
+                      label={`Aksi material ${row.partNo || row.description}`}
+                      actions={[
+                        { label: 'Ubah', run: () => edit(row), disabled: busy, mobileOnly: true },
+                        {
+                          label: 'Hubungkan ke WO',
+                          disabled:
+                            busy ||
+                            !workOrders.some((w) => !row.woLinks.some((l) => l.woId === w.id)),
+                          run: () => {
+                            attachMaterial = row;
+                            attachWoId = '';
+                            actionError = '';
+                            attachOpen = true;
+                          },
+                        },
+                        {
+                          label: 'Hapus',
+                          disabled: busy,
+                          run: () => {
+                            deleteMaterial = row;
+                            actionError = '';
+                            deleteOpen = true;
+                          },
+                        },
+                      ]}
+                    />
                   </div></td
                 >{/if}</tr
             >{:else}<tr><td colspan={canManage ? 10 : 9}>Tidak ada material yang cocok.</td></tr
@@ -388,7 +396,7 @@
     ><Button variant="primary" loading={busy} onclick={remove}>Hapus material</Button>{/snippet}
 </Modal>
 
-<Modal bind:open={attachOpen} title="Attach material ke Work Order" width={500}>
+<Modal bind:open={attachOpen} title="Hubungkan material ke WO" width={500}>
   <p>{attachMaterial?.partNo} · {attachMaterial?.description}</p>
   <Field label="Work Order" id="material-wo"
     ><select id="material-wo" bind:value={attachWoId} disabled={busy}
@@ -407,7 +415,7 @@
       loading={busy}
       onclick={() => {
         if (attachMaterial) void link(attachMaterial, attachWoId, true);
-      }}>Attach</Button
+      }}>Hubungkan</Button
     >{/snippet}
 </Modal>
 
@@ -508,7 +516,9 @@
     gap: 4px;
   }
   .row-actions {
-    min-width: 155px;
+    min-width: 86px;
+    align-items: center;
+    flex-wrap: nowrap;
   }
   .wo-links span {
     display: inline-flex;
@@ -637,6 +647,27 @@
     }
     .actions {
       width: 100%;
+    }
+    .desktop-edit {
+      display: none;
+    }
+    .row-actions {
+      min-width: 44px;
+    }
+    .action-column {
+      position: sticky;
+      right: 0;
+      min-width: 44px;
+      padding: 4px;
+      border-left: 1px solid var(--color-border-default);
+    }
+    td.action-column {
+      background: var(--color-bg-surface);
+    }
+    th.action-column {
+      z-index: 1;
+      text-align: center;
+      vertical-align: middle;
     }
     input,
     select {

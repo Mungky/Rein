@@ -143,7 +143,7 @@ export const materialRoutes = new Hono<AppEnv>()
           action: 'material.created',
           entityType: 'project',
           entityId: acc.project.id,
-          diff: { materialIds: added.map((r) => r.id) },
+          diff: { materialIds: added.map((r) => r.id), source: body.source },
           ip: c.var.ip,
           userAgent: userAgent(c),
         });

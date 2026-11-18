@@ -173,7 +173,10 @@ export function materialIdentity(
 }
 export const materialCreateSchema = z.object({ clientId: z.uuid(), ...materialFields }).strict();
 export const materialImportSchema = z
-  .object({ rows: z.array(materialCreateSchema).min(1).max(500) })
+  .object({
+    rows: z.array(materialCreateSchema).min(1).max(500),
+    source: z.literal('excel').optional(),
+  })
   .strict()
   .refine(
     (v) => new Set(v.rows.map((r) => r.clientId)).size === v.rows.length,

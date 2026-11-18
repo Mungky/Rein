@@ -5,16 +5,19 @@
     WO_STATUS_LABEL,
     WO_CATEGORIES,
     WO_CATEGORY_META,
+    todayWib,
     woReasonRequired,
     type LogbookCategory,
     type WoStatus,
   } from '@rein/shared';
-  import { onDestroy } from 'svelte';
-  import { invalidate } from '$app/navigation';
+  import { onDestroy, onMount } from 'svelte';
+  import { SvelteURLSearchParams } from 'svelte/reactivity';
+  import { goto, invalidate } from '$app/navigation';
   import { resolve } from '$app/paths';
   import { api, ApiError } from '$lib/api';
   import { fileUrl, isPreviewImage, thumbUrl, type Staged } from '$lib/attach';
   import { setChrome } from '$lib/chrome.svelte';
+  import ActivityList from '$lib/components/ActivityList.svelte';
   import Avatar from '$lib/components/Avatar.svelte';
   import Button from '$lib/components/Button.svelte';
   import Checkbox from '$lib/components/Checkbox.svelte';
@@ -23,13 +26,14 @@
   import Icon from '$lib/components/Icon.svelte';
   import Input from '$lib/components/Input.svelte';
   import Modal from '$lib/components/Modal.svelte';
+  import PeriodPicker, { type Period } from '$lib/components/PeriodPicker.svelte';
   import PhotoLightbox from '$lib/components/PhotoLightbox.svelte';
   import Progress from '$lib/components/Progress.svelte';
   import StagedFiles from '$lib/components/StagedFiles.svelte';
   import StatusIcon from '$lib/components/StatusIcon.svelte';
   import Tag from '$lib/components/Tag.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
-  import { formatBytes, shortDate, stamp } from '$lib/format';
+  import { dayLabel, formatBytes, shortDate, stamp } from '$lib/format';
   import { onLive } from '$lib/live.svelte';
   import { logbookText } from '$lib/logbook-text';
   import { enqueueOffline, submitWoStatus } from '$lib/offline';
@@ -44,9 +48,44 @@
   const currentWoId = $derived(data.wo.id);
   let entries = $state<LogEntry[]>([]);
   let cursor = $state<string | null>(null);
+  let moreBusy = $state(false);
+  let moreError = $state('');
+  let columns = $state<1 | 2>(1);
+  const woUrl = $derived(resolve('/(app)/w/[id]', { id: wo.id }));
+  const filterQuery = $derived.by(() => {
+    const query = new SvelteURLSearchParams(data.logQuery);
+    query.delete('view');
+    query.delete('entry');
+    return query.toString();
+  });
+  onMount(() => {
+    try {
+      if (localStorage.getItem('rein:logbook-columns') === '2') columns = 2;
+    } catch {
+      /* Storage opsional. */
+    }
+  });
+
+  function setColumns(value: 1 | 2) {
+    columns = value;
+    try {
+      localStorage.setItem('rein:logbook-columns', String(value));
+    } catch {
+      /* Storage opsional. */
+    }
+  }
+
+  function setLogPeriod(period: Period, date: string) {
+    const query = new SvelteURLSearchParams();
+    if (period !== 'week') query.set('period', period);
+    if (date !== todayWib()) query.set('date', date);
+    // eslint-disable-next-line svelte/no-navigation-without-resolve -- woUrl berasal dari resolve()
+    void goto(query.size ? `${woUrl}?${query}` : woUrl, { noScroll: true, keepFocus: true });
+  }
   $effect(() => {
     entries = data.log.entries;
     cursor = data.log.nextCursor;
+    moreError = '';
   });
 
   $effect(() => {
@@ -375,12 +414,25 @@
   }
 
   async function more() {
-    if (!cursor) return;
-    const r = await api<{ entries: LogEntry[]; nextCursor: string | null }>(
-      `/api/work-orders/${wo.id}/logbook?before=${encodeURIComponent(cursor)}`,
-    );
-    entries = [...entries, ...r.entries];
-    cursor = r.nextCursor;
+    if (!cursor || moreBusy) return;
+    const firstPage = data.log;
+    const query = new SvelteURLSearchParams(data.logQuery);
+    query.set('before', cursor);
+    moreBusy = true;
+    moreError = '';
+    try {
+      const result = await api<{ entries: LogEntry[]; nextCursor: string | null }>(
+        `/api/work-orders/${wo.id}/logbook?${query}`,
+      );
+      if (data.log !== firstPage) return;
+      entries = [...entries, ...result.entries];
+      cursor = result.nextCursor;
+    } catch (err) {
+      if (data.log === firstPage)
+        moreError = err instanceof ApiError ? err.message : 'Catatan lama gagal dimuat.';
+    } finally {
+      moreBusy = false;
+    }
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -389,14 +441,6 @@
       void post();
     }
   }
-
-  const PILL: Record<LogEntry['kind'], string | null> = {
-    note: null,
-    comment: 'Komentar',
-    system: 'Sistem',
-    help_request: 'Butuh bantuan',
-    help_resolved: 'Bantuan selesai',
-  };
 </script>
 
 <svelte:head><title>{wo.numberLabel} — {wo.title} · REIN</title></svelte:head>
@@ -449,111 +493,149 @@
         {/each}
       </ul>
     {/if}
-    <div class="sep"></div>
-    <div class="sec-h">
-      <Icon name="logbook" />
-      <h2>Logbook</h2>
-      <span class="faint">{entries.length}{cursor ? '+' : ''} entri</span>
-    </div>
-
-    {#if wo.can.writeLogbook}
-      <div class="composer">
-        <textarea
-          aria-label="Tulis logbook"
-          placeholder="Tulis pekerjaan, kendala, atau catatan… (Ctrl+Enter untuk kirim)"
-          bind:value={body}
-          readonly={posting || !!retryPost}
-          {onkeydown}
-          rows="3"></textarea>
-        <div class="row">
-          {#if wo.can.upload}<StagedFiles
-              {userId}
-              bind:items={files}
-              compact
-              camera
-              offline
-              disabled={posting || !!retryPost}
-            />{/if}
-          <span class="sp"></span>
-          <Button
-            variant="primary"
-            onclick={post}
-            loading={posting}
-            disabled={uploading ||
-              (!body.trim() && !hasFiles && progress === undefined) ||
-              (progress !== undefined &&
-                (!Number.isInteger(progress) || progress < 0 || progress > 100))}
-            >{retryPost ? 'Coba lagi' : 'Kirim'}</Button
-          >
-        </div>
-        <div class="log-options">
-          <label
-            >Status catatan (opsional)
-            <select bind:value={category} disabled={posting || !!retryPost}>
-              <option value="">Tanpa status</option>
-              {#each Object.entries(LOGBOOK_CATEGORY_LABEL) as [value, label] (value)}<option
-                  {value}>{label}</option
-                >{/each}
-            </select>
-          </label>
-          {#if wo.can.updateProgress}
-            <label
-              >Progres WO % (opsional)
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                placeholder={`Saat ini ${wo.progress}%`}
-                bind:value={progress}
-                disabled={posting || !!retryPost}
-              />
-            </label>
-          {/if}
-        </div>
-        {#if postError}<p role="alert">{postError}</p>{/if}
-      </div>
-    {/if}
-
-    <div class="entries">
-      {#each entries as e (e.id)}
-        <div class="entry" class:sys={e.kind === 'system'}>
-          <Avatar name={e.author.fullName} src={e.author.avatarUrl} size={24} />
-          <div class="eb">
-            <div class="eh">
-              <b>{e.author.fullName}</b>
-              <span class="faint">· {stamp(e.createdAt)}</span>
-              {#if e.editedAt}<span class="faint" title={stamp(e.editedAt)}>· diedit</span>{/if}
-              {#if PILL[e.kind]}<span class="pill {e.kind}">{PILL[e.kind]}</span>{/if}
-              {#if e.category}<span class="pill">{LOGBOOK_CATEGORY_LABEL[e.category]}</span>{/if}
-              {#if e.progressTo != null}
-                <span class="pill">Progres {e.progressFrom ?? 0}% → {e.progressTo}%</span>
-              {/if}
-              {#if e.statusTo && e.statusTo !== e.statusFrom}
-                <span class="pill">→ {WO_STATUS_LABEL[e.statusTo]}</span>
+    <nav class="wo-tabs" aria-label="Catatan dan aktivitas WO">
+      <!-- eslint-disable svelte/no-navigation-without-resolve -- woUrl berasal dari resolve() -->
+      <a
+        href={filterQuery ? `${woUrl}?${filterQuery}` : woUrl}
+        aria-current={data.tab === 'logbook' ? 'page' : undefined}
+      >
+        <Icon name="logbook" size={16} />Logbook
+      </a>
+      <a
+        href={`${woUrl}?tab=activity${filterQuery ? `&${filterQuery}` : ''}`}
+        aria-current={data.tab === 'activity' ? 'page' : undefined}
+      >
+        <Icon name="clock" size={16} />Aktivitas
+      </a>
+      <!-- eslint-enable svelte/no-navigation-without-resolve -->
+    </nav>
+    {#if data.tab === 'activity'}
+      <ActivityList woId={wo.id} />
+    {:else}
+      <div class="log-layout">
+        {#if wo.can.writeLogbook && !data.entry}
+          <div class="composer">
+            <textarea
+              aria-label="Tulis logbook"
+              placeholder="Tulis pekerjaan, kendala, atau catatan… (Ctrl+Enter untuk kirim)"
+              bind:value={body}
+              readonly={posting || !!retryPost}
+              {onkeydown}
+              rows="3"></textarea>
+            <div class="row">
+              {#if wo.can.upload}<StagedFiles
+                  {userId}
+                  bind:items={files}
+                  compact
+                  camera
+                  offline
+                  disabled={posting || !!retryPost}
+                />{/if}
+              <span class="sp"></span>
+              <Button
+                variant="primary"
+                onclick={post}
+                loading={posting}
+                disabled={uploading ||
+                  (!body.trim() && !hasFiles && progress === undefined) ||
+                  (progress !== undefined &&
+                    (!Number.isInteger(progress) || progress < 0 || progress > 100))}
+                >{retryPost ? 'Coba lagi' : 'Kirim'}</Button
+              >
+            </div>
+            <div class="log-options">
+              <label
+                >Status catatan (opsional)
+                <select bind:value={category} disabled={posting || !!retryPost}>
+                  <option value="">Tanpa status</option>
+                  {#each Object.entries(LOGBOOK_CATEGORY_LABEL) as [value, label] (value)}<option
+                      {value}>{label}</option
+                    >{/each}
+                </select>
+              </label>
+              {#if wo.can.updateProgress}
+                <label
+                  >Progres WO % (opsional)
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    placeholder={`Saat ini ${wo.progress}%`}
+                    bind:value={progress}
+                    disabled={posting || !!retryPost}
+                  />
+                </label>
               {/if}
             </div>
-            {#if e.body}<p>
-                {#each logbookText(e.body) as part, i (i)}{#if part.href}<a
-                      href={part.href}
-                      target="_blank"
-                      rel="external noopener noreferrer">{part.text}</a
-                    >{:else}{part.text}{/if}{/each}
-              </p>{/if}
-            {#if e.attachments.length}{@render thumbs(e.attachments)}{/if}
-            {#if e.canEdit}
-              <div class="entry-actions">
-                <Button variant="ghost" onclick={() => openEntry(e, false)}>Edit catatan</Button>
-                <Button variant="ghost" onclick={() => openEntry(e, true)}>Hapus catatan</Button>
-              </div>
-            {/if}
+            {#if postError}<p role="alert">{postError}</p>{/if}
           </div>
+        {/if}
+
+        <div class="log-tools">
+          {#if data.entry}
+            <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- woUrl berasal dari resolve() -->
+            <a href={woUrl}>Lihat Logbook minggu ini</a>
+          {:else}
+            <PeriodPicker period={data.period} date={data.date} onchange={setLogPeriod} />
+            <div class="log-columns" role="group" aria-label="Tata letak Logbook">
+              <Button aria-pressed={columns === 1} onclick={() => setColumns(1)}>1 kolom</Button>
+              <Button aria-pressed={columns === 2} onclick={() => setColumns(2)}>2 kolom</Button>
+            </div>
+          {/if}
         </div>
-      {:else}
-        <span class="faint">Belum ada entri. Tulis catatan pertama di atas.</span>
-      {/each}
-      {#if cursor}<Button variant="ghost" onclick={more}>Muat lebih lama</Button>{/if}
-    </div>
+        <div class="entries" class:two={columns === 2 && !data.entry}>
+          {#each entries as e, i (e.id)}
+            {@const day = todayWib(new Date(e.createdAt))}
+            {#if i === 0 || todayWib(new Date(entries[i - 1]!.createdAt)) !== day}
+              <h2 class="log-day">{dayLabel(e.createdAt)}</h2>
+            {/if}
+            <article class="entry">
+              <Avatar name={e.author.fullName} src={e.author.avatarUrl} size={24} />
+              <div class="eb">
+                <div class="eh">
+                  <b>{e.author.fullName}</b>
+                  <span class="faint">· {stamp(e.createdAt)}</span>
+                  {#if e.editedAt}<span class="faint" title={stamp(e.editedAt)}>· diedit</span>{/if}
+                  {#if e.kind === 'comment'}<span class="pill">Komentar</span>{/if}
+                  {#if e.category}<span class="pill">{LOGBOOK_CATEGORY_LABEL[e.category]}</span
+                    >{/if}
+                  {#if e.progressTo != null}
+                    <span class="pill">Progres {e.progressFrom ?? 0}% → {e.progressTo}%</span>
+                  {/if}
+                </div>
+                {#if e.body}<p>
+                    {#each logbookText(e.body) as part, i (i)}{#if part.href}<a
+                          href={part.href}
+                          target="_blank"
+                          rel="external noopener noreferrer">{part.text}</a
+                        >{:else}{part.text}{/if}{/each}
+                  </p>{/if}
+                {#if e.attachments.length}{@render thumbs(e.attachments)}{/if}
+                {#if e.canEdit}
+                  <div class="entry-actions">
+                    <Button variant="ghost" onclick={() => openEntry(e, false)}>Edit catatan</Button
+                    >
+                    <Button variant="ghost" onclick={() => openEntry(e, true)}>Hapus catatan</Button
+                    >
+                  </div>
+                {/if}
+              </div>
+            </article>
+          {:else}
+            <p class="muted">
+              {data.entry
+                ? 'Catatan ini sudah tidak tersedia.'
+                : 'Belum ada catatan pada periode ini.'}
+            </p>
+          {/each}
+        </div>
+        {#if moreError}<p role="alert">{moreError}</p>{/if}
+        {#if cursor}<Button variant="ghost" loading={moreBusy} onclick={more}
+            >Muat lebih lama</Button
+          >{/if}
+      </div>
+    {/if}
   </div>
 
   <aside class="props">
@@ -990,13 +1072,70 @@
     flex: 1;
   }
   .entries {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .wo-tabs {
     display: flex;
-    flex-direction: column;
-    gap: 20px;
+    gap: 16px;
+    margin: 20px 0 14px;
+    border-bottom: 1px solid var(--color-border-default);
+  }
+  .wo-tabs a {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 4px;
+    border-bottom: 2px solid transparent;
+    color: var(--color-text-secondary);
+    text-decoration: none;
+  }
+  .wo-tabs a[aria-current] {
+    border-color: var(--color-accent-default);
+    color: var(--color-text-primary);
+  }
+  .log-layout {
+    container: logbook / inline-size;
+  }
+  .log-tools {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 12px 0;
+  }
+  .log-columns {
+    display: none;
+    gap: 4px;
+  }
+  .log-columns :global([aria-pressed='true']) {
+    border-color: var(--color-accent-default);
+    background: var(--color-accent-subtle);
+  }
+  .log-day {
+    grid-column: 1 / -1;
+    margin: 6px 0 0;
+    font: var(--text-label);
+    color: var(--color-text-secondary);
+  }
+  @container logbook (min-width: 620px) {
+    .log-columns {
+      display: flex;
+    }
+    .entries.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
   .entry {
     display: flex;
     gap: 10px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
     animation: fade 0.25s var(--ease);
   }
   .eb {
@@ -1021,9 +1160,6 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .entry.sys p {
-    color: var(--color-text-secondary);
-  }
   .pill {
     display: inline-flex;
     align-items: center;
@@ -1033,14 +1169,6 @@
     background: var(--color-bg-subtle);
     color: var(--color-text-secondary);
     font: var(--text-micro);
-  }
-  .pill.help_request {
-    background: var(--color-danger-subtle);
-    color: var(--color-danger-default);
-  }
-  .pill.help_resolved {
-    background: var(--color-success-subtle);
-    color: var(--color-success-default);
   }
   .thumbs {
     display: flex;

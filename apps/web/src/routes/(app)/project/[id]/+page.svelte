@@ -17,6 +17,7 @@
   import { onDestroy } from 'svelte';
   import { goto, invalidate } from '$app/navigation';
   import { resolve } from '$app/paths';
+  import { page } from '$app/state';
   import { api, ApiError } from '$lib/api';
   import { fileUrl, isPreviewImage, thumbUrl, uploadPreparedFile } from '$lib/attach';
   import PhotoLightbox from '$lib/components/PhotoLightbox.svelte';
@@ -155,6 +156,10 @@
     }
   });
   let tab = $state<'worklist' | 'members' | 'files' | 'materials'>('worklist');
+  $effect(() => {
+    const source = page.url.searchParams.get('tab');
+    tab = source === 'files' || source === 'materials' ? source : 'worklist';
+  });
   let cat = $state<WoCategory | ''>('');
   let onlyUrgent = $state(false);
   let pic = $state('');
@@ -347,13 +352,18 @@
     ownerId: string;
     woLinks: Array<{ woId: string; numberLabel: string; title: string }>;
   }
-  let pfiles = $state<PFile[] | null>(null);
+  let filesResult = $state<{ projectId: string; attachments: PFile[] } | null>(null);
+  const pfiles = $derived(filesResult?.projectId === p.id ? filesResult.attachments : null);
+  let pfilesError = $state('');
   async function loadFiles() {
+    const projectId = p.id;
+    pfilesError = '';
     try {
-      pfiles = (await api<{ attachments: PFile[] }>(`/api/projects/${p.id}/attachments`))
-        .attachments;
+      const result = await api<{ attachments: PFile[] }>(`/api/projects/${projectId}/attachments`);
+      if (p.id === projectId) filesResult = { projectId, attachments: result.attachments };
     } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Dokumen gagal dimuat', { tone: 'danger' });
+      if (p.id === projectId)
+        pfilesError = err instanceof ApiError ? err.message : 'Dokumen gagal dimuat';
     }
   }
   $effect(() => {
@@ -660,7 +670,7 @@
     </ul>
   </div>
 {:else}
-  <div class="pane">
+  <div class="pane documents">
     {#if p.can.upload}
       <div class="up">
         <input
@@ -681,75 +691,87 @@
           >{/if}
       </div>
     {/if}
-    <ul class="list">
-      {#each pfiles ?? [] as f (f.id)}
-        <li>
-          {#if thumbUrl(f, data.actor.userId)}<img
-              class="fi"
-              src={thumbUrl(f, data.actor.userId)}
-              alt=""
-              loading="lazy"
-            />{:else}
-            <span class="fi"><Icon name="file" /></span>
-          {/if}
-          {#snippet fileLabel()}
-            <b>{f.fileName}</b>
-            <small>
-              {f.ownerType === 'wo'
-                ? 'Work Order'
-                : f.ownerType === 'logbook'
-                  ? 'Logbook'
-                  : 'Project'} · {f.uploadedBy} · {shortDate(f.createdAt)} ·
-              {formatBytes(f.sizeBytes)}
-            </small>
-          {/snippet}
-          {#if isPreviewImage(f.mime)}
-            <button
-              class="f"
-              type="button"
-              onclick={() => {
-                documentPhoto = f;
-                photoOpen = true;
-              }}>{@render fileLabel()}</button
-            >
-          {:else}
-            <a
-              class="f"
-              href={fileUrl(f.id)}
-              target={f.mime === 'application/pdf' ? '_blank' : undefined}
-              rel="external noopener"
-            >
-              {@render fileLabel()}
-            </a>
-          {/if}
-          <div class="doc-links">
-            {#if f.ownerType === 'wo'}{@const source = rows.find(
-                (r) => r.id === f.ownerId,
-              )}{#if source}<a href={resolve('/(app)/w/[id]', { id: source.id })}
-                  >{source.numberLabel}</a
-                >{/if}{/if}
-            {#each f.woLinks as link (link.woId)}<a
-                href={resolve('/(app)/w/[id]', { id: link.woId })}
-                title={link.title}>{link.numberLabel}</a
-              >{/each}
-            {#if p.can.upload}<Button
-                size="sm"
-                variant="ghost"
-                icon="paperclip"
-                disabled={!rows.length}
-                onclick={() => {
-                  attachFile = f;
-                  attachWoId = '';
-                  attachError = '';
-                  attachOpen = true;
-                }}>Attach</Button
-              >{/if}
-          </div>
-        </li>
-      {:else}
-        <li class="faint">Belum ada dokumen project, WO, atau Logbook.</li>
-      {/each}
-    </ul>
+    {#if pfilesError}
+      <div class="up">
+        <p role="alert">{pfilesError}</p>
+        <Button onclick={loadFiles}>Coba lagi</Button>
+      </div>
+    {:else if !pfiles}
+      <p role="status" class="faint">Memuat dokumen…</p>
+    {:else if !pfiles.length}
+      <p class="faint">Belum ada dokumen project, WO, atau Logbook.</p>
+    {:else}
+      <ul class="document-grid">
+        {#each pfiles as f (f.id)}
+          {@const source = rows.find((row) => f.ownerType === 'wo' && row.id === f.ownerId)}
+          <li>
+            <div class="document-heading">
+              {#if thumbUrl(f, data.actor.userId)}<img
+                  class="fi"
+                  src={thumbUrl(f, data.actor.userId)}
+                  alt=""
+                  loading="lazy"
+                />{:else}
+                <span class="fi"><Icon name="file" /></span>
+              {/if}
+              {#snippet fileLabel()}
+                <b title={f.fileName}>{f.fileName}</b>
+                <small>
+                  {f.ownerType === 'wo'
+                    ? 'Work Order'
+                    : f.ownerType === 'logbook'
+                      ? 'Logbook'
+                      : 'Project'} · {formatBytes(f.sizeBytes)} · {shortDate(f.createdAt)} · {f.uploadedBy}
+                </small>
+              {/snippet}
+              {#if isPreviewImage(f.mime)}
+                <button
+                  class="document-name"
+                  type="button"
+                  onclick={() => {
+                    documentPhoto = f;
+                    photoOpen = true;
+                  }}>{@render fileLabel()}</button
+                >
+              {:else}
+                <a
+                  class="document-name"
+                  href={fileUrl(f.id)}
+                  target={f.mime === 'application/pdf' ? '_blank' : undefined}
+                  rel="external noopener"
+                >
+                  {@render fileLabel()}
+                </a>
+              {/if}
+            </div>
+            {#if source || f.woLinks.length || (p.can.upload && rows.length)}
+              <div class="document-footer">
+                <div class="doc-links">
+                  {#if source}<a href={resolve('/(app)/w/[id]', { id: source.id })}
+                      >{source.numberLabel}</a
+                    >{/if}
+                  {#each f.woLinks.filter((link) => link.woId !== source?.id) as link (link.woId)}<a
+                      href={resolve('/(app)/w/[id]', { id: link.woId })}
+                      title={link.title}>{link.numberLabel}</a
+                    >{/each}
+                </div>
+                {#if p.can.upload && rows.length}<Button
+                    size="sm"
+                    variant="ghost"
+                    icon="paperclip"
+                    onclick={() => {
+                      attachFile = f;
+                      attachWoId = '';
+                      attachError = '';
+                      attachOpen = true;
+                    }}>Hubungkan ke WO</Button
+                  >{/if}
+              </div>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </div>
 {/if}
 
@@ -813,7 +835,7 @@
   oncreated={(id) => goto(resolve('/(app)/w/[id]', { id }))}
 />
 
-<Modal bind:open={attachOpen} title="Attach dokumen ke Work Order" width={500}>
+<Modal bind:open={attachOpen} title="Hubungkan dokumen ke WO" width={500}>
   <p>{attachFile?.fileName}</p>
   <Field label="Work Order" id="attach-wo"
     ><select id="attach-wo" bind:value={attachWoId} disabled={attaching}>
@@ -827,7 +849,7 @@
   {#if attachError}<p role="alert">{attachError}</p>{/if}
   {#snippet footer()}<Button disabled={attaching} onclick={() => (attachOpen = false)}>Batal</Button
     ><Button variant="primary" loading={attaching} disabled={!attachWoId} onclick={linkDocument}
-      >Attach</Button
+      >Hubungkan</Button
     >{/snippet}
 </Modal>
 
@@ -908,13 +930,64 @@
 <style>
   .doc-links {
     display: flex;
-    gap: 8px;
+    gap: 4px;
     align-items: center;
     flex-wrap: wrap;
   }
   .doc-links a {
     color: var(--color-text-secondary);
     font: var(--text-caption);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+  }
+  .pane.documents {
+    max-width: none;
+  }
+  .document-grid {
+    display: grid;
+    align-items: start;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    gap: 8px;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .document-grid li {
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-surface);
+  }
+  .document-heading,
+  .document-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .document-name {
+    display: grid;
+    flex: 1;
+    gap: 2px;
+    min-width: 0;
+    text-align: start;
+    color: var(--color-text-primary);
+    padding: 2px 0;
+  }
+  .document-name b {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .document-name small {
+    color: var(--color-text-secondary);
+    font: var(--text-caption);
+  }
+  .document-footer {
+    justify-content: space-between;
+    flex-wrap: wrap;
+    margin-top: 4px;
   }
   .layout.wide {
     grid-template-columns: minmax(0, 1fr);
@@ -1132,9 +1205,6 @@
   .list .f small {
     color: var(--color-text-secondary);
   }
-  .doc-links {
-    max-width: 180px;
-  }
   .fi {
     flex-shrink: 0;
     object-fit: cover;
@@ -1188,10 +1258,6 @@
     }
     .list .f {
       flex-basis: calc(100% - 40px);
-    }
-    .doc-links {
-      margin-left: 40px;
-      max-width: 100%;
     }
     .ph,
     .tabs {
