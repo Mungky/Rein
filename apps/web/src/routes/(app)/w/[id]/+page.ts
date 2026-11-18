@@ -2,13 +2,16 @@ import { error } from '@sveltejs/kit';
 import { api, ApiError } from '$lib/api';
 import type { LogEntry, WoDetail } from '$lib/types';
 
-export async function load({ params, depends }) {
+export async function load({ params, depends, parent }) {
   depends('app:wo');
   try {
+    const { me } = await parent();
+    const account = me.user.id;
     const [wo, log] = await Promise.all([
-      api<WoDetail>(`/api/work-orders/${params.id}`),
+      api<WoDetail>(`/api/work-orders/${params.id}`, { account }),
       api<{ entries: LogEntry[]; nextCursor: string | null }>(
         `/api/work-orders/${params.id}/logbook`,
+        { account },
       ),
     ]);
     return { wo, log };

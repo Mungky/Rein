@@ -1,5 +1,10 @@
 import type { PermissionKey, PermissionMap } from '@rein/shared';
 import { api, ApiError } from './api';
+import { privateCache, saveBinding } from './offline-store';
+
+export const ACTIVE_ACCOUNT_KEY = 'rein:active-account';
+const OFFLINE_SESSION = 'rein:offline-session';
+const PENDING_LOGOUT = 'rein:pending-logout';
 
 export interface Me {
   user: {
@@ -20,18 +25,96 @@ export interface Me {
   /** FR-004 AC3: sesi terkunci → layar PIN. */
   locked: boolean;
   sessionStartedAt: string;
+  sessionExpiresAt: string;
 }
 
 export const session = $state<{ me: Me | null; loaded: boolean }>({ me: null, loaded: false });
+
+async function rememberOfflineSession(me: Me) {
+  try {
+    const previous = localStorage.getItem(ACTIVE_ACCOUNT_KEY);
+    localStorage.setItem(ACTIVE_ACCOUNT_KEY, me.user.id);
+    const until = Math.min(
+      Date.parse(me.sessionExpiresAt),
+      Date.now() + (me.device?.hasPin ? 15 * 60_000 : 12 * 3_600_000),
+    );
+    const eligible = me.device?.trusted && !me.locked && !me.onboardingNext && me.verification.any;
+    if (eligible) sessionStorage.setItem(OFFLINE_SESSION, JSON.stringify({ until, me }));
+    else sessionStorage.removeItem(OFFLINE_SESSION);
+    await saveBinding(eligible ? { account: me.user.id, until } : null);
+    if (previous && (previous !== me.user.id || !eligible))
+      await caches.delete(privateCache(previous));
+  } catch {
+    // Mode privat bisa menolak IndexedDB atau penyimpanan sesi.
+  }
+}
+
+function offlineSession(): Me | null {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(OFFLINE_SESSION) ?? 'null') as {
+      until: number;
+      me: Me;
+    } | null;
+    if (
+      stored &&
+      stored.until > Date.now() &&
+      stored.me.user.id === localStorage.getItem(ACTIVE_ACCOUNT_KEY) &&
+      (!stored.me.device?.hasPin || sessionStorage.getItem('rein:unlocked') === '1')
+    )
+      return stored.me;
+  } catch {
+    // Sesi offline hanya tersedia di penyimpanan browser yang aktif.
+  }
+  return null;
+}
+
+export async function forgetOfflineSession() {
+  try {
+    const previous = localStorage.getItem(ACTIVE_ACCOUNT_KEY);
+    localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+    sessionStorage.removeItem(OFFLINE_SESSION);
+    sessionStorage.removeItem('rein:unlocked');
+    await saveBinding(null);
+    if (previous) await caches.delete(privateCache(previous));
+  } catch {
+    // Logout tetap berlaku bila penyimpanan browser tidak tersedia.
+  }
+}
+
+export async function flushPendingLogout() {
+  let pending: string | null;
+  try {
+    pending = localStorage.getItem(PENDING_LOGOUT);
+  } catch {
+    return;
+  }
+  if (!pending) return;
+  if (!navigator.onLine) throw new ApiError(0, 'NETWORK', 'Perangkat sedang offline.');
+  try {
+    await api('/api/auth/logout', { body: {}, account: pending });
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.status !== 401) throw err;
+  }
+  if (localStorage.getItem(PENDING_LOGOUT) === pending) localStorage.removeItem(PENDING_LOGOUT);
+}
 
 /** Muat user saat ini (cache sampai `invalidateMe`). null = belum login. */
 export async function loadMe(force = false): Promise<Me | null> {
   if (session.loaded && !force) return session.me;
   try {
-    session.me = await api<Me>('/api/auth/me');
+    await flushPendingLogout();
+    const me = await api<Me>('/api/auth/me');
+    await rememberOfflineSession(me);
+    session.me = me;
   } catch (e) {
-    if (!(e instanceof ApiError) || e.status !== 401) throw e;
-    session.me = null;
+    if (!(e instanceof ApiError)) throw e;
+    if (e.status === 0) {
+      session.me = offlineSession();
+      if (!session.me) throw e;
+    } else if (e.status === 401) {
+      await forgetOfflineSession();
+      session.me = null;
+    } else throw e;
   }
   session.loaded = true;
   return session.me;
@@ -53,7 +136,15 @@ export function hasGlobal(permission: PermissionKey): boolean {
 }
 
 export async function logout(): Promise<void> {
-  await api('/api/auth/logout', { method: 'POST', body: {} }).catch(() => {});
+  const account = session.me?.user.id;
+  try {
+    if (account) localStorage.setItem(PENDING_LOGOUT, account);
+  } catch {
+    /* Penyimpanan mungkin diblokir. */
+  }
+  await forgetOfflineSession();
+  if (account) await flushPendingLogout().catch(() => {});
+  else if (navigator.onLine) await api('/api/auth/logout', { body: {} }).catch(() => {});
   session.me = null;
   session.loaded = true;
 }

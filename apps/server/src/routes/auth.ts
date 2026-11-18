@@ -81,6 +81,7 @@ export function meResponse(a: AuthContext) {
     locked: a.locked,
     /** Klien mengunci saat aplikasi dibuka ulang (sessionStorage kosong) — kecuali sesi baru. */
     sessionStartedAt: a.session.createdAt,
+    sessionExpiresAt: a.session.expiresAt,
   };
 }
 

@@ -44,6 +44,10 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
       }
     }
   }
+  const account =
+    c.req.header('x-rein-account') ??
+    (c.req.path.startsWith('/files/') ? c.req.query('reinAccount') : undefined);
+  if (account && c.var.auth?.user.id !== account) throw unauthorized();
   await next();
 };
 

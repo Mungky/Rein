@@ -6,6 +6,7 @@
   import { api } from '$lib/api';
   import { chrome, resetChrome } from '$lib/chrome.svelte';
   import AppShell from '$lib/components/AppShell.svelte';
+  import OfflineBanner from '$lib/components/OfflineBanner.svelte';
   import { live, setUnread, startLive, stopLive } from '$lib/live.svelte';
   import type { NavItem } from '$lib/nav';
   import { hasGlobal, logout, session } from '$lib/session.svelte';
@@ -87,6 +88,7 @@
     unread={live.unread}
     {onlogout}
   >
+    <OfflineBanner account={session.me.user.id} />
     {@render children()}
   </AppShell>
 {/if}

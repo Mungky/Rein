@@ -678,6 +678,12 @@ export const woRoutes = new Hono<AppEnv>()
     const { db } = c.var.deps;
     const { wo, acc } = await loadWo(db, a, c.req.param('id'));
     const body = await readJson(c, woStatusSchema);
+    const requestHash = hashOf({
+      kind: 'status',
+      woId: wo.id,
+      status: body.status,
+      reason: body.reason,
+    });
     const notified = await db.transaction(async (tx) => {
       const [current] = await tx
         .select()
@@ -685,12 +691,35 @@ export const woRoutes = new Hono<AppEnv>()
         .where(eq(workOrders.id, wo.id))
         .for('update');
       if (!current || current.deletedAt) throw notFound('WO tidak ditemukan');
+      if (body.clientId) {
+        const repeated = await tx.query.logbookEntries.findFirst({
+          where: and(
+            eq(logbookEntries.authorId, a.user.id),
+            eq(logbookEntries.clientUuid, body.clientId),
+          ),
+        });
+        if (repeated) {
+          if (repeated.requestHash !== requestHash || repeated.woId !== wo.id)
+            throw new HttpError(409, 'CLIENT_ID_REUSED', 'ID perubahan sudah dipakai');
+          return [];
+        }
+      }
       if (
         body.expectedUpdatedAt &&
         new Date(body.expectedUpdatedAt).getTime() !== current.updatedAt.getTime()
       )
         throw stale();
-      return changeStatus(tx, a, current, acc, body.status, body.reason, c.var.ip, userAgent(c));
+      return changeStatus(
+        tx,
+        a,
+        current,
+        acc,
+        body.status,
+        body.reason,
+        c.var.ip,
+        userAgent(c),
+        body.clientId ? { clientUuid: body.clientId, requestHash } : undefined,
+      );
     });
     publishToUsers(notified, { type: 'notification' });
     publishToUsers(await watchersOf(db, wo.id), {
@@ -1190,6 +1219,7 @@ async function changeStatus(
   reason: string | undefined,
   ip: string,
   ua: string | null,
+  offlineReceipt?: { clientUuid: string; requestHash: string },
 ): Promise<string[]> {
   const check = checkWoTransition(wo.status, to, actorOf(a, wo, acc), {
     hasLogbook: await hasLogbook(tx, wo.id),
@@ -1223,6 +1253,7 @@ async function changeStatus(
   await systemEntry(tx, wo.id, a.user.id, verb, {
     statusFrom: wo.status,
     statusTo: to,
+    ...offlineReceipt,
   });
   await audit(tx, {
     actorId: a.user.id,

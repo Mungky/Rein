@@ -41,6 +41,7 @@
   import WoSCurve from '$lib/components/WoSCurve.svelte';
   import { formatBytes, shortDate } from '$lib/format';
   import { onLive } from '$lib/live.svelte';
+  import { submitWoStatus } from '$lib/offline';
   import { toast } from '$lib/toast.svelte';
   import type { WoRow } from '$lib/types';
   import { sortWorklist, type WorklistGroup, type WorklistSort } from '$lib/worklist';
@@ -224,11 +225,13 @@
   }
   async function move(w: WoRow, to: WoStatus, why?: string) {
     const before = rows;
-    rows = rows.map((x) => (x.id === w.id ? { ...x, status: to } : x));
+    if (navigator.onLine) rows = rows.map((x) => (x.id === w.id ? { ...x, status: to } : x));
     try {
-      await api(`/api/work-orders/${w.id}/status`, {
-        body: { status: to, expectedUpdatedAt: w.updatedAt, ...(why ? { reason: why } : {}) },
-      });
+      if (await submitWoStatus(w, data.actor.userId, to, why)) {
+        rows = before;
+        toast('Perubahan status disimpan di antrean');
+        return;
+      }
       toast(`${w.numberLabel} → ${WO_STATUS_LABEL[to]}`);
       await invalidate('app:project');
     } catch (err) {
@@ -681,9 +684,9 @@
     <ul class="list">
       {#each pfiles ?? [] as f (f.id)}
         <li>
-          {#if thumbUrl(f)}<img
+          {#if thumbUrl(f, data.actor.userId)}<img
               class="fi"
-              src={thumbUrl(f)}
+              src={thumbUrl(f, data.actor.userId)}
               alt=""
               loading="lazy"
             />{:else}

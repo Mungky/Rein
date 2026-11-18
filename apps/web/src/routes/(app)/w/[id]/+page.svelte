@@ -32,6 +32,7 @@
   import { formatBytes, shortDate, stamp } from '$lib/format';
   import { onLive } from '$lib/live.svelte';
   import { logbookText } from '$lib/logbook-text';
+  import { enqueueOffline, submitWoStatus } from '$lib/offline';
   import { session } from '$lib/session.svelte';
   import { toast } from '$lib/toast.svelte';
   import type { FileItem, LogEntry, Member, WoType } from '$lib/types';
@@ -120,8 +121,8 @@
       entryBusy = false;
     }
   }
-  const uploading = $derived(files.some((f) => !f.id && !f.error));
-  const hasFiles = $derived(files.some((f) => f.id));
+  const uploading = $derived(files.some((f) => !f.id && !f.error && !f.offlineFile));
+  const hasFiles = $derived(files.some((f) => f.id || f.offlineFile));
 
   $effect(() => {
     void currentWoId;
@@ -190,7 +191,22 @@
     postError = '';
     posting = true;
     try {
-      await api(`/api/work-orders/${woId}/logbook`, { body: payload });
+      const pendingFiles = files.flatMap((f) => (f.offlineFile ? [f.offlineFile] : []));
+      if (!navigator.onLine || pendingFiles.length) {
+        const createdAt = new Date().toISOString();
+        await enqueueOffline({
+          account: userId,
+          id: payload.clientId,
+          woId,
+          title: wo.title,
+          createdAt,
+          state: 'pending',
+          kind: 'logbook',
+          files: pendingFiles,
+          body: retryPost ? payload : { ...payload, clientCreatedAt: createdAt },
+        });
+        toast('Logbook disimpan di antrean');
+      } else await api(`/api/work-orders/${woId}/logbook`, { account: userId, body: payload });
       if (wo.id !== woId) return;
       retryPost = null;
       body = '';
@@ -200,11 +216,12 @@
       category = '';
       postId = crypto.randomUUID();
       reasonFor = null;
-      void invalidate('app:wo');
+      if (navigator.onLine) void invalidate('app:wo');
     } catch (err) {
       if (wo.id !== woId) return;
       if (err instanceof ApiError) {
-        retryPost = err.status === 0 || err.status >= 500 ? payload : null;
+        if (!err.code.startsWith('OFFLINE_'))
+          retryPost = err.status === 0 || err.status >= 500 ? payload : null;
         postError = err.message;
         if (err.code === 'STALE') void invalidate('app:wo');
       } else postError = 'Pengiriman Logbook gagal. Coba lagi.';
@@ -221,9 +238,10 @@
       return;
     }
     try {
-      await api(`/api/work-orders/${wo.id}/status`, {
-        body: { status: to, expectedUpdatedAt: wo.updatedAt, ...(why ? { reason: why } : {}) },
-      });
+      if (await submitWoStatus(wo, userId, to, why)) {
+        toast('Perubahan status disimpan di antrean');
+        return;
+      }
       toast(`Status: ${WO_STATUS_LABEL[to]}`);
       await invalidate('app:wo');
     } catch (err) {
@@ -453,6 +471,7 @@
               bind:items={files}
               compact
               camera
+              offline
               disabled={posting || !!retryPost}
             />{/if}
           <span class="sp"></span>
@@ -634,8 +653,8 @@
 </div>
 
 {#snippet thumbContent(f: FileItem)}
-  {#if thumbUrl(f)}
-    <img src={thumbUrl(f)} alt="" width="112" height="84" loading="lazy" decoding="async" />
+  {#if thumbUrl(f, userId)}
+    <img src={thumbUrl(f, userId)} alt="" width="112" height="84" loading="lazy" decoding="async" />
   {:else}
     <span class="im"><Icon name={isPreviewImage(f.mime) ? 'camera' : 'file'} size={20} /></span>
   {/if}

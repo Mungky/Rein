@@ -71,6 +71,39 @@ async function file(
   return id;
 }
 describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
+  it('menolak sinkronisasi lintas akun dan mencatat perubahan status idempoten satu kali', async () => {
+    const f = await fixture();
+    const path = `/api/work-orders/${f.woId}`;
+    const wo = await (await f.a.get(path)).json();
+    const payload = {
+      clientId: randomUUID(),
+      expectedUpdatedAt: wo.updatedAt,
+      status: 'in_progress',
+    };
+    const foreign = await f.a.post(`${path}/status`, payload, { 'x-rein-account': randomUUID() });
+    expect(foreign.status).toBe(401);
+    const own = { 'x-rein-account': f.manager.id };
+    expect((await f.a.post(`${path}/status`, payload, own)).status).toBe(200);
+    expect((await f.a.post(`${path}/status`, payload, own)).status).toBe(200);
+    const conflict = await f.a.post(
+      `${path}/status`,
+      {
+        ...payload,
+        clientId: randomUUID(),
+        status: 'review',
+      },
+      own,
+    );
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ error: { code: 'STALE' } });
+    const history = await testDb()
+      .select()
+      .from(logbookEntries)
+      .where(eq(logbookEntries.clientUuid, payload.clientId));
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ kind: 'system', statusTo: 'in_progress' });
+    expect((await (await f.a.get(path)).json()).status).toBe('in_progress');
+  });
   it('mengedit dan menyembunyikan catatan sendiri tanpa menghapus riwayat progres', async () => {
     const f = await fixture();
     const outsider = await createUser();

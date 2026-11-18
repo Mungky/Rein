@@ -112,6 +112,7 @@ export const woUpdateSchema = z.object({
 });
 
 export const woStatusSchema = z.object({
+  clientId: z.uuid().optional(),
   expectedUpdatedAt: z.iso.datetime({ offset: true }).optional(),
   status: z.enum(WO_STATUSES),
   reason: z.string().trim().max(500).optional(),
