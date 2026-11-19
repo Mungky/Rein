@@ -73,6 +73,7 @@ export function materialPreview(sheets: MaterialSheet[]): MaterialPreview {
         else if (['notavailable', 'tidaktersedia'].includes(rawStatus))
           materialStatus = 'not_available';
         else if (rawStatus === 'po') materialStatus = 'po';
+        else if (rawStatus === 'needreview') materialStatus = 'need_review';
         else {
           result.errors.push(`${at}: status material tidak dikenal (${text(r[status])})`);
           continue;
@@ -82,7 +83,7 @@ export function materialPreview(sheets: MaterialSheet[]): MaterialPreview {
       else if (text(r[po])) materialStatus = 'po';
       let receivedAt: string | null = null;
       const rawReceived = r[received];
-      if (rawReceived != null && text(rawReceived)) {
+      if (materialStatus === 'po' && rawReceived != null && text(rawReceived)) {
         if (rawReceived instanceof Date && !Number.isNaN(rawReceived.getTime()))
           receivedAt = rawReceived.toISOString().slice(0, 10);
         else {

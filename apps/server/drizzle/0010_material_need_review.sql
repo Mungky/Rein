@@ -1,0 +1,2 @@
+ALTER TABLE "project_materials" DROP CONSTRAINT "project_materials_status_check";--> statement-breakpoint
+ALTER TABLE "project_materials" ADD CONSTRAINT "project_materials_status_check" CHECK ("project_materials"."status" in ('in_stock', 'not_available', 'po', 'need_review'));

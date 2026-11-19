@@ -482,7 +482,7 @@
         {#each wo.materials as material (material.id)}
           <li>
             <div>
-              <b>{material.partNo ? `${material.partNo} · ` : ''}{material.description}</b><small
+              <b>{material.description}</b><small
                 >{material.material} · {material.specification}</small
               >
             </div>

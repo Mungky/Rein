@@ -27,12 +27,13 @@ export const LOGBOOK_CATEGORY_LABEL: Record<LogbookCategory, string> = {
   document: 'Dokumen',
   issue: 'Kendala',
 };
-export const MATERIAL_STATUSES = ['in_stock', 'not_available', 'po'] as const;
+export const MATERIAL_STATUSES = ['in_stock', 'not_available', 'po', 'need_review'] as const;
 export type MaterialStatus = (typeof MATERIAL_STATUSES)[number];
 export const MATERIAL_STATUS_LABEL: Record<MaterialStatus, string> = {
   in_stock: 'In stock',
   not_available: 'Not available',
   po: 'PO',
+  need_review: 'Need review',
 };
 export const WO_STATUS_LABEL: Record<WoStatus, string> = {
   backlog: 'Backlog',

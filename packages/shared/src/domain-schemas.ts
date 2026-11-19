@@ -187,6 +187,10 @@ export const materialUpdateSchema = z
   .object({ ...materialFields, expectedUpdatedAt: z.iso.datetime({ offset: true }) })
   .strict();
 export const materialDeleteSchema = materialUpdateSchema.pick({ expectedUpdatedAt: true });
+export const materialSelectionSchema = z
+  .object({ rows: z.array(materialDeleteSchema.extend({ id: z.uuid().toLowerCase() })).min(1) })
+  .strict()
+  .refine((v) => new Set(v.rows.map((r) => r.id)).size === v.rows.length, 'ID material berulang');
 export const materialLinkSchema = z.object({ woId: z.uuid() }).strict();
 
 export const helpRequestSchema = z.object({

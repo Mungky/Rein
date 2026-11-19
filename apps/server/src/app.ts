@@ -71,7 +71,8 @@ export function createApp(deps: Deps) {
   app.use('/api/*', (c, next) =>
     c.req.path.startsWith('/api/attachments')
       ? next()
-      : /^\/api\/projects\/[^/]+\/materials$/.test(c.req.path) && c.req.method === 'POST'
+      : (/^\/api\/projects\/[^/]+\/materials$/.test(c.req.path) && c.req.method === 'POST') ||
+          /^\/api\/projects\/[^/]+\/materials\/selection$/.test(c.req.path)
         ? bodyLimit({
             maxSize: 2 * 1024 * 1024,
             onError: () => {

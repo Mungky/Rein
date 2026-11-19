@@ -457,7 +457,10 @@ export const woRoutes = new Hono<AppEnv>()
       )
       .orderBy(asc(projectMaterials.partNo), asc(projectMaterials.id));
     return c.json({
-      materials: materials.map((r) => r.material),
+      materials: materials.map(({ material }) => ({
+        ...material,
+        receivedAt: material.status === 'po' ? material.receivedAt : null,
+      })),
       ...shapeRow(row!, todayWib()),
       detail: wo.detailJson?.text ?? '',
       canceledReason: wo.canceledReason,

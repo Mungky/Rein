@@ -1,7 +1,6 @@
 <script lang="ts">
   import {
     MATERIAL_STATUS_LABEL,
-    materialFieldsSchema,
     materialIdentity,
     type MaterialInput,
     type MaterialStatus,
@@ -10,16 +9,14 @@
   import { SvelteSet } from 'svelte/reactivity';
   import { resolve } from '$app/paths';
   import { api, ApiError } from '$lib/api';
-  import { shortDate } from '$lib/format';
   import { materialPreview, type MaterialPreview } from '$lib/material-import';
   import { onLive } from '$lib/live.svelte';
   import { toast } from '$lib/toast.svelte';
   import type { MaterialRow, WoRow } from '$lib/types';
   import Button from './Button.svelte';
   import Field from './Field.svelte';
-  import Input from './Input.svelte';
   import Modal from './Modal.svelte';
-  import RowActions from './RowActions.svelte';
+  import ProjectMaterialRow from './ProjectMaterialRow.svelte';
 
   let { projectId, workOrders }: { projectId: string; workOrders: WoRow[] } = $props();
   let rows = $state<MaterialRow[]>([]);
@@ -29,29 +26,13 @@
   let busy = $state(false);
   let query = $state('');
   let filter = $state<MaterialStatus | ''>('');
-  let formOpen = $state(false);
-  let selected = $state<MaterialRow | null>(null);
-  const empty = () => ({
-    partNo: '',
-    description: '',
-    material: '',
-    specification: '',
-    quantity: '',
-    unit: '',
-    status: 'not_available' as MaterialStatus,
-    receivedAt: '',
-    note: '',
-  });
-  let form = $state(empty());
-  let formId = crypto.randomUUID();
-  let error = $state('');
   let picker = $state<HTMLInputElement>();
   let preview = $state<MaterialPreview | null>(null);
   let previewOpen = $state(false);
   let importRows = $state<Array<MaterialInput & { clientId: string }>>([]);
   let sourceName = $state('');
   let deleteOpen = $state(false);
-  let deleteMaterial = $state<MaterialRow | null>(null);
+  const selected = new SvelteSet<string>();
   let attachOpen = $state(false);
   let attachMaterial = $state<MaterialRow | null>(null);
   let attachWoId = $state('');
@@ -66,101 +47,62 @@
     }
     return duplicates;
   });
+  const endpoint = $derived('/api/projects/' + projectId + '/materials');
+  const selectionEndpoint = $derived(endpoint + '/selection');
   const filtered = $derived(
     rows.filter(
       (r) =>
         (!filter || r.status === filter) &&
-        `${r.partNo} ${r.description} ${r.material} ${r.specification}`
+        (r.description + ' ' + r.material + ' ' + r.specification)
           .toLowerCase()
-          .includes(query.toLowerCase()),
+          .includes(query.trim().toLowerCase()),
     ),
   );
+  const allVisibleSelected = $derived(
+    filtered.length > 0 && filtered.every((r) => selected.has(r.id)),
+  );
+  const someVisibleSelected = $derived(filtered.some((r) => selected.has(r.id)));
 
+  function selectRow(id: string, value: boolean) {
+    if (value) selected.add(id);
+    else selected.delete(id);
+  }
+
+  let request: AbortController | undefined;
   async function load() {
+    request?.abort();
+    const current = new AbortController();
+    request = current;
     try {
-      const result = await api<{ materials: MaterialRow[]; canManage: boolean }>(
-        `/api/projects/${projectId}/materials`,
-      );
-      rows = result.materials.sort((a, b) =>
-        a.partNo.localeCompare(b.partNo, 'id', { numeric: true }),
-      );
+      const result = await api<{ materials: MaterialRow[]; canManage: boolean }>(endpoint, {
+        signal: current.signal,
+      });
+      if (current.signal.aborted) return false;
+      rows = result.materials;
+      const activeIds = new Set(rows.map((row) => row.id));
+      for (const id of selected) if (!activeIds.has(id)) selected.delete(id);
       canManage = result.canManage;
       loadError = '';
+      return true;
     } catch (err) {
-      loadError = err instanceof ApiError ? err.message : 'Material gagal dimuat';
+      if (!current.signal.aborted)
+        loadError = err instanceof ApiError ? err.message : 'Material gagal dimuat';
+      return false;
     } finally {
-      loading = false;
+      if (!current.signal.aborted) loading = false;
     }
   }
   $effect(() => {
-    void projectId;
     void load();
   });
   const off = onLive((e) => {
     if (e.type === 'project' && e.projectId === projectId) void load();
   });
-  onDestroy(off);
-  function edit(row: MaterialRow | null) {
-    selected = row;
-    formId = crypto.randomUUID();
-    error = '';
-    form = row
-      ? {
-          partNo: row.partNo,
-          description: row.description,
-          material: row.material,
-          specification: row.specification,
-          quantity: String(row.quantity),
-          unit: row.unit,
-          status: row.status,
-          receivedAt: row.receivedAt ?? '',
-          note: row.note,
-        }
-      : empty();
-    formOpen = true;
-  }
-  async function save(e: SubmitEvent) {
-    e.preventDefault();
-    if (busy) return;
-    const parsed = materialFieldsSchema.safeParse({
-      ...form,
-      quantity: Number(form.quantity.replace(',', '.')),
-      receivedAt: form.receivedAt || null,
-    });
-    if (!parsed.success) {
-      error = parsed.error.issues.map((i) => i.message).join('. ');
-      return;
-    }
-    busy = true;
-    error = '';
-    try {
-      if (selected)
-        await api(`/api/projects/${projectId}/materials/${selected.id}`, {
-          method: 'PATCH',
-          body: { ...parsed.data, expectedUpdatedAt: selected.updatedAt },
-        });
-      else {
-        const result = await api<{ inserted: number; skipped: number }>(
-          `/api/projects/${projectId}/materials`,
-          {
-            body: { rows: [{ ...parsed.data, clientId: formId }] },
-          },
-        );
-        if (result.skipped) {
-          error =
-            'Material yang sama sudah ada. Ubah item yang ada untuk memperbarui jumlah atau status.';
-          return;
-        }
-      }
-      formOpen = false;
-      toast('Material disimpan');
-      await load();
-    } catch (err) {
-      error = err instanceof ApiError ? err.message : 'Material gagal disimpan';
-    } finally {
-      busy = false;
-    }
-  }
+  onDestroy(() => {
+    request?.abort();
+    off();
+  });
+
   async function read(file: File) {
     if (busy) return;
     if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 10 * 1024 * 1024) {
@@ -201,39 +143,49 @@
       busy = false;
     }
   }
+  type Selection = { id: string; expectedUpdatedAt: string };
   async function remove() {
-    if (!deleteMaterial || busy) return;
-    const row = deleteMaterial;
+    const affected = rows.filter((row) => selected.has(row.id));
+    if (!affected.length || busy) return;
     busy = true;
     actionError = '';
     try {
-      const deleted = await api<{ updatedAt: string }>(
-        `/api/projects/${projectId}/materials/${row.id}`,
-        { method: 'DELETE', body: { expectedUpdatedAt: row.updatedAt } },
+      const deleted = await api<{ rows: Array<{ id: string; updatedAt: string }> }>(
+        selectionEndpoint,
+        {
+          method: 'DELETE',
+          body: {
+            rows: affected.map(({ id, updatedAt }) => ({ id, expectedUpdatedAt: updatedAt })),
+          },
+        },
       );
+      const removedIds = new Set(deleted.rows.map(({ id }) => id));
       deleteOpen = false;
-      toast('Material dihapus', {
+      selected.clear();
+      rows = rows.filter((row) => !removedIds.has(row.id));
+      toast(deleted.rows.length + ' material dihapus', {
         duration: 10000,
         link: {
           label: 'Batalkan',
           onclick: () => {
-            void restore(row.id, deleted.updatedAt);
+            void restore(
+              deleted.rows.map(({ id, updatedAt }) => ({ id, expectedUpdatedAt: updatedAt })),
+            );
           },
         },
       });
       await load();
     } catch (err) {
       actionError = err instanceof ApiError ? err.message : 'Material gagal dihapus';
+      await load();
     } finally {
       busy = false;
     }
   }
-  async function restore(id: string, expectedUpdatedAt: string) {
+  async function restore(entries: Selection[]) {
     try {
-      await api(`/api/projects/${projectId}/materials/${id}/restore`, {
-        body: { expectedUpdatedAt },
-      });
-      toast('Material dipulihkan');
+      await api(selectionEndpoint, { body: { rows: entries } });
+      toast(entries.length + ' material dipulihkan');
       await load();
     } catch (err) {
       toast(err instanceof ApiError ? err.message : 'Material gagal dipulihkan', {
@@ -282,16 +234,13 @@
           }}
         />
         <Button icon="upload" loading={busy} onclick={() => picker?.click()}>Impor Excel</Button>
-        <Button icon="plus" variant="primary" disabled={busy} onclick={() => edit(null)}
-          >Tambah material</Button
-        >
       </div>{/if}
   </div>
   <div class="filters">
     <input
       type="search"
       aria-label="Cari material"
-      placeholder="Cari Part No., description, material…"
+      placeholder="Cari material…"
       bind:value={query}
     />
     <select aria-label="Filter status material" bind:value={filter}
@@ -301,103 +250,160 @@
         >{/each}</select
     >
   </div>
-  {#if loadError}<p role="alert">{loadError}</p>
-    <Button onclick={load}>Coba lagi</Button>
-  {:else if loading}<p class="muted">Memuat material…</p>
-  {:else if !rows.length}<div class="empty">
-      <h3>Belum ada material</h3>
-      <p>Tambahkan manual atau impor material list dari Excel.</p>
-    </div>
-  {:else}
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard access to horizontal scrolling.) -->
-    <div class="table-scroll" tabindex="0" role="region" aria-label="Daftar material">
-      <table>
-        <thead
-          ><tr
-            ><th>Part No.</th><th>Description</th><th>Material</th><th>Size or Specification</th><th
-              >QTY</th
-            ><th>Status</th><th>Diterima</th><th>Note</th><th>Work Order</th>{#if canManage}<th
-                class="action-column">Aksi</th
-              >{/if}</tr
-          ></thead
+  {#if canManage && rows.length}
+    <div class="selection-bar">
+      <label class="check-all">
+        <input
+          type="checkbox"
+          checked={allVisibleSelected}
+          indeterminate={someVisibleSelected && !allVisibleSelected}
+          disabled={busy || !filtered.length}
+          onchange={(e) => {
+            for (const row of filtered) selectRow(row.id, e.currentTarget.checked);
+          }}
+        />
+        Pilih yang tampil
+      </label>
+      {#if selected.size}
+        <span role="status">{selected.size} dipilih</span>
+        <Button size="sm" variant="ghost" disabled={busy} onclick={() => selected.clear()}
+          >Batal pilih</Button
         >
-        <tbody
-          >{#each filtered as row (row.id)}<tr
-              ><td>{row.partNo || '—'}</td><td>{row.description}</td><td>{row.material || '—'}</td
-              ><td>{row.specification || '—'}</td><td class="qty"
-                >{row.quantity.toLocaleString('id-ID')} {row.unit}</td
-              ><td><span class="badge">{MATERIAL_STATUS_LABEL[row.status]}</span></td><td
-                >{row.receivedAt ? shortDate(row.receivedAt) : '—'}</td
-              ><td>{row.note || '—'}</td><td
-                ><div class="wo-links">
-                  {#each row.woLinks as linked (linked.woId)}<span
-                      ><a href={resolve('/(app)/w/[id]', { id: linked.woId })} title={linked.title}
+        <Button
+          size="sm"
+          icon="trash"
+          disabled={busy}
+          onclick={() => {
+            actionError = '';
+            deleteOpen = true;
+          }}>Hapus pilihan</Button
+        >
+      {/if}
+    </div>
+  {/if}
+  {#if loadError}
+    <p role="alert">{loadError}</p>
+    <Button onclick={load}>Coba lagi</Button>
+  {/if}
+  {#if loading && !loadError}
+    <p class="muted" role="status">Memuat material…</p>
+  {:else if !loading}
+    {#if !rows.length && !canManage && !loadError}<p class="muted">Belum ada material.</p>{/if}
+    {#if canManage || rows.length}
+      <!-- svelte-ignore a11y_no_redundant_roles (Safari needs the table role when displayed as a grid.) -->
+      <table class="material-list" role="table" aria-label="Daftar material">
+        <!-- svelte-ignore a11y_no_redundant_roles (Preserve the table hierarchy on mobile.) -->
+        <thead role="rowgroup">
+          <!-- svelte-ignore a11y_no_redundant_roles (Preserve the table hierarchy on mobile.) -->
+          <tr role="row">
+            {#if canManage}<th
+                class="pick-col"
+                scope="col"
+                aria-label="Pilih material"
+                role="columnheader"
+              ></th>{/if}
+            <th class="description-col" scope="col" role="columnheader">Deskripsi</th>
+            <th scope="col" role="columnheader">Material</th>
+            <th scope="col" role="columnheader">Spesifikasi</th>
+            <th class="quantity-col" scope="col" role="columnheader">Jumlah / Satuan</th>
+            <th class="status-col" scope="col" role="columnheader">Status</th>
+            <th class="date-col" scope="col" role="columnheader">Diterima</th>
+            <th scope="col" role="columnheader">Catatan</th>
+            <th class="wo-col" scope="col" role="columnheader">Work Order</th>
+          </tr>
+        </thead>
+        <!-- svelte-ignore a11y_no_redundant_roles (Safari needs the rowgroup role when displayed as a grid.) -->
+        <tbody role="rowgroup">
+          {#if canManage}
+            <ProjectMaterialRow
+              {endpoint}
+              editable
+              {busy}
+              oncreated={() => {
+                toast('Material ditambahkan');
+                void load();
+              }}
+            />
+          {/if}
+          {#each filtered as row (row.id)}
+            <ProjectMaterialRow
+              {row}
+              {endpoint}
+              editable={canManage}
+              {busy}
+              checked={selected.has(row.id)}
+              onselect={(value) => selectRow(row.id, value)}
+              onreload={load}
+              onupdated={(updated) => {
+                rows = rows.map((item) =>
+                  item.id === updated.id && item.updatedAt <= updated.updatedAt
+                    ? { ...item, ...updated }
+                    : item,
+                );
+                void load();
+              }}
+            >
+              {#snippet links()}
+                <div class="wo-links">
+                  {#each row.woLinks as linked (linked.woId)}
+                    <span>
+                      <a href={resolve('/(app)/w/[id]', { id: linked.woId })} title={linked.title}
                         >{linked.numberLabel}</a
-                      >{#if canManage}<button
+                      >
+                      {#if canManage}
+                        <button
+                          type="button"
                           class="unlink"
-                          aria-label={`Lepas dari ${linked.numberLabel}`}
-                          title={`Lepas dari ${linked.numberLabel}`}
+                          aria-label={'Lepas dari ' + linked.numberLabel}
                           disabled={busy}
                           onclick={() => link(row, linked.woId, false)}>×</button
-                        >{/if}</span
-                    >{:else}—{/each}
-                </div></td
-              >{#if canManage}<td class="action-column"
-                  ><div class="row-actions">
-                    <span class="desktop-edit"
-                      ><Button size="sm" variant="ghost" disabled={busy} onclick={() => edit(row)}
-                        >Ubah</Button
-                      ></span
+                        >
+                      {/if}
+                    </span>
+                  {/each}
+                  {#if canManage && workOrders.some((w) => !row.woLinks.some((l) => l.woId === w.id))}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon="paperclip"
+                      aria-label={'Hubungkan ' + row.description + ' ke WO'}
+                      title="Hubungkan ke WO"
+                      disabled={busy}
+                      onclick={() => {
+                        attachMaterial = row;
+                        attachWoId = '';
+                        actionError = '';
+                        attachOpen = true;
+                      }}><span class="attach-label">Hubungkan ke WO</span></Button
                     >
-                    <RowActions
-                      label={`Aksi material ${row.partNo || row.description}`}
-                      actions={[
-                        { label: 'Ubah', run: () => edit(row), disabled: busy, mobileOnly: true },
-                        {
-                          label: 'Hubungkan ke WO',
-                          disabled:
-                            busy ||
-                            !workOrders.some((w) => !row.woLinks.some((l) => l.woId === w.id)),
-                          run: () => {
-                            attachMaterial = row;
-                            attachWoId = '';
-                            actionError = '';
-                            attachOpen = true;
-                          },
-                        },
-                        {
-                          label: 'Hapus',
-                          disabled: busy,
-                          run: () => {
-                            deleteMaterial = row;
-                            actionError = '';
-                            deleteOpen = true;
-                          },
-                        },
-                      ]}
-                    />
-                  </div></td
-                >{/if}</tr
-            >{:else}<tr><td colspan={canManage ? 10 : 9}>Tidak ada material yang cocok.</td></tr
-            >{/each}</tbody
-        >
+                  {:else if !row.woLinks.length}—{/if}
+                </div>
+              {/snippet}
+            </ProjectMaterialRow>
+          {/each}
+        </tbody>
       </table>
-    </div>
+      {#if rows.length && !filtered.length}<p class="muted">Tidak ada material yang cocok.</p>{/if}
+    {/if}
   {/if}
 </section>
 
 <Modal bind:open={deleteOpen} title="Hapus material?" width={440}>
   <p>
-    <b>{deleteMaterial?.description}</b> akan dihapus dari daftar project dan WO terkait. Anda dapat membatalkannya
-    melalui notifikasi setelah menghapus.
+    {selected.size} material akan dihapus dari daftar project dan WO terkait. Anda dapat membatalkannya
+    lewat pemberitahuan setelah menghapus.
   </p>
-  {#if actionError}<p role="alert" class="error">{actionError}</p>{/if}
-  {#snippet footer()}<Button disabled={busy} onclick={() => (deleteOpen = false)}>Batal</Button
-    ><Button variant="primary" loading={busy} onclick={remove}>Hapus material</Button>{/snippet}
+  {#if actionError}<p role="alert">{actionError}</p>{/if}
+  {#snippet footer()}
+    <Button disabled={busy} onclick={() => (deleteOpen = false)}>Batal</Button>
+    <Button variant="primary" loading={busy} disabled={!selected.size} onclick={remove}
+      >Hapus material</Button
+    >
+  {/snippet}
 </Modal>
 
 <Modal bind:open={attachOpen} title="Hubungkan material ke WO" width={500}>
-  <p>{attachMaterial?.partNo} · {attachMaterial?.description}</p>
+  <p>{attachMaterial?.description}</p>
   <Field label="Work Order" id="material-wo"
     ><select id="material-wo" bind:value={attachWoId} disabled={busy}
       ><option value="">Pilih WO di project ini</option
@@ -419,55 +425,11 @@
     >{/snippet}
 </Modal>
 
-<Modal bind:open={formOpen} title={selected ? 'Ubah material' : 'Tambah material'} width={640}>
-  <form id="material-form" onsubmit={save} class="form">
-    <Input label="Part No." bind:value={form.partNo} maxlength={120} />
-    <Input label="Description" bind:value={form.description} required maxlength={500} />
-    <Input label="Material" bind:value={form.material} maxlength={200} />
-    <Input label="Size or Specification" bind:value={form.specification} maxlength={500} />
-    <div class="columns">
-      <Input
-        label="QTY"
-        inputmode="decimal"
-        bind:value={form.quantity}
-        required
-        placeholder="Contoh: 4"
-      /><Input
-        label="Satuan"
-        bind:value={form.unit}
-        required
-        maxlength={30}
-        placeholder="Pcs, Btg, Lbr…"
-      />
-    </div>
-    <div class="columns">
-      <Field label="Status" id="material-status"
-        ><select id="material-status" bind:value={form.status}
-          >{#each Object.entries(MATERIAL_STATUS_LABEL) as [value, label] (value)}<option {value}
-              >{label}</option
-            >{/each}</select
-        ></Field
-      >
-      <Input label="Tanggal diterima (opsional)" type="date" bind:value={form.receivedAt} />
-    </div>
-    <Field label="Note (opsional)" id="material-note"
-      ><textarea id="material-note" rows="3" maxlength="2000" bind:value={form.note}
-      ></textarea></Field
-    >
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
-  </form>
-  {#snippet footer()}<Button disabled={busy} onclick={() => (formOpen = false)}>Batal</Button
-    ><Button variant="primary" type="submit" form="material-form" loading={busy}>Simpan</Button
-    >{/snippet}
-</Modal>
-
 <Modal bind:open={previewOpen} title="Pratinjau impor material" width={1000}>
   {#if preview}
     <p>{sourceName} · {preview.rows.length} material · {preview.sheets.join(', ')}</p>
     <p class="muted">
       {importRows.length - importDuplicates} material baru · {importDuplicates} duplikat akan dilewati.
-      Duplikat diperiksa dari Part No., Description, Material, Spesifikasi, dan Satuan; jumlah/status
-      tidak membuat item baru.
     </p>
     {#if preview.errors.length}<div class="error" role="alert">
         <b>Perbaiki file sebelum mengimpor:</b>
@@ -480,17 +442,17 @@
       <table>
         <thead
           ><tr
-            ><th>Part No.</th><th>Description</th><th>Material</th><th>Size or Specification</th><th
-              >QTY</th
-            ><th>Status</th><th>Diterima</th><th>Note</th></tr
+            ><th>Deskripsi</th><th>Material</th><th>Spesifikasi</th><th>QTY</th><th>Status</th><th
+              >Diterima</th
+            ><th>Catatan</th></tr
           ></thead
         ><tbody
           >{#each preview.rows as row, i (i)}<tr
-              ><td>{row.partNo}</td><td>{row.description}</td><td>{row.material}</td><td
-                >{row.specification}</td
-              ><td class="qty">{row.quantity} {row.unit}</td><td
-                >{MATERIAL_STATUS_LABEL[row.status]}</td
-              ><td>{row.receivedAt || '—'}</td><td>{row.note || '—'}</td></tr
+              ><td>{row.description}</td><td>{row.material}</td><td>{row.specification}</td><td
+                class="qty">{row.quantity} {row.unit}</td
+              ><td>{MATERIAL_STATUS_LABEL[row.status]}</td><td>{row.receivedAt ?? ''}</td><td
+                >{row.note || '—'}</td
+              ></tr
             >{/each}</tbody
         >
       </table>
@@ -509,16 +471,14 @@
 </Modal>
 
 <style>
-  .row-actions,
-  .wo-links {
+  .wo-links,
+  .selection-bar,
+  .toolbar,
+  .filters {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  .row-actions {
-    min-width: 86px;
     align-items: center;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .wo-links span {
     display: inline-flex;
@@ -526,26 +486,21 @@
     white-space: nowrap;
     border: 1px solid var(--color-border-default);
     border-radius: var(--radius-sm);
-    padding-left: 6px;
+    padding: 0 6px;
+  }
+  .wo-links .attach-label {
+    display: none;
   }
   .unlink {
-    padding: 4px 8px;
+    padding: 4px 6px;
     color: var(--color-text-secondary);
   }
   .materials {
-    padding: 24px 32px;
-  }
-  .toolbar,
-  .actions,
-  .filters {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
+    padding: 20px 24px 32px;
   }
   .toolbar {
     justify-content: space-between;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
   }
   h2 {
     font-size: 16px;
@@ -553,36 +508,46 @@
   }
   p {
     margin: 0 0 12px;
-    line-height: 1.6;
   }
   .toolbar p,
-  .muted,
-  .empty {
+  .muted {
     color: var(--color-text-secondary);
+  }
+  .toolbar p {
+    margin: 0;
     font: var(--text-caption);
   }
-  .filters {
-    margin-bottom: 16px;
+  .filters,
+  .selection-bar {
+    margin-bottom: 12px;
+  }
+  .selection-bar {
+    gap: 6px 12px;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+  }
+  .check-all {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    cursor: pointer;
+  }
+  .check-all input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--color-accent-default);
   }
   .filters input {
-    width: min(100%, 360px);
+    flex: 1;
+    max-width: 360px;
+    min-width: 0;
   }
-  input,
-  select,
-  textarea {
+  .filters input,
+  select {
     padding: 8px 10px;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-md);
-  }
-  .form {
-    display: grid;
-    gap: 16px;
-  }
-  .columns {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
   }
   .table-scroll {
     overflow: auto;
@@ -594,83 +559,78 @@
     font-size: 12px;
     text-align: left;
   }
+  th,
+  .table-scroll td {
+    padding: 8px;
+    border-bottom: 1px solid var(--color-border-default);
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
   th {
     color: var(--color-text-secondary);
     font-weight: 500;
     background: var(--color-bg-subtle);
+  }
+  .table-scroll th {
     position: sticky;
     top: 0;
-    white-space: nowrap;
   }
-  td,
-  th {
-    padding: 12px;
-    border-bottom: 1px solid var(--color-border-default);
-    vertical-align: top;
+  .material-list {
+    table-layout: fixed;
+    margin-bottom: 12px;
   }
-  td {
-    min-width: 90px;
-    max-width: 300px;
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
+  .pick-col {
+    width: 32px;
   }
-  .qty {
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
+  .description-col {
+    width: 19%;
   }
-  .badge {
-    display: inline-block;
-    white-space: nowrap;
-    padding: 3px 6px;
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-sm);
+  .quantity-col {
+    width: 126px;
   }
-  .empty {
-    text-align: center;
-    padding: 48px 16px;
-    border: 1px dashed var(--color-border-default);
-    border-radius: var(--radius-md);
+  .status-col {
+    width: 116px;
+  }
+  .date-col {
+    width: 126px;
+  }
+  .wo-col {
+    width: 112px;
   }
   .error {
     color: var(--color-danger-default);
     font-size: 12px;
   }
+  @media (max-width: 1100px) {
+    .material-list,
+    .material-list tbody {
+      display: grid;
+      gap: 10px;
+    }
+    .material-list thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+    .unlink {
+      min-width: 44px;
+      min-height: 44px;
+    }
+    .wo-links .attach-label {
+      display: inline;
+      border: 0;
+      padding: 0;
+    }
+  }
   @media (max-width: 767px) {
     .materials {
       padding: 16px;
     }
-    .columns {
-      grid-template-columns: 1fr;
-    }
-    .filters input {
-      width: 100%;
-    }
-    .actions {
-      width: 100%;
-    }
-    .desktop-edit {
-      display: none;
-    }
-    .row-actions {
-      min-width: 44px;
-    }
-    .action-column {
-      position: sticky;
-      right: 0;
-      min-width: 44px;
-      padding: 4px;
-      border-left: 1px solid var(--color-border-default);
-    }
-    td.action-column {
-      background: var(--color-bg-surface);
-    }
-    th.action-column {
-      z-index: 1;
-      text-align: center;
-      vertical-align: middle;
-    }
-    input,
-    select {
+    .filters input,
+    select,
+    .check-all {
       min-height: 44px;
       font-size: 16px;
     }

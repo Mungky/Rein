@@ -643,6 +643,16 @@ describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
     };
     expect((await f.a.patch(`${endpoint}/${item.id}`, update)).status).toBe(200);
     expect((await f.a.patch(`${endpoint}/${item.id}`, update)).status).toBe(409);
+    const po = list.materials.find((r: { id: string }) => r.id === rows[1]!.clientId);
+    expect(po.receivedAt).toBe('2026-11-18');
+    const reviewed = await f.a.patch(`${endpoint}/${po.id}`, {
+      ...rows[1],
+      clientId: undefined,
+      status: 'need_review',
+      expectedUpdatedAt: po.updatedAt,
+    });
+    expect(reviewed.status).toBe(200);
+    expect(await reviewed.json()).toMatchObject({ status: 'need_review', receivedAt: null });
     expect(
       (
         await f.a.post(endpoint, {
@@ -688,6 +698,59 @@ describe.skipIf(!hasDb)('Revisi project, logbook, lampiran dan Beranda', () => {
         where: eq(projectMaterials.id, item.id),
       }))!.status,
     ).toBe('in_stock');
+  });
+  it('menghapus dan memulihkan pilihan material sekaligus dengan izin dan versi setiap baris', async () => {
+    const f = await fixture();
+    const endpoint = `/api/projects/${f.id}/materials`;
+    const items = ['Gasket', 'Pipa'].map((description) => ({
+      clientId: randomUUID(),
+      description,
+      quantity: 1,
+      unit: 'Pcs',
+      status: 'in_stock',
+      receivedAt: '2026-11-18',
+    }));
+    expect((await f.a.post(endpoint, { rows: items })).status).toBe(201);
+    expect(
+      (await f.a.post(`${endpoint}/${items[0]!.clientId}/work-orders`, { woId: f.woId })).status,
+    ).toBe(200);
+    const saved = (await (await f.a.get(endpoint)).json()).materials;
+    expect(saved.every((row: { receivedAt: string | null }) => row.receivedAt === null)).toBe(true);
+    const rows = saved.map(({ id, updatedAt }: { id: string; updatedAt: string }) => ({
+      id,
+      expectedUpdatedAt: updatedAt,
+    }));
+    const path = endpoint + '/selection';
+    const outsider = await createUser();
+    const { a: viewer } = await login(f.app, outsider.username, outsider.password!);
+    expect((await viewer.delete(path, { rows })).status).toBe(404);
+    await testDb().insert(projectMembers).values({
+      projectId: f.id,
+      userId: outsider.id,
+      projectRole: 'Pembaca',
+      addedBy: f.manager.id,
+    });
+    await testDb()
+      .insert(userPermissions)
+      .values({ userId: outsider.id, permissionKey: 'wo.create', scope: 'none' });
+    expect((await viewer.delete(path, { rows })).status).toBe(403);
+    const stale = { ...rows[1], expectedUpdatedAt: '2000-01-01T00:00:00Z' };
+    expect((await f.a.delete(path, { rows: [rows[0], stale] })).status).toBe(409);
+    expect((await (await f.a.get(endpoint)).json()).materials).toHaveLength(2);
+
+    const deleted = await f.a.delete(path, { rows });
+    expect(deleted.status).toBe(200);
+    expect((await (await f.a.get(endpoint)).json()).materials).toEqual([]);
+    expect((await (await f.a.get(`/api/work-orders/${f.woId}`)).json()).materials).toEqual([]);
+    const versions = (await deleted.json()).rows.map(
+      ({ id, updatedAt }: { id: string; updatedAt: string }) => ({
+        id,
+        expectedUpdatedAt: updatedAt,
+      }),
+    );
+    expect((await f.a.post(path, { rows: versions })).status).toBe(200);
+    expect((await (await f.a.get(endpoint)).json()).materials).toHaveLength(2);
+    expect((await (await f.a.get(`/api/work-orders/${f.woId}`)).json()).materials).toHaveLength(1);
   });
   it('Material duplikat manual, impor, dan dua request bersamaan dilewati tanpa menimpa jumlah atau catatan', async () => {
     const f = await fixture();
