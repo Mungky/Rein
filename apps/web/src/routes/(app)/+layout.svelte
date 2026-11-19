@@ -17,7 +17,6 @@
     '/': 'Beranda',
     '/tugas': 'Tugas saya',
     '/project': 'Project',
-    '/aktivitas': 'Aktivitas',
     '/notifikasi': 'Notifikasi',
     '/profil': 'Profil & keamanan',
     '/admin/pengguna': 'Pengguna',

@@ -3,7 +3,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authOf, requireVerified } from '../auth/middleware';
-import { canDo } from '../auth/project-access';
+import { canDo, loadProjectAccess } from '../auth/project-access';
 import type { AppEnv } from '../context';
 import { activityPeriod, activityPeriodQuery } from '../lib/activity-period';
 import { validate } from '../lib/http';
@@ -62,6 +62,7 @@ const actions = Object.keys(summaries).filter(
 const querySchema = activityPeriodQuery.extend({
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   wo: z.uuid().optional(),
+  project: z.uuid().optional(),
 });
 
 function activityId(value: SQL) {
@@ -95,6 +96,7 @@ export const activityRoutes = new Hono<AppEnv>().use(requireVerified).get('/', a
   const a = authOf(c);
   const { db } = c.var.deps;
   const query = validate(querySchema, c.req.query());
+  if (query.project) await loadProjectAccess(db, a, query.project);
   const range = activityPeriod(query);
   const seeAll = canDo(a, 'project.view');
   if (!seeAll && !canDo(a, 'project.view', { project: { isMember: true, isManager: false } })) {
@@ -183,6 +185,7 @@ export const activityRoutes = new Hono<AppEnv>().use(requireVerified).get('/', a
         select 1 from project_members pm where pm.project_id = p.id and pm.user_id = ${a.user.id}
       )`
       }
+      ${query.project ? sql`and p.id = ${query.project}` : sql``}
       ${query.wo ? sql`and e.wo_id = ${query.wo} and w.deleted_at is null and e.action not like 'logbook.%'` : sql``}
       ${
         range

@@ -299,4 +299,13 @@
   .pick label:hover {
     background: var(--color-bg-hover);
   }
+  @media (max-width: 767px) {
+    .members li {
+      gap: 12px;
+      padding: 12px 0;
+    }
+    .members small {
+      margin-top: 4px;
+    }
+  }
 </style>
