@@ -8,10 +8,10 @@
 <main class="auth">
   <div class="brand">
     <img class="logo" src={asset('/rein-icon-192.png')} alt="" width="28" height="28" />
-    <b>REIN</b><span class="faint">Remula</span>
+    <b>REIN</b>
   </div>
   <div class="card">{@render children()}</div>
-  <p class="foot faint">PT Remula Inti Rekayasa · akses hanya dari jaringan kantor atau VPN</p>
+  <p class="foot faint">PT Remula Inti Rekayasa</p>
 </main>
 
 <style>

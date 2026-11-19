@@ -3,10 +3,11 @@ import {
   materialIdentity,
   materialImportSchema,
   materialLinkSchema,
+  materialSelectionSchema,
   materialUpdateSchema,
 } from '@rein/shared';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { audit } from '../audit';
 import { authOf, requireVerified } from '../auth/middleware';
 import { assertCan, canDo, loadProjectAccess } from '../auth/project-access';
@@ -42,6 +43,85 @@ const duplicate = () =>
     'Material yang sama sudah ada. Ubah item yang ada untuk memperbarui jumlah atau status.',
   );
 
+async function changeDeleted(
+  c: Context<AppEnv>,
+  projectId: string,
+  items: Array<{ id: string; expectedUpdatedAt: string }>,
+  deleting: boolean,
+) {
+  const a = authOf(c);
+  const { db } = c.var.deps;
+  const acc = await loadProjectAccess(db, a, projectId);
+  assertCan(a, 'wo.create', acc.res);
+  const result = await db.transaction(async (tx) => {
+    await tx
+      .select({ id: projects.id })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .for('update');
+    const rows = await tx
+      .select()
+      .from(projectMaterials)
+      .where(
+        and(
+          eq(projectMaterials.projectId, projectId),
+          inArray(
+            projectMaterials.id,
+            items.map((item) => item.id),
+          ),
+        ),
+      )
+      .for('update');
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const identities = new Set<string>();
+    if (!deleting) {
+      const active = await tx
+        .select()
+        .from(projectMaterials)
+        .where(and(eq(projectMaterials.projectId, projectId), isNull(projectMaterials.deletedAt)));
+      for (const row of active) identities.add(materialIdentity(row));
+    }
+    for (const item of items) {
+      const row = byId.get(item.id);
+      if (!row || Boolean(row.deletedAt) === deleting)
+        throw notFound(deleting ? 'Material tidak ditemukan' : 'Material terhapus tidak ditemukan');
+      if (row.updatedAt.getTime() !== new Date(item.expectedUpdatedAt).getTime())
+        throw new HttpError(409, 'STALE', 'Material sudah berubah. Muat ulang lalu coba lagi.');
+      if (!deleting) {
+        const identity = materialIdentity(row);
+        if (identities.has(identity)) throw duplicate();
+        identities.add(identity);
+      }
+    }
+    const updated = await tx
+      .update(projectMaterials)
+      .set({ deletedAt: deleting ? new Date() : null })
+      .where(
+        and(
+          eq(projectMaterials.projectId, projectId),
+          inArray(
+            projectMaterials.id,
+            items.map((item) => item.id),
+          ),
+        ),
+      )
+      .returning({ id: projectMaterials.id, updatedAt: projectMaterials.updatedAt });
+    for (const { id } of items)
+      await audit(tx, {
+        actorId: a.user.id,
+        action: deleting ? 'material.deleted' : 'material.restored',
+        entityType: 'project',
+        entityId: projectId,
+        diff: deleting ? { materialId: id, before: byId.get(id) } : { materialId: id },
+        ip: c.var.ip,
+        userAgent: userAgent(c),
+      });
+    return updated;
+  });
+  await publishChange(db, projectId);
+  return result;
+}
+
 export const materialRoutes = new Hono<AppEnv>()
   .use(requireVerified)
   .get('/:id/materials', async (c) => {
@@ -66,7 +146,11 @@ export const materialRoutes = new Hono<AppEnv>()
       .innerJoin(workOrders, eq(workOrders.id, workOrderMaterials.woId))
       .where(and(eq(workOrders.projectId, acc.project.id), isNull(workOrders.deletedAt)));
     return c.json({
-      materials: rows.map((r) => ({ ...r, woLinks: links.filter((l) => l.materialId === r.id) })),
+      materials: rows.map((r) => ({
+        ...r,
+        receivedAt: r.status === 'po' ? r.receivedAt : null,
+        woLinks: links.filter((l) => l.materialId === r.id),
+      })),
       canManage: canDo(a, 'wo.create', acc.res),
     });
   })
@@ -126,7 +210,7 @@ export const materialRoutes = new Hono<AppEnv>()
           continue;
         }
         identities.add(identity);
-        pending.push(row);
+        pending.push({ ...row, receivedAt: row.status === 'po' ? row.receivedAt : null });
       }
       const added = pending.length
         ? await tx
@@ -158,6 +242,7 @@ export const materialRoutes = new Hono<AppEnv>()
     const acc = await loadProjectAccess(db, a, c.req.param('id'));
     assertCan(a, 'wo.create', acc.res, 'Anda tidak punya izin mengelola material project');
     const { expectedUpdatedAt, ...values } = await readJson(c, materialUpdateSchema);
+    if (values.status !== 'po') values.receivedAt = null;
     const materialId = c.req.param('materialId');
     if (!/^[0-9a-f-]{36}$/i.test(materialId)) throw notFound('Material tidak ditemukan');
     const row = await db.transaction(async (tx) => {
@@ -217,103 +302,24 @@ export const materialRoutes = new Hono<AppEnv>()
     await publishChange(db, acc.project.id);
     return c.json(row);
   })
-  .delete('/:id/materials/:materialId', async (c) => {
-    const a = authOf(c);
-    const { db } = c.var.deps;
-    const acc = await loadProjectAccess(db, a, c.req.param('id'));
-    assertCan(a, 'wo.create', acc.res);
-    const { expectedUpdatedAt } = await readJson(c, materialDeleteSchema);
-    const materialId = c.req.param('materialId');
-    if (!/^[0-9a-f-]{36}$/i.test(materialId)) throw notFound('Material tidak ditemukan');
-    const deleted = await db.transaction(async (tx) => {
-      await tx
-        .select({ id: projects.id })
-        .from(projects)
-        .where(eq(projects.id, acc.project.id))
-        .for('update');
-      const [row] = await tx
-        .select()
-        .from(projectMaterials)
-        .where(
-          and(
-            eq(projectMaterials.id, materialId),
-            eq(projectMaterials.projectId, acc.project.id),
-            isNull(projectMaterials.deletedAt),
-          ),
-        )
-        .for('update');
-      if (!row) throw notFound('Material tidak ditemukan');
-      if (row.updatedAt.getTime() !== new Date(expectedUpdatedAt).getTime())
-        throw new HttpError(
-          409,
-          'STALE',
-          'Material sudah diubah orang lain. Muat ulang lalu coba lagi.',
-        );
-      const [result] = await tx
-        .update(projectMaterials)
-        .set({ deletedAt: new Date() })
-        .where(eq(projectMaterials.id, materialId))
-        .returning({ id: projectMaterials.id, updatedAt: projectMaterials.updatedAt });
-      await audit(tx, {
-        actorId: a.user.id,
-        action: 'material.deleted',
-        entityType: 'project',
-        entityId: acc.project.id,
-        diff: { materialId, before: row },
-        ip: c.var.ip,
-        userAgent: userAgent(c),
-      });
-      return result!;
+  .on(['DELETE', 'POST'], '/:id/materials/selection', async (c) => {
+    const { rows } = await readJson(c, materialSelectionSchema);
+    return c.json({
+      rows: await changeDeleted(c, c.req.param('id'), rows, c.req.method === 'DELETE'),
     });
-    await publishChange(db, acc.project.id);
-    return c.json(deleted);
+  })
+  .delete('/:id/materials/:materialId', async (c) => {
+    const id = c.req.param('materialId').toLowerCase();
+    if (!/^[0-9a-f-]{36}$/i.test(id)) throw notFound('Material tidak ditemukan');
+    const version = await readJson(c, materialDeleteSchema);
+    const [deleted] = await changeDeleted(c, c.req.param('id'), [{ id, ...version }], true);
+    return c.json(deleted!);
   })
   .post('/:id/materials/:materialId/restore', async (c) => {
-    const a = authOf(c);
-    const { db } = c.var.deps;
-    const acc = await loadProjectAccess(db, a, c.req.param('id'));
-    assertCan(a, 'wo.create', acc.res);
-    const { expectedUpdatedAt } = await readJson(c, materialDeleteSchema);
-    const materialId = c.req.param('materialId');
-    if (!/^[0-9a-f-]{36}$/i.test(materialId)) throw notFound('Material tidak ditemukan');
-    await db.transaction(async (tx) => {
-      await tx
-        .select({ id: projects.id })
-        .from(projects)
-        .where(eq(projects.id, acc.project.id))
-        .for('update');
-      const [row] = await tx
-        .select()
-        .from(projectMaterials)
-        .where(
-          and(eq(projectMaterials.id, materialId), eq(projectMaterials.projectId, acc.project.id)),
-        )
-        .for('update');
-      if (!row || !row.deletedAt) throw notFound('Material terhapus tidak ditemukan');
-      if (row.updatedAt.getTime() !== new Date(expectedUpdatedAt).getTime())
-        throw new HttpError(409, 'STALE', 'Material sudah berubah. Muat ulang lalu coba lagi.');
-      const active = await tx
-        .select()
-        .from(projectMaterials)
-        .where(
-          and(eq(projectMaterials.projectId, acc.project.id), isNull(projectMaterials.deletedAt)),
-        );
-      if (active.some((r) => materialIdentity(r) === materialIdentity(row))) throw duplicate();
-      await tx
-        .update(projectMaterials)
-        .set({ deletedAt: null })
-        .where(eq(projectMaterials.id, materialId));
-      await audit(tx, {
-        actorId: a.user.id,
-        action: 'material.restored',
-        entityType: 'project',
-        entityId: acc.project.id,
-        diff: { materialId },
-        ip: c.var.ip,
-        userAgent: userAgent(c),
-      });
-    });
-    await publishChange(db, acc.project.id);
+    const id = c.req.param('materialId').toLowerCase();
+    if (!/^[0-9a-f-]{36}$/i.test(id)) throw notFound('Material tidak ditemukan');
+    const version = await readJson(c, materialDeleteSchema);
+    await changeDeleted(c, c.req.param('id'), [{ id, ...version }], false);
     return c.json({ restored: true });
   })
   .on(['POST', 'DELETE'], '/:id/materials/:materialId/work-orders', async (c) => {

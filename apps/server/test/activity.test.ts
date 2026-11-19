@@ -93,6 +93,15 @@ describe.skipIf(!hasDb)('Aktivitas dan Logbook', () => {
     expect((await (await f.a.get('/api/activity?period=all')).json()).items).toContainEqual(
       expect.objectContaining({ projectId: privateProject }),
     );
+    const scoped = await f.a.get(`/api/activity?period=all&project=${f.projectId}`);
+    expect(scoped.status).toBe(200);
+    const scopedIds = (await scoped.json()).items.map(
+      (item: { projectId: string }) => item.projectId,
+    );
+    expect(new Set(scopedIds)).toEqual(new Set([f.projectId]));
+    expect((await member.get(`/api/activity?period=all&project=${privateProject}`)).status).toBe(
+      404,
+    );
     const local = await (await member.get(`/api/activity?period=all&wo=${f.woId}`)).json();
     expect(local.items).toContainEqual(
       expect.objectContaining({ text: 'meminta bantuan', detail: 'Rincian bantuan contoh' }),

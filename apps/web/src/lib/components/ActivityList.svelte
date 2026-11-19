@@ -23,7 +23,7 @@
     detail: string | null;
     target: 'materials' | 'files' | null;
   }
-  let { woId }: { woId?: string } = $props();
+  let { woId, projectId }: { woId?: string; projectId?: string } = $props();
   let period = $state<Period>('week');
   let date = $state(todayWib());
   let page = $state(1);
@@ -34,7 +34,7 @@
   let revision = $state(0);
 
   const unsubscribe = onLive((event) => {
-    if (page !== 1) return;
+    if (page !== 1 || (projectId && 'projectId' in event && event.projectId !== projectId)) return;
     if (event.type === 'wo' && (!woId || event.woId === woId)) revision++;
     if (event.type === 'project' && !woId) revision++;
   });
@@ -68,6 +68,7 @@
     void revision;
     const query = new SvelteURLSearchParams({ period, date, page: String(page) });
     if (woId) query.set('wo', woId);
+    if (projectId) query.set('project', projectId);
     const request = new AbortController();
     loading = true;
     error = '';
@@ -113,12 +114,15 @@
           <div>
             <p><b>{item.actor}</b> {item.text}</p>
             {#if item.detail}<p class="detail">{item.detail}</p>{/if}
-            {#if !woId || item.target}
+            {#if item.target || (!woId && (!projectId || item.woId))}
               <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- link() memakai resolve() -->
               <a href={link(item)}
-                >{item.projectName}{item.woLabel ? ` · ${item.woLabel}` : ''}{item.subject
-                  ? ` · ${item.subject}`
-                  : ''}</a
+                >{(projectId
+                  ? [item.woLabel, item.subject]
+                  : [item.projectName, item.woLabel, item.subject]
+                )
+                  .filter(Boolean)
+                  .join(' · ') || (item.target === 'materials' ? 'Material' : 'Dokumen')}</a
               >
             {:else if item.subject}
               <p class="muted">{item.subject}</p>

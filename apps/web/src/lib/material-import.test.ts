@@ -51,6 +51,7 @@ describe('Pratinjau material Excel', () => {
             'Siap',
           ],
           ['002', 'Bolt', '', '', '2 Pcs', null, 'PO', '19/11/2026', 'Menunggu'],
+          ['003', 'Gasket', '', '', '2 Pcs', null, 'Need review', 'belum diisi'],
         ],
       },
     ]);
@@ -59,7 +60,7 @@ describe('Pratinjau material Excel', () => {
       partNo: '001',
       quantity: 1.25,
       status: 'in_stock',
-      receivedAt: '2026-11-18',
+      receivedAt: null,
       note: 'Siap',
     });
     expect(p.rows[1]).toMatchObject({
@@ -68,6 +69,7 @@ describe('Pratinjau material Excel', () => {
       status: 'po',
       receivedAt: '2026-11-19',
     });
+    expect(p.rows[2]).toMatchObject({ status: 'need_review', receivedAt: null });
   });
   it('kolom stok dan PO pada template dikenali tanpa menganggap grup sebagai item', () => {
     const p = materialPreview([

@@ -22,9 +22,11 @@
   import { fileUrl, isPreviewImage, thumbUrl, uploadPreparedFile } from '$lib/attach';
   import PhotoLightbox from '$lib/components/PhotoLightbox.svelte';
   import { setChrome } from '$lib/chrome.svelte';
+  import ActivityList from '$lib/components/ActivityList.svelte';
   import Avatar from '$lib/components/Avatar.svelte';
   import Button from '$lib/components/Button.svelte';
   import CategoryBar from '$lib/components/CategoryBar.svelte';
+  import Checkbox from '$lib/components/Checkbox.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Field from '$lib/components/Field.svelte';
   import Icon from '$lib/components/Icon.svelte';
@@ -200,11 +202,17 @@
       // abaikan
     }
   });
-  let tab = $state<'worklist' | 'files' | 'materials'>('worklist');
-  $effect(() => {
-    const source = page.url.searchParams.get('tab');
-    tab = source === 'files' || source === 'materials' ? source : 'worklist';
-  });
+  const tabs = [
+    { value: 'worklist', label: 'Worklist' },
+    { value: 'files', label: 'Dokumen' },
+    { value: 'materials', label: 'Material' },
+    { value: 'activity', label: 'Aktivitas' },
+  ] as const;
+  const tab = $derived(
+    tabs.find(({ value }) => value === page.url.searchParams.get('tab'))?.value ?? 'worklist',
+  );
+  const projectUrl = $derived(resolve('/(app)/project/[id]', { id: p.id }));
+  let filterOpen = $state(false);
   let cat = $state<WoCategory | ''>('');
   let onlyUrgent = $state(false);
   let pic = $state('');
@@ -216,6 +224,20 @@
   let to = $state('');
   let groupBy = $state<WorklistGroup>('status');
   let sort = $state<WorklistSort>('deadline');
+  const activeFilters = $derived(
+    [cat, pic, kind, status, deadline, onlyUrgent, onlyHelp].filter(Boolean).length,
+  );
+  function clearFilters() {
+    cat = '';
+    pic = '';
+    kind = '';
+    status = '';
+    deadline = '';
+    from = '';
+    to = '';
+    onlyUrgent = false;
+    onlyHelp = false;
+  }
   const kinds = $derived(
     [...new Map(rows.map((w) => [w.type.id, w.type])).values()].sort((a, b) =>
       a.name.localeCompare(b.name, 'id'),
@@ -431,8 +453,7 @@
       <div class="meta">
         <span><Icon name="building" size={14} />{p.client.name}</span>
         <span><Icon name="file" size={14} />{p.rpoNumber}</span>
-        {#if p.location}<span class="hide-m"><Icon name="map-pin" size={14} />{p.location}</span
-          >{/if}
+        {#if p.location}<span><Icon name="map-pin" size={14} />{p.location}</span>{/if}
         <span
           ><Icon name="calendar" size={14} />{shortDate(p.startDate)} – {shortDate(p.endDate)}</span
         >
@@ -443,7 +464,7 @@
         <span class="st st-{p.status}"></span>{PROJECT_STATUS_LABEL[p.status]} · Progres
         <b class="tnum">{p.progress}%</b>
       </span>
-      <Progress value={p.progress} width={180} />
+      <Progress value={p.progress} />
     </div>
     <div class="acts">
       {#if p.can.edit || statusTargets.length}
@@ -464,26 +485,21 @@
   {#if p.categories.length}<CategoryBar categories={p.categories} />{/if}
 </header>
 
-<div class="tabs" role="tablist">
-  <button
-    role="tab"
-    class:on={tab === 'worklist'}
-    aria-selected={tab === 'worklist'}
-    onclick={() => (tab = 'worklist')}>Worklist<em>{rows.length}</em></button
-  >
-  <button
-    role="tab"
-    class:on={tab === 'files'}
-    aria-selected={tab === 'files'}
-    onclick={() => (tab = 'files')}>Dokumen<em>{pfiles?.length ?? ''}</em></button
-  >
-  <button
-    role="tab"
-    class:on={tab === 'materials'}
-    aria-selected={tab === 'materials'}
-    onclick={() => (tab = 'materials')}>Material</button
-  >
-</div>
+<nav class="tabs" aria-label="Bagian project">
+  {#each tabs as item (item.value)}
+    <!-- eslint-disable svelte/no-navigation-without-resolve -- projectUrl adalah hasil resolve() -->
+    <a
+      href={item.value === 'worklist' ? projectUrl : projectUrl + '?tab=' + item.value}
+      aria-current={tab === item.value ? 'page' : undefined}
+      data-sveltekit-noscroll
+    >
+      {item.label}
+      {#if item.value === 'worklist'}<em>{rows.length}</em>{/if}
+      {#if item.value === 'files' && pfiles}<em>{pfiles.length}</em>{/if}
+    </a>
+    <!-- eslint-enable svelte/no-navigation-without-resolve -->
+  {/each}
+</nav>
 
 {#if tab === 'worklist'}
   <div class="layout" class:wide={view === 'timeline' || view === 'scurve'}>
@@ -500,78 +516,9 @@
               : []),
           ]}
         />
-        <select class="chip" aria-label="Filter kategori" bind:value={cat}>
-          <option value="">Semua kategori</option>
-          {#each p.categories as c (c.category)}
-            <option value={c.category}>{WO_CATEGORY_META[c.category].label}</option>
-          {/each}
-        </select>
-        <select class="chip" aria-label="Filter PIC" bind:value={pic}>
-          <option value="">Semua PIC</option>
-          {#each p.members as mm (mm.userId)}<option value={mm.userId}>{mm.fullName}</option>{/each}
-        </select>
-        <button
-          class="chip"
-          class:on={onlyUrgent}
-          aria-pressed={onlyUrgent}
-          onclick={() => (onlyUrgent = !onlyUrgent)}
-        >
-          <Icon name="alert" size={12} />Urgent
-        </button>
-        <span class="note faint hide-m">
-          {view === 'kanban'
-            ? 'Seret kartu untuk mengubah status'
-            : view === 'table'
-              ? ''
-              : view === 'scurve'
-                ? 'Rencana vs aktual'
-                : 'Jadwal Work Order'}
-        </span>
-      </div>
-      <div class="toolbar filters">
-        <select class="chip" aria-label="Filter jenis WO" bind:value={kind}>
-          <option value="">Semua jenis</option>
-          {#each kinds as type (type.id)}<option value={type.id}>{type.name}</option>{/each}
-        </select>
-        <select class="chip" aria-label="Filter status WO" bind:value={status}>
-          <option value="">Semua status</option>
-          {#each WO_STATUSES as item (item)}<option value={item}>{WO_STATUS_LABEL[item]}</option
-            >{/each}
-        </select>
-        <select class="chip" aria-label="Filter deadline" bind:value={deadline}>
-          <option value="">Semua deadline</option>
-          <option value="late">Terlambat</option>
-          <option value="next7">7 hari ke depan</option>
-          <option value="range">Rentang tanggal</option>
-        </select>
-        {#if deadline === 'range'}
-          <Input label="Deadline dari" type="date" bind:value={from} max={to || undefined} />
-          <Input label="Deadline sampai" type="date" bind:value={to} min={from || undefined} />
-        {/if}
-        <button
-          class="chip"
-          class:on={onlyHelp}
-          aria-pressed={onlyHelp}
-          onclick={() => (onlyHelp = !onlyHelp)}
-        >
-          <Icon name="flag" size={12} />Butuh bantuan
-        </button>
-        {#if view === 'table'}
-          <select class="chip" aria-label="Kelompok worklist" bind:value={groupBy}>
-            <option value="status">Grup: Status</option>
-            <option value="category">Grup: Kategori</option>
-            <option value="type">Grup: Jenis</option>
-            <option value="pic">Grup: PIC</option>
-            <option value="none">Tanpa grup</option>
-          </select>
-        {/if}
-        {#if view !== 'scurve'}
-          <select class="chip" aria-label="Urutkan worklist" bind:value={sort}>
-            <option value="deadline">Urut: Deadline</option>
-            <option value="number">Urut: Nomor WO</option>
-            <option value="updated">Urut: Terakhir diubah</option>
-          </select>
-        {/if}
+        <Button icon="filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}>
+          Filter{activeFilters ? ' (' + activeFilters + ')' : ''}
+        </Button>
       </div>
       {#if !rows.length}
         <div class="box">
@@ -627,6 +574,10 @@
   </div>
 {:else if tab === 'materials'}
   {#key p.id}<ProjectMaterials projectId={p.id} workOrders={rows} />{/key}
+{:else if tab === 'activity'}
+  <div class="pane">
+    {#key p.id}<ActivityList projectId={p.id} />{/key}
+  </div>
 {:else}
   <div class="pane documents">
     {#if p.can.upload}
@@ -732,6 +683,78 @@
     {/if}
   </div>
 {/if}
+
+<Modal bind:open={filterOpen} title="Filter Worklist" width={520}>
+  <div class="filter-fields">
+    <Field label="Kategori" id="filter-category">
+      <select id="filter-category" bind:value={cat}>
+        <option value="">Semua kategori</option>
+        {#each p.categories as c (c.category)}
+          <option value={c.category}>{WO_CATEGORY_META[c.category].label}</option>
+        {/each}
+      </select>
+    </Field>
+    <Field label="Jenis WO" id="filter-kind">
+      <select id="filter-kind" bind:value={kind}>
+        <option value="">Semua jenis</option>
+        {#each kinds as type (type.id)}<option value={type.id}>{type.name}</option>{/each}
+      </select>
+    </Field>
+    <Field label="Status" id="filter-status">
+      <select id="filter-status" bind:value={status}>
+        <option value="">Semua status</option>
+        {#each WO_STATUSES as item (item)}<option value={item}>{WO_STATUS_LABEL[item]}</option
+          >{/each}
+      </select>
+    </Field>
+    <Field label="PIC" id="filter-pic">
+      <select id="filter-pic" bind:value={pic}>
+        <option value="">Semua PIC</option>
+        {#each p.members as mm (mm.userId)}<option value={mm.userId}>{mm.fullName}</option>{/each}
+      </select>
+    </Field>
+    <Field label="Deadline" id="filter-deadline">
+      <select id="filter-deadline" bind:value={deadline}>
+        <option value="">Semua deadline</option>
+        <option value="late">Terlambat</option>
+        <option value="next7">7 hari ke depan</option>
+        <option value="range">Rentang tanggal</option>
+      </select>
+    </Field>
+    {#if deadline === 'range'}
+      <Input label="Deadline dari" type="date" bind:value={from} max={to || undefined} />
+      <Input label="Deadline sampai" type="date" bind:value={to} min={from || undefined} />
+    {/if}
+    {#if view === 'table'}
+      <Field label="Kelompokkan" id="filter-group">
+        <select id="filter-group" bind:value={groupBy}>
+          <option value="status">Status</option>
+          <option value="category">Kategori</option>
+          <option value="type">Jenis</option>
+          <option value="pic">PIC</option>
+          <option value="none">Tanpa grup</option>
+        </select>
+      </Field>
+    {/if}
+    {#if view !== 'scurve'}
+      <Field label="Urutkan" id="filter-sort">
+        <select id="filter-sort" bind:value={sort}>
+          <option value="deadline">Deadline</option>
+          <option value="number">Nomor WO</option>
+          <option value="updated">Terakhir diubah</option>
+        </select>
+      </Field>
+    {/if}
+  </div>
+  <div class="filter-flags">
+    <Checkbox bind:checked={onlyUrgent}>Urgent</Checkbox>
+    <Checkbox bind:checked={onlyHelp}>Butuh bantuan</Checkbox>
+  </div>
+  {#snippet footer()}
+    <Button onclick={clearFilters} disabled={!activeFilters}>Reset filter</Button>
+    <Button variant="primary" onclick={() => (filterOpen = false)}>Selesai</Button>
+  {/snippet}
+</Modal>
 
 <PhotoLightbox bind:open={photoOpen} photo={documentPhoto} />
 
@@ -909,6 +932,7 @@
     margin: 0;
   }
   .document-grid li {
+    display: grid;
     min-width: 0;
     padding: 8px 10px;
     border: 1px solid var(--color-border-default);
@@ -1042,6 +1066,7 @@
     gap: 6px;
   }
   .ph-prog {
+    width: 180px;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -1084,14 +1109,15 @@
     padding: 0 24px;
     border-bottom: 1px solid var(--color-border-default);
   }
-  .tabs button {
+  .tabs a {
     padding: 10px 0;
     color: var(--color-text-secondary);
     font-weight: 500;
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
+    text-decoration: none;
   }
-  .tabs button.on {
+  .tabs a[aria-current='page'] {
     color: var(--color-text-primary);
     border-color: var(--color-text-primary);
   }
@@ -1116,27 +1142,23 @@
     padding: 10px 0;
     flex-wrap: wrap;
   }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: 26px;
+  .filter-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .filter-fields select {
+    width: 100%;
+    min-height: 36px;
     padding: 0 8px;
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-md);
-    border: 1px dashed var(--color-border-strong);
-    background: transparent;
-    color: var(--color-text-secondary);
-    font: var(--text-label);
+    background: var(--color-bg-surface);
   }
-  .chip.on {
-    border-style: solid;
-    border-color: var(--color-accent-default);
-    color: var(--color-accent-default);
-    background: var(--color-accent-subtle);
-  }
-  .note {
-    margin-left: auto;
-    font-size: 12px;
+  .filter-flags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
   }
   .box {
     border: 1px solid var(--color-border-default);
@@ -1211,26 +1233,92 @@
     }
   }
   @media (max-width: 767px) {
-    .ph,
+    .banner {
+      height: 56px;
+    }
+    .banner-edit {
+      min-height: 44px;
+      inset: 6px 12px auto auto;
+    }
+    .ph {
+      padding: 12px 16px;
+    }
+    .ph-top {
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr);
+      align-items: start;
+    }
+    .clogo {
+      margin-top: 0;
+    }
+    h1 {
+      font-size: 20px;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+    .meta {
+      gap: 4px 12px;
+      font: var(--text-caption);
+    }
+    .meta span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .meta span :global(svg) {
+      flex: none;
+    }
+    .ph-prog,
+    .acts {
+      grid-column: 1 / -1;
+    }
+    .acts :global(button) {
+      flex: 1 1 auto;
+      white-space: nowrap;
+    }
     .tabs {
-      padding-left: 16px;
-      padding-right: 16px;
+      gap: 0;
+      padding: 0 12px;
+    }
+    .tabs a {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 4px;
+      font-size: 12px;
+    }
+    .tabs em {
+      display: none;
     }
     .wl {
-      padding: 0;
+      padding: 0 0 16px;
     }
     .toolbar {
+      justify-content: space-between;
       padding: 10px 16px;
+    }
+    .toolbar :global(.seg) {
+      --item-width: clamp(44px, calc((100vw - 142px) / 4), 68px);
     }
     .ph-prog {
       align-items: flex-start;
       width: 100%;
     }
-    .hide-m {
+    .side {
       display: none;
+    }
+    .filter-fields select {
+      min-height: 44px;
+      font-size: 16px;
     }
     .pane {
       padding: 16px;
+    }
+  }
+  @media (max-width: 360px) {
+    .toolbar :global(.seg svg) {
+      display: none;
     }
   }
 </style>

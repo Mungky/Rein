@@ -509,7 +509,7 @@ export const projectMaterials = pgTable(
     check('project_materials_quantity_check', sql`${t.quantity} > 0`),
     check(
       'project_materials_status_check',
-      sql`${t.status} in ('in_stock', 'not_available', 'po')`,
+      sql`${t.status} in ('in_stock', 'not_available', 'po', 'need_review')`,
     ),
   ],
 );

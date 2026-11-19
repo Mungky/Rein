@@ -43,7 +43,7 @@
 <aside class="sidebar" aria-label="Navigasi">
   <div class="ws">
     <img class="logo" src={asset('/rein-icon-192.png')} alt="" width="24" height="24" />
-    REIN<span class="org">Remula</span>
+    REIN
   </div>
   <button class="search" onclick={onpalette}>
     <Icon name="search" /><span>Cari atau perintah…</span><Kbd>Ctrl K</Kbd>
@@ -166,12 +166,6 @@
     padding: 6px 8px;
     font-weight: 600;
     font-size: 14px;
-  }
-  .org {
-    margin-left: auto;
-    font-weight: 400;
-    font-size: 12px;
-    color: var(--color-text-tertiary);
   }
   .logo {
     display: block;
