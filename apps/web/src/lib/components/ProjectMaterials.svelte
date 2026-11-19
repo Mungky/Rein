@@ -25,6 +25,8 @@
   let loading = $state(true);
   let loadError = $state('');
   let busy = $state(false);
+  let savingMaterial = $state(false);
+  let activeEditor = $state<string | null>(null);
   let query = $state('');
   let filter = $state<MaterialStatus | ''>('');
   let picker = $state<HTMLInputElement>();
@@ -63,6 +65,14 @@
     filtered.length > 0 && filtered.every((r) => selected.has(r.id)),
   );
   const someVisibleSelected = $derived(filtered.some((r) => selected.has(r.id)));
+
+  $effect(() => {
+    if (
+      activeEditor &&
+      (!canManage || (activeEditor !== 'new' && !filtered.some((row) => row.id === activeEditor)))
+    )
+      activeEditor = null;
+  });
 
   function selectRow(id: string, value: boolean) {
     if (value) selected.add(id);
@@ -220,7 +230,9 @@
   <div class="toolbar">
     <div class="heading">
       <h2>Material</h2>
-      <p>{rows.length} item<span class="project-caption"> untuk kebutuhan project ini</span></p>
+      <p>
+        {rows.length} item<span class="project-caption">&nbsp;untuk kebutuhan project ini</span>
+      </p>
     </div>
     {#if canManage}<div class="actions">
         <input
@@ -314,6 +326,12 @@
             <th class="date-col" scope="col" role="columnheader">Diterima</th>
             <th scope="col" role="columnheader">Catatan</th>
             <th class="wo-col" scope="col" role="columnheader">Work Order</th>
+            {#if canManage}<th
+                class="edit-col"
+                scope="col"
+                role="columnheader"
+                aria-label="Pengeditan material"
+              ></th>{/if}
           </tr>
         </thead>
         <!-- svelte-ignore a11y_no_redundant_roles (Safari needs the rowgroup role when displayed as a grid.) -->
@@ -322,7 +340,9 @@
             <ProjectMaterialRow
               {endpoint}
               editable
-              {busy}
+              busy={busy || savingMaterial}
+              bind:savingMaterial
+              bind:activeEditor
               oncreated={() => {
                 toast('Material ditambahkan');
                 void load();
@@ -334,7 +354,9 @@
               {row}
               {endpoint}
               editable={canManage}
-              {busy}
+              busy={busy || savingMaterial}
+              bind:savingMaterial
+              bind:activeEditor
               checked={selected.has(row.id)}
               onselect={(value) => selectRow(row.id, value)}
               onreload={load}
@@ -599,19 +621,22 @@
     width: 32px;
   }
   .description-col {
-    width: 19%;
+    width: 16%;
   }
   .quantity-col {
-    width: 126px;
+    width: clamp(90px, 11%, 128px);
   }
   .status-col {
-    width: 116px;
+    width: clamp(95px, 10%, 116px);
   }
   .date-col {
-    width: 126px;
+    width: clamp(102px, 11%, 126px);
   }
   .wo-col {
-    width: 112px;
+    width: clamp(68px, 8%, 104px);
+  }
+  .edit-col {
+    width: 152px;
   }
   .error {
     color: var(--color-danger-default);

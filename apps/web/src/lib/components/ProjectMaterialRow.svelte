@@ -13,6 +13,8 @@
     endpoint,
     editable,
     busy,
+    savingMaterial = $bindable(false),
+    activeEditor = $bindable<string | null>(null),
     checked,
     onselect,
     onupdated,
@@ -24,6 +26,8 @@
     endpoint: string;
     editable: boolean;
     busy: boolean;
+    savingMaterial: boolean;
+    activeEditor: string | null;
     checked?: boolean;
     onselect?: (checked: boolean) => void;
     onupdated?: (row: MaterialInput & { id: string; updatedAt: string }) => void;
@@ -55,11 +59,22 @@
   let error = $state('');
   let stale = $state(false);
   let expanded = $state(false);
-  let summaryButton: HTMLButtonElement | undefined;
+  let summaryButton = $state<HTMLButtonElement>();
+  let addButton = $state<HTMLButtonElement>();
+  let editorRow = $state<HTMLTableRowElement>();
   let editButton = $state<HTMLButtonElement>();
-  const editing = $derived(editable && (!row || draft !== null));
+  const editorId = $derived(row?.id ?? 'new');
+  const editing = $derived(editable && activeEditor === editorId);
+  const detailsOpen = $derived(row ? expanded : editing);
   const values = $derived(draft ?? fields(row));
   const dirty = $derived(draft !== null && JSON.stringify(draft) !== initial);
+
+  $effect(() => {
+    if (!editing) {
+      pending = null;
+      discard();
+    }
+  });
 
   function startEdit() {
     draft = fields(row);
@@ -67,10 +82,28 @@
     expectedUpdatedAt = row?.updatedAt ?? '';
   }
 
+  async function activateEdit(event: MouseEvent) {
+    if (busy) return;
+    const tableRow = (event.currentTarget as HTMLButtonElement).closest('tr');
+    activeEditor = editorId;
+    startEdit();
+    if (event.detail === 0) {
+      await tick();
+      tableRow?.querySelector<HTMLInputElement>('.description input')?.focus();
+    }
+  }
+
   function discard() {
     draft = null;
     stale = false;
     error = '';
+  }
+
+  async function cancelEdit() {
+    discard();
+    if (editing) activeEditor = null;
+    await tick();
+    (row ? editButton : addButton)?.focus();
   }
 
   function edit<K extends keyof Draft>(key: K, value: Draft[K]) {
@@ -105,6 +138,7 @@
     if (!pending || !editing || busy || saving || stale) return;
     const payload = $state.snapshot(pending);
     saving = true;
+    savingMaterial = true;
     try {
       if (row) {
         const updated = await api<MaterialInput & { id: string; updatedAt: string }>(
@@ -122,9 +156,9 @@
         }
         clientId = crypto.randomUUID();
         oncreated?.();
-        expanded = false;
       }
       discard();
+      if (editing) activeEditor = null;
     } catch (err) {
       error = err instanceof ApiError ? err.message : 'Material gagal disimpan';
       stale = err instanceof ApiError && err.code === 'STALE';
@@ -132,9 +166,10 @@
     } finally {
       pending = null;
       saving = false;
+      savingMaterial = false;
     }
     await tick();
-    (row ? editButton : summaryButton)?.focus();
+    (row ? editButton : addButton)?.focus();
   }
 
   function enter(e: KeyboardEvent) {
@@ -146,6 +181,7 @@
   async function reloadRow() {
     if (!(await onreload?.())) return;
     discard();
+    if (editing) activeEditor = null;
   }
 
   async function toggleDetails() {
@@ -154,6 +190,18 @@
       await tick();
       summaryButton?.closest('tr')?.scrollIntoView({ block: 'nearest' });
     }
+  }
+
+  async function toggleAdd() {
+    if (busy) return;
+    if (editing) {
+      await cancelEdit();
+      return;
+    }
+    activeEditor = editorId;
+    startEdit();
+    await tick();
+    editorRow?.querySelector<HTMLInputElement>('.description input')?.focus();
   }
 </script>
 
@@ -166,7 +214,7 @@
     <span>{label}</span>
     <input
       value={values[key]}
-      placeholder={!row && key === 'description' ? 'Material baru' : label}
+      placeholder={label}
       maxlength={max}
       inputmode={key === 'quantity' ? 'decimal' : undefined}
       disabled={busy || saving}
@@ -176,14 +224,36 @@
   </label>
 {/snippet}
 
+{#if !row}
+  <!-- svelte-ignore a11y_no_redundant_roles (Safari needs the table role when the row is a grid.) -->
+  <tr class="add-launch" class:expanded={editing} role="row">
+    <td colspan="10" role="cell">
+      <button
+        class="add-trigger"
+        bind:this={addButton}
+        type="button"
+        aria-expanded={editing}
+        disabled={busy || saving}
+        onclick={toggleAdd}
+      >
+        <span class="add-label"><Icon name="plus" size={16} />Material baru</span>
+        <span class="summary-chevron"><Icon name="chevron-down" size={16} /></span>
+      </button>
+    </td>
+  </tr>
+{/if}
+
 <!-- svelte-ignore a11y_no_redundant_roles (Safari needs the table role when the row is a grid.) -->
 <tr
+  bind:this={editorRow}
   class:new-row={!row}
-  class:expanded
+  class:expanded={detailsOpen}
   class:read-only={!editable}
   class:checked
   class:editing
+  hidden={!row && !editing}
   role="row"
+  aria-label={!row ? 'Form material baru' : undefined}
 >
   {#if editable}
     <td class="selection" role="cell">
@@ -200,15 +270,15 @@
       {/if}
     </td>
   {/if}
-  <td class="summary" role="cell">
-    <button
-      type="button"
-      class="summary-button"
-      bind:this={summaryButton}
-      aria-expanded={expanded}
-      onclick={toggleDetails}
-    >
-      {#if row}
+  {#if row}
+    <td class="summary" role="cell">
+      <button
+        type="button"
+        class="summary-button"
+        bind:this={summaryButton}
+        aria-expanded={expanded}
+        onclick={toggleDetails}
+      >
         <span class="summary-content">
           <b>{row.description}</b>
           <span class="summary-meta">
@@ -226,31 +296,13 @@
             >
           {/if}
         </span>
-      {:else}
-        <span class="add-label"
-          ><Icon name="plus" size={16} />{dirty ? 'Lanjutkan material baru' : 'Material baru'}</span
-        >
-      {/if}
-      <span class="summary-chevron"><Icon name="chevron-down" size={16} /></span>
-    </button>
-  </td>
+        <span class="summary-chevron"><Icon name="chevron-down" size={16} /></span>
+      </button>
+    </td>
+  {/if}
   <td class="description" role="cell">
-    <div class="description-content">
-      {#if row && editable}
-        <button
-          class="edit-toggle"
-          type="button"
-          bind:this={editButton}
-          disabled={busy || saving}
-          onclick={() => (editing ? discard() : startEdit())}
-        >
-          {#if !editing}<Icon name="edit" size={14} />{/if}
-          {editing ? 'Batal' : 'Ubah'}
-        </button>
-      {/if}
-      {#if editing}{@render textField('description', 'Deskripsi', 500)}
-      {:else}<b>{values.description}</b>{/if}
-    </div>
+    {#if editing}{@render textField('description', 'Deskripsi', 500)}
+    {:else}<b>{values.description}</b>{/if}
     {#if saving}<small role="status">Menyimpan…</small>{/if}
     {#if error}
       <small role="alert">{error}</small>
@@ -263,7 +315,9 @@
         width={440}
         onclose={() => (pending = null)}
       >
-        <p class="confirm-copy">Periksa kembali sebelum menyimpan <b>{pending?.description}</b>.</p>
+        <p class="confirm-copy">
+          Periksa kembali sebelum menyimpan <b>{pending?.description}</b>.
+        </p>
         {#snippet footer()}
           <Button disabled={saving} onclick={() => (pending = null)}>Kembali</Button>
           <Button variant="primary" loading={saving} disabled={busy} onclick={save}
@@ -343,22 +397,42 @@
       <span class="label">Work Order</span>
       {@render links?.()}
     {/if}
-    {#if editing}
-      <div class="save-action">
-        <Button
-          size="sm"
-          variant="primary"
-          disabled={!dirty || busy || stale}
-          loading={saving}
-          aria-haspopup="dialog"
-          onclick={review}>Simpan</Button
-        >
-      </div>
-    {/if}
   </td>
+  {#if editable}
+    <td class="actions-cell" role="cell">
+      <div class="edit-actions">
+        {#if editing}
+          <Button variant="ghost" disabled={busy || saving} onclick={cancelEdit}>Batal</Button>
+          <div class="primary-action">
+            <Button
+              block
+              variant="primary"
+              disabled={!dirty || busy || stale}
+              loading={saving}
+              aria-haspopup="dialog"
+              onclick={review}>Simpan</Button
+            >
+          </div>
+        {:else}
+          <button
+            class="primary-action edit-toggle"
+            type="button"
+            bind:this={editButton}
+            disabled={busy || saving}
+            onclick={activateEdit}
+          >
+            <Icon name="edit" size={14} /> Ubah
+          </button>
+        {/if}
+      </div>
+    </td>
+  {/if}
 </tr>
 
 <style>
+  tr[hidden] {
+    display: none;
+  }
   td {
     padding: 6px 4px;
     border-bottom: 1px solid var(--color-border-default);
@@ -368,30 +442,70 @@
   .editing td {
     background: var(--color-bg-subtle);
   }
-  .description-content {
+  .add-launch td {
+    padding: 0;
+  }
+  .add-launch.expanded td {
+    background: var(--color-bg-subtle);
+  }
+  .add-trigger {
     display: flex;
     align-items: center;
-    gap: 4px;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: 40px;
+    padding: 0 12px;
+    text-align: start;
   }
-  .description-content .field {
-    flex: 1;
+  .add-trigger:hover:not(:disabled) {
+    background: var(--color-bg-hover);
   }
-  .description-content b {
-    min-width: 0;
+  .add-trigger:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
-  .edit-toggle {
-    order: 1;
-    display: inline-flex;
-    flex: none;
+  .add-label {
+    display: flex;
     align-items: center;
-    gap: 4px;
-    min-height: 32px;
-    padding: 0 4px;
+    gap: 6px;
     color: var(--color-accent-default);
     font: var(--text-label);
   }
-  .save-action {
-    margin-top: 4px;
+  .summary-chevron {
+    flex: none;
+    color: var(--color-icon-default);
+    transition: transform 0.2s var(--ease);
+  }
+  [aria-expanded='true'] .summary-chevron {
+    transform: rotate(180deg);
+  }
+  .edit-actions {
+    display: grid;
+    grid-template-columns: 1fr 80px;
+    gap: 4px;
+  }
+  .primary-action {
+    grid-column: 2;
+    min-width: 0;
+  }
+  .edit-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-height: 28px;
+    padding-inline: 4px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    font: var(--text-label);
+  }
+  .edit-toggle:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+  }
+  .edit-toggle:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
   .confirm-copy {
     font: var(--text-body-14);
@@ -469,9 +583,10 @@
       padding-bottom: 12px;
       background: var(--color-bg-subtle);
     }
-    tr:not(.expanded) td:not(.summary, .selection),
+    tr:not(.expanded, .add-launch) td:not(.summary, .selection),
     .new-row .selection,
-    .read-only .description,
+    tr:not(.editing) .description,
+    .new-row .links,
     .empty-date {
       display: none;
     }
@@ -483,21 +598,28 @@
     .editing td {
       background: none;
     }
-    .description-content b {
-      display: none;
+    tr.add-launch {
+      padding: 0;
     }
-    .description-content {
-      justify-content: flex-end;
-      gap: 8px;
+    .add-launch td {
+      grid-column: 1 / -1;
+    }
+    .add-trigger {
+      min-height: 44px;
+      padding-inline: var(--material-gutter);
+    }
+    .actions-cell {
+      grid-area: 2 / 1 / 3 / -1;
+      justify-self: end;
+    }
+    .new-row .actions-cell {
+      grid-row: 1;
+    }
+    .edit-actions {
+      grid-template-columns: 64px 80px;
     }
     .edit-toggle {
       min-height: 44px;
-      padding-inline: 8px;
-    }
-    .save-action {
-      display: flex;
-      justify-content: flex-end;
-      margin-top: 8px;
     }
     .selection {
       grid-area: 1 / 1 / 2 / 2;
@@ -536,8 +658,7 @@
       font-weight: 500;
     }
     .summary-meta,
-    .summary-date,
-    .add-label {
+    .summary-date {
       display: flex;
       align-items: center;
       gap: 6px;
@@ -552,23 +673,8 @@
       border: 1px solid var(--color-border-default);
       border-radius: var(--radius-sm);
     }
-    .summary-date :global(svg),
-    .summary-chevron {
+    .summary-date :global(svg) {
       flex: none;
-    }
-    .summary-chevron {
-      color: var(--color-icon-default);
-      transition: transform 0.2s var(--ease);
-    }
-    .summary-button[aria-expanded='true'] .summary-chevron {
-      transform: rotate(180deg);
-    }
-    .new-row .summary-button {
-      min-height: 44px;
-    }
-    .add-label {
-      color: var(--color-accent-default);
-      font: var(--text-label);
     }
     .row-error {
       color: var(--color-text-secondary);

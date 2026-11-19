@@ -579,7 +579,7 @@
     {#key p.id}<ActivityList projectId={p.id} />{/key}
   </div>
 {:else}
-  <div class="pane documents">
+  <div class="pane">
     {#if p.can.upload}
       <div class="up">
         <input
@@ -919,9 +919,6 @@
     border-radius: var(--radius-sm);
     padding: 2px 6px;
   }
-  .pane.documents {
-    max-width: none;
-  }
   .document-grid {
     display: grid;
     align-items: start;
@@ -1200,7 +1197,6 @@
     flex-direction: column;
     gap: 12px;
     padding: 16px 24px 32px;
-    max-width: 720px;
   }
   .fi {
     flex-shrink: 0;
