@@ -6,6 +6,7 @@
   import type { MaterialRow } from '$lib/types';
   import Button from './Button.svelte';
   import Icon from './Icon.svelte';
+  import Modal from './Modal.svelte';
 
   let {
     row,
@@ -46,38 +47,43 @@
   }
   type Draft = ReturnType<typeof fields>;
   let draft = $state<Draft | null>(null);
+  let initial = $state('');
   let expectedUpdatedAt = '';
   let clientId = crypto.randomUUID();
-  let editVersion = 0;
-  let queued = false;
+  let pending = $state<MaterialInput | null>(null);
   let saving = $state(false);
   let error = $state('');
   let stale = $state(false);
   let expanded = $state(false);
   let summaryButton: HTMLButtonElement | undefined;
+  let editButton = $state<HTMLButtonElement>();
+  const editing = $derived(editable && (!row || draft !== null));
   const values = $derived(draft ?? fields(row));
+  const dirty = $derived(draft !== null && JSON.stringify(draft) !== initial);
 
-  function edit<K extends keyof Draft>(key: K, value: Draft[K]) {
-    if (!draft) {
-      draft = fields(row);
-      expectedUpdatedAt = row?.updatedAt ?? '';
-    }
-    draft[key] = value;
-    if (key === 'status' && value !== 'po') draft.receivedAt = '';
-    editVersion++;
+  function startEdit() {
+    draft = fields(row);
+    initial = JSON.stringify(draft);
+    expectedUpdatedAt = row?.updatedAt ?? '';
   }
 
-  async function save() {
-    if (!draft || busy || stale) return;
-    if (saving) {
-      queued = true;
-      return;
-    }
-    if (JSON.stringify(draft) === JSON.stringify(fields(row))) {
-      draft = null;
-      error = '';
-      return;
-    }
+  function discard() {
+    draft = null;
+    stale = false;
+    error = '';
+  }
+
+  function edit<K extends keyof Draft>(key: K, value: Draft[K]) {
+    if (!editing || saving) return;
+    if (!draft) startEdit();
+    if (!draft) return;
+    draft[key] = value;
+    if (key === 'status' && value !== 'po') draft.receivedAt = '';
+    if (!stale) error = '';
+  }
+
+  function review() {
+    if (!draft || !dirty || !editing || busy || saving || stale || pending) return;
     const parsed = materialFieldsSchema.safeParse({
       ...draft,
       quantity: Number(draft.quantity.replace(',', '.')),
@@ -91,20 +97,24 @@
           : (issue?.message ?? 'Periksa kembali isian material.');
       return;
     }
-    saving = true;
+    pending = parsed.data;
     error = '';
-    const submittedVersion = editVersion;
+  }
+
+  async function save() {
+    if (!pending || !editing || busy || saving || stale) return;
+    const payload = $state.snapshot(pending);
+    saving = true;
     try {
       if (row) {
         const updated = await api<MaterialInput & { id: string; updatedAt: string }>(
           endpoint + '/' + row.id,
-          { method: 'PATCH', body: { ...parsed.data, expectedUpdatedAt } },
+          { method: 'PATCH', body: { ...payload, expectedUpdatedAt } },
         );
-        expectedUpdatedAt = updated.updatedAt;
         onupdated?.(updated);
       } else {
         const result = await api<{ skipped: number }>(endpoint, {
-          body: { rows: [{ ...parsed.data, clientId }] },
+          body: { rows: [{ ...payload, clientId }] },
         });
         if (result.skipped) {
           error = 'Material yang sama sudah ada. Ubah item tersebut untuk memperbarui datanya.';
@@ -113,32 +123,29 @@
         clientId = crypto.randomUUID();
         oncreated?.();
         expanded = false;
-        summaryButton?.focus();
       }
-      if (submittedVersion === editVersion) draft = null;
+      discard();
     } catch (err) {
       error = err instanceof ApiError ? err.message : 'Material gagal disimpan';
       stale = err instanceof ApiError && err.code === 'STALE';
+      return;
     } finally {
+      pending = null;
       saving = false;
-      if (queued) {
-        queued = false;
-        if (!error) void save();
-      }
     }
+    await tick();
+    (row ? editButton : summaryButton)?.focus();
   }
 
   function enter(e: KeyboardEvent) {
     if (e.key !== 'Enter' || e.isComposing) return;
     e.preventDefault();
-    void save();
+    review();
   }
 
   async function reloadRow() {
     if (!(await onreload?.())) return;
-    draft = null;
-    stale = false;
-    error = '';
+    discard();
   }
 
   async function toggleDetails() {
@@ -162,16 +169,22 @@
       placeholder={!row && key === 'description' ? 'Material baru' : label}
       maxlength={max}
       inputmode={key === 'quantity' ? 'decimal' : undefined}
-      disabled={busy || (!row && saving)}
+      disabled={busy || saving}
       oninput={(e) => edit(key, e.currentTarget.value)}
-      onchange={() => row && save()}
       onkeydown={enter}
     />
   </label>
 {/snippet}
 
 <!-- svelte-ignore a11y_no_redundant_roles (Safari needs the table role when the row is a grid.) -->
-<tr class:new-row={!row} class:expanded class:read-only={!editable} class:checked role="row">
+<tr
+  class:new-row={!row}
+  class:expanded
+  class:read-only={!editable}
+  class:checked
+  class:editing
+  role="row"
+>
   {#if editable}
     <td class="selection" role="cell">
       {#if row}
@@ -207,39 +220,69 @@
               >
             {/if}
           </span>
-          {#if error && !expanded}<span class="row-error">Periksa perubahan material</span>{/if}
+          {#if !expanded && (error || dirty)}
+            <span class="row-error"
+              >{error ? 'Periksa perubahan material' : 'Perubahan belum tersimpan'}</span
+            >
+          {/if}
         </span>
       {:else}
-        <span class="add-label"><Icon name="plus" size={16} />Material baru</span>
+        <span class="add-label"
+          ><Icon name="plus" size={16} />{dirty ? 'Lanjutkan material baru' : 'Material baru'}</span
+        >
       {/if}
       <span class="summary-chevron"><Icon name="chevron-down" size={16} /></span>
     </button>
   </td>
   <td class="description" role="cell">
-    {#if editable}{@render textField('description', 'Deskripsi', 500)}
-    {:else}<b>{values.description}</b>{/if}
+    <div class="description-content">
+      {#if row && editable}
+        <button
+          class="edit-toggle"
+          type="button"
+          bind:this={editButton}
+          disabled={busy || saving}
+          onclick={() => (editing ? discard() : startEdit())}
+        >
+          {#if !editing}<Icon name="edit" size={14} />{/if}
+          {editing ? 'Batal' : 'Ubah'}
+        </button>
+      {/if}
+      {#if editing}{@render textField('description', 'Deskripsi', 500)}
+      {:else}<b>{values.description}</b>{/if}
+    </div>
     {#if saving}<small role="status">Menyimpan…</small>{/if}
     {#if error}
       <small role="alert">{error}</small>
-      {#if row}
-        {#if stale}
-          <Button size="sm" onclick={reloadRow}>Muat ulang baris</Button>
-        {:else}
-          <Button size="sm" onclick={save}>Coba simpan lagi</Button>
-        {/if}
-      {/if}
+      {#if stale}<Button size="sm" onclick={reloadRow}>Muat ulang baris</Button>{/if}
+    {/if}
+    {#if pending}
+      <Modal
+        open
+        title={row ? 'Simpan perubahan material?' : 'Tambah material ini?'}
+        width={440}
+        onclose={() => (pending = null)}
+      >
+        <p class="confirm-copy">Periksa kembali sebelum menyimpan <b>{pending?.description}</b>.</p>
+        {#snippet footer()}
+          <Button disabled={saving} onclick={() => (pending = null)}>Kembali</Button>
+          <Button variant="primary" loading={saving} disabled={busy} onclick={save}
+            >Ya, simpan</Button
+          >
+        {/snippet}
+      </Modal>
     {/if}
   </td>
   <td role="cell">
-    {#if editable}{@render textField('material', 'Material', 200)}
+    {#if editing}{@render textField('material', 'Material', 200)}
     {:else}<span class="label">Material</span>{values.material || '—'}{/if}
   </td>
   <td role="cell">
-    {#if editable}{@render textField('specification', 'Spesifikasi', 500)}
+    {#if editing}{@render textField('specification', 'Spesifikasi', 500)}
     {:else}<span class="label">Spesifikasi</span>{values.specification || '—'}{/if}
   </td>
   <td role="cell">
-    {#if editable}
+    {#if editing}
       <div class="quantity">
         {@render textField('quantity', 'Jumlah', 14)}
         {@render textField('unit', 'Satuan', 30)}
@@ -249,16 +292,13 @@
     {/if}
   </td>
   <td role="cell">
-    {#if editable}
+    {#if editing}
       <label class="field">
         <span>Status</span>
         <select
           value={values.status}
-          disabled={busy || (!row && saving)}
-          onchange={(e) => {
-            edit('status', e.currentTarget.value as MaterialInput['status']);
-            if (row) void save();
-          }}
+          disabled={busy || saving}
+          onchange={(e) => edit('status', e.currentTarget.value as MaterialInput['status'])}
         >
           {#each Object.entries(MATERIAL_STATUS_LABEL) as [value, label] (value)}
             <option {value}>{label}</option>
@@ -269,15 +309,14 @@
   </td>
   <td class="received" class:empty-date={values.status !== 'po'} role="cell">
     {#if values.status === 'po'}
-      {#if editable}
+      {#if editing}
         <label class="field">
           <span>Diterima</span>
           <input
             type="date"
             value={values.receivedAt}
-            disabled={busy || (!row && saving)}
+            disabled={busy || saving}
             oninput={(e) => edit('receivedAt', e.currentTarget.value)}
-            onchange={() => row && save()}
           />
         </label>
       {:else}<span class="label">Diterima</span>{values.receivedAt
@@ -286,7 +325,7 @@
     {/if}
   </td>
   <td class="notes" role="cell">
-    {#if editable}
+    {#if editing}
       <label class="field">
         <span>Catatan</span>
         <textarea
@@ -294,9 +333,8 @@
           maxlength="2000"
           value={values.note}
           placeholder="Catatan"
-          disabled={busy || (!row && saving)}
-          oninput={(e) => edit('note', e.currentTarget.value)}
-          onchange={() => row && save()}></textarea>
+          disabled={busy || saving}
+          oninput={(e) => edit('note', e.currentTarget.value)}></textarea>
       </label>
     {:else}<span class="label">Catatan</span>{values.note || '—'}{/if}
   </td>
@@ -304,8 +342,18 @@
     {#if row}
       <span class="label">Work Order</span>
       {@render links?.()}
-    {:else}
-      <Button size="sm" disabled={!draft || busy} loading={saving} onclick={save}>Simpan</Button>
+    {/if}
+    {#if editing}
+      <div class="save-action">
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={!dirty || busy || stale}
+          loading={saving}
+          aria-haspopup="dialog"
+          onclick={review}>Simpan</Button
+        >
+      </div>
     {/if}
   </td>
 </tr>
@@ -317,8 +365,36 @@
     vertical-align: top;
     overflow-wrap: anywhere;
   }
-  .new-row td {
+  .editing td {
     background: var(--color-bg-subtle);
+  }
+  .description-content {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .description-content .field {
+    flex: 1;
+  }
+  .description-content b {
+    min-width: 0;
+  }
+  .edit-toggle {
+    order: 1;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+    min-height: 32px;
+    padding: 0 4px;
+    color: var(--color-accent-default);
+    font: var(--text-label);
+  }
+  .save-action {
+    margin-top: 4px;
+  }
+  .confirm-copy {
+    font: var(--text-body-14);
   }
   .field {
     display: grid;
@@ -342,10 +418,13 @@
     min-width: 0;
     min-height: 32px;
     padding: 4px 6px;
-    border: 1px solid var(--color-border-default);
+    border: 0;
     border-radius: var(--radius-md);
     background: var(--color-bg-surface);
     font: inherit;
+  }
+  select {
+    border: 1px solid var(--color-border-default);
   }
   textarea {
     resize: vertical;
@@ -401,8 +480,24 @@
       padding: 0;
       border: 0;
     }
-    .new-row td {
+    .editing td {
       background: none;
+    }
+    .description-content b {
+      display: none;
+    }
+    .description-content {
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .edit-toggle {
+      min-height: 44px;
+      padding-inline: 8px;
+    }
+    .save-action {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 8px;
     }
     .selection {
       grid-area: 1 / 1 / 2 / 2;

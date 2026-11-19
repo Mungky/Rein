@@ -344,6 +344,7 @@
                     ? { ...item, ...updated }
                     : item,
                 );
+                toast('Perubahan material disimpan');
                 void load();
               }}
             >
@@ -559,6 +560,10 @@
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-md);
+  }
+  .filters input {
+    border: 0;
+    background: var(--color-bg-subtle);
   }
   .table-scroll {
     overflow: auto;
