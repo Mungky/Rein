@@ -505,7 +505,13 @@
     textarea,
     select {
       min-height: 44px;
+    }
+    input:not([type='checkbox']),
+    textarea {
       font-size: 16px;
+    }
+    select {
+      font: var(--text-body-14);
     }
   }
 </style>

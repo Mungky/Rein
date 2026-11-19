@@ -689,7 +689,12 @@
     .filters input,
     select {
       min-height: 44px;
+    }
+    .filters input {
       font-size: 16px;
+    }
+    select {
+      font: var(--text-body-14);
     }
   }
 </style>
