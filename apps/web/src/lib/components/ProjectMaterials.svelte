@@ -15,6 +15,7 @@
   import type { MaterialRow, WoRow } from '$lib/types';
   import Button from './Button.svelte';
   import Field from './Field.svelte';
+  import Icon from './Icon.svelte';
   import Modal from './Modal.svelte';
   import ProjectMaterialRow from './ProjectMaterialRow.svelte';
 
@@ -217,9 +218,9 @@
 
 <section class="materials" aria-label="Material project">
   <div class="toolbar">
-    <div>
+    <div class="heading">
       <h2>Material</h2>
-      <p>{rows.length} item untuk kebutuhan project ini</p>
+      <p>{rows.length} item<span class="project-caption"> untuk kebutuhan project ini</span></p>
     </div>
     {#if canManage}<div class="actions">
         <input
@@ -237,12 +238,15 @@
       </div>{/if}
   </div>
   <div class="filters">
-    <input
-      type="search"
-      aria-label="Cari material"
-      placeholder="Cari material…"
-      bind:value={query}
-    />
+    <div class="search">
+      <Icon name="search" size={16} />
+      <input
+        type="search"
+        aria-label="Cari material"
+        placeholder="Cari material…"
+        bind:value={query}
+      />
+    </div>
     <select aria-label="Filter status material" bind:value={filter}
       ><option value="">Semua status</option
       >{#each Object.entries(MATERIAL_STATUS_LABEL) as [value, label] (value)}<option {value}
@@ -537,10 +541,17 @@
     height: 16px;
     accent-color: var(--color-accent-default);
   }
-  .filters input {
+  .search {
+    position: relative;
     flex: 1;
     max-width: 360px;
     min-width: 0;
+  }
+  .search input {
+    width: 100%;
+  }
+  .search :global(svg) {
+    display: none;
   }
   .filters input,
   select {
@@ -602,10 +613,15 @@
     font-size: 12px;
   }
   @media (max-width: 1100px) {
+    .material-list {
+      --material-gutter: 24px;
+      width: calc(100% + var(--material-gutter) * 2);
+      margin-inline: calc(-1 * var(--material-gutter));
+      border-top: 1px solid var(--color-border-default);
+    }
     .material-list,
     .material-list tbody {
       display: grid;
-      gap: 10px;
     }
     .material-list thead {
       position: absolute;
@@ -628,9 +644,50 @@
     .materials {
       padding: 16px;
     }
-    .filters input,
-    select,
+    .material-list {
+      --material-gutter: 16px;
+    }
+    .toolbar {
+      margin-bottom: 10px;
+    }
+    .heading {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .heading h2 {
+      margin: 0;
+    }
+    .project-caption {
+      display: none;
+    }
+    .filters {
+      flex-wrap: nowrap;
+      margin-bottom: 4px;
+    }
+    .filters select {
+      max-width: 50%;
+      padding-inline: 6px;
+    }
+    .search :global(svg) {
+      display: block;
+      position: absolute;
+      inset: 50% auto auto 10px;
+      transform: translateY(-50%);
+      pointer-events: none;
+      color: var(--color-icon-default);
+    }
+    .search input {
+      padding-inline-start: 34px;
+    }
+    .selection-bar {
+      margin-bottom: 4px;
+    }
     .check-all {
+      min-height: 44px;
+    }
+    .filters input,
+    select {
       min-height: 44px;
       font-size: 16px;
     }

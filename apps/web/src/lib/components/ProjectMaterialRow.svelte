@@ -1,11 +1,11 @@
 <script lang="ts">
   import { MATERIAL_STATUS_LABEL, materialFieldsSchema, type MaterialInput } from '@rein/shared';
+  import { tick, type Snippet } from 'svelte';
   import { api, ApiError } from '$lib/api';
   import { shortDate } from '$lib/format';
   import type { MaterialRow } from '$lib/types';
   import Button from './Button.svelte';
   import Icon from './Icon.svelte';
-  import type { Snippet } from 'svelte';
 
   let {
     row,
@@ -54,6 +54,7 @@
   let error = $state('');
   let stale = $state(false);
   let expanded = $state(false);
+  let summaryButton: HTMLButtonElement | undefined;
   const values = $derived(draft ?? fields(row));
 
   function edit<K extends keyof Draft>(key: K, value: Draft[K]) {
@@ -111,6 +112,8 @@
         }
         clientId = crypto.randomUUID();
         oncreated?.();
+        expanded = false;
+        summaryButton?.focus();
       }
       if (submittedVersion === editVersion) draft = null;
     } catch (err) {
@@ -137,6 +140,14 @@
     stale = false;
     error = '';
   }
+
+  async function toggleDetails() {
+    expanded = !expanded;
+    if (expanded) {
+      await tick();
+      summaryButton?.closest('tr')?.scrollIntoView({ block: 'nearest' });
+    }
+  }
 </script>
 
 {#snippet textField(
@@ -160,7 +171,7 @@
 {/snippet}
 
 <!-- svelte-ignore a11y_no_redundant_roles (Safari needs the table role when the row is a grid.) -->
-<tr class:new-row={!row} class:expanded class:read-only={!editable} role="row">
+<tr class:new-row={!row} class:expanded class:read-only={!editable} class:checked role="row">
   {#if editable}
     <td class="selection" role="cell">
       {#if row}
@@ -176,6 +187,34 @@
       {/if}
     </td>
   {/if}
+  <td class="summary" role="cell">
+    <button
+      type="button"
+      class="summary-button"
+      bind:this={summaryButton}
+      aria-expanded={expanded}
+      onclick={toggleDetails}
+    >
+      {#if row}
+        <span class="summary-content">
+          <b>{row.description}</b>
+          <span class="summary-meta">
+            <span class="tnum">{row.quantity.toLocaleString('id-ID')} {row.unit}</span>
+            <span class="summary-status">{MATERIAL_STATUS_LABEL[row.status]}</span>
+            {#if row.status === 'po' && row.receivedAt}
+              <span class="summary-date"
+                ><Icon name="calendar" size={12} />Diterima {shortDate(row.receivedAt)}</span
+              >
+            {/if}
+          </span>
+          {#if error && !expanded}<span class="row-error">Periksa perubahan material</span>{/if}
+        </span>
+      {:else}
+        <span class="add-label"><Icon name="plus" size={16} />Material baru</span>
+      {/if}
+      <span class="summary-chevron"><Icon name="chevron-down" size={16} /></span>
+    </button>
+  </td>
   <td class="description" role="cell">
     {#if editable}{@render textField('description', 'Deskripsi', 500)}
     {:else}<b>{values.description}</b>{/if}
@@ -191,11 +230,11 @@
       {/if}
     {/if}
   </td>
-  <td class="extra" role="cell">
+  <td role="cell">
     {#if editable}{@render textField('material', 'Material', 200)}
     {:else}<span class="label">Material</span>{values.material || '—'}{/if}
   </td>
-  <td class="extra" role="cell">
+  <td role="cell">
     {#if editable}{@render textField('specification', 'Spesifikasi', 500)}
     {:else}<span class="label">Spesifikasi</span>{values.specification || '—'}{/if}
   </td>
@@ -246,7 +285,7 @@
           : '—'}{/if}
     {/if}
   </td>
-  <td class="extra notes" role="cell">
+  <td class="notes" role="cell">
     {#if editable}
       <label class="field">
         <span>Catatan</span>
@@ -263,22 +302,11 @@
   </td>
   <td class="links" role="cell">
     {#if row}
-      <div class="extra">
-        <span class="label">Work Order</span>
-        {@render links?.()}
-      </div>
+      <span class="label">Work Order</span>
+      {@render links?.()}
     {:else}
       <Button size="sm" disabled={!draft || busy} loading={saving} onclick={save}>Simpan</Button>
     {/if}
-    <button
-      type="button"
-      class="details"
-      aria-expanded={expanded}
-      onclick={() => (expanded = !expanded)}
-    >
-      <span class:expanded><Icon name="chevron-down" size={14} /></span>
-      {expanded ? 'Tutup rincian' : 'Rincian'}
-    </button>
   </td>
 </tr>
 
@@ -304,7 +332,7 @@
     clip-path: inset(50%);
   }
   .label,
-  .details {
+  .summary {
     display: none;
   }
   input:not([type='checkbox']),
@@ -350,57 +378,115 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       align-items: start;
-      gap: 8px 12px;
-      padding: 12px;
-      border: 1px solid var(--color-border-default);
-      border-radius: var(--radius-lg);
+      column-gap: 12px;
+      padding: 0 var(--material-gutter);
+      border-bottom: 1px solid var(--color-border-default);
+    }
+    tr.checked {
+      background: var(--color-accent-subtle);
+    }
+    tr.expanded {
+      row-gap: 10px;
+      padding-bottom: 12px;
+      background: var(--color-bg-subtle);
+    }
+    tr:not(.expanded) td:not(.summary, .selection),
+    .new-row .selection,
+    .read-only .description,
+    .empty-date {
+      display: none;
     }
     td {
       min-width: 0;
       padding: 0;
       border: 0;
     }
-    .new-row {
-      background: var(--color-bg-subtle);
-    }
     .new-row td {
       background: none;
     }
     .selection {
-      grid-area: 1 / 1;
+      grid-area: 1 / 1 / 2 / 2;
       width: 44px;
+      align-self: center;
       z-index: 1;
-      align-self: end;
     }
-    .description {
+    .summary {
+      display: block;
       grid-area: 1 / 1 / 2 / -1;
-      padding-left: 48px;
     }
-    .new-row .description,
-    .read-only .description {
-      padding-left: 0;
+    tr:not(.read-only, .new-row) .summary {
+      padding-inline-start: 44px;
+    }
+    .expanded .summary {
+      border-bottom: 1px solid var(--color-border-default);
+    }
+    .summary-button {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      width: 100%;
+      min-height: 64px;
+      padding: 10px 0;
+      color: var(--color-text-primary);
+      text-align: start;
+    }
+    .summary-content {
+      display: grid;
+      min-width: 0;
+      gap: 4px;
+    }
+    .summary-content b {
+      font: var(--text-body-14);
+      font-weight: 500;
+    }
+    .summary-meta,
+    .summary-date,
+    .add-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .summary-meta {
+      flex-wrap: wrap;
+      font: var(--text-caption);
+      color: var(--color-text-secondary);
+    }
+    .summary-status {
+      padding: 1px 6px;
+      border: 1px solid var(--color-border-default);
+      border-radius: var(--radius-sm);
+    }
+    .summary-date :global(svg),
+    .summary-chevron {
+      flex: none;
+    }
+    .summary-chevron {
+      color: var(--color-icon-default);
+      transition: transform 0.2s var(--ease);
+    }
+    .summary-button[aria-expanded='true'] .summary-chevron {
+      transform: rotate(180deg);
+    }
+    .new-row .summary-button {
+      min-height: 44px;
+    }
+    .add-label {
+      color: var(--color-accent-default);
+      font: var(--text-label);
+    }
+    .row-error {
+      color: var(--color-text-secondary);
+      font: var(--text-caption);
     }
     .quantity {
       gap: 6px;
     }
+    .description,
     .notes,
     .links,
     .received {
       grid-column: 1 / -1;
-    }
-    .empty-date,
-    tr:not(.expanded) .extra {
-      display: none;
-    }
-    .links {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 4px;
-    }
-    .links .extra {
-      flex-basis: 100%;
     }
     .field span,
     .label {
@@ -413,21 +499,6 @@
       margin-bottom: 3px;
       color: var(--color-text-secondary);
       font: var(--text-caption);
-    }
-    .details {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      margin-left: auto;
-      min-height: 44px;
-      padding: 0 8px;
-      color: var(--color-text-secondary);
-    }
-    .details span {
-      display: inline-flex;
-    }
-    .details span.expanded {
-      transform: rotate(180deg);
     }
     .check,
     input:not([type='checkbox']),
